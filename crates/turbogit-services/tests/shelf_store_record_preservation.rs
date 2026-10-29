@@ -1,32 +1,8 @@
-//! The **Shelf** store's read/write discipline: a record the app never read may
-//! never be erased by a record it did write.
-//!
-//! `.turbogit/shelf.ron` is the IDE's own list of named shelves — the pane's
-//! rows, and the only place a shelved bucket's *name* lives. Its content sits in
-//! git's stash list, which [`turbogit_services::shelve_stash::unshelve`] can only
-//! reach **by that name**, so a lost record strands work that is still on disk:
-//! unreachable through the UI even though git still holds it.
-//!
-//! Two ways that happened, both from `save_shelves` writing the whole in-memory
-//! slice as one `fs::write` truncation:
-//!
-//! 1. [`Shelf`] gained a required `root`, so every `shelf.ron` written by
-//!    an earlier build stopped parsing; the launch load reported the failure and
-//!    left the list empty, and the next shelve wrote that empty list over the
-//!    file. The first test pins the legacy shape reading back.
-//! 2. Any store this build cannot parse at all (corrupt, hand-edited, a future
-//!    required field) still truncates on the next write. The second test pins
-//!    that a write after a failed read cannot swallow the unreadable rows.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash::{self, shelf_path};
 
-/// What an **older build** wrote: the same row without the `root` field that was
-/// added. Serialising this shape rather than typing RON by hand keeps the legacy
-/// artefact coming from an independent source of truth — the old field list — so
-/// the test cannot drift from what the previous release actually emitted.
 #[derive(serde::Serialize)]
 struct LegacyShelf {
     name: String,
@@ -45,7 +21,6 @@ fn change(path: &str) -> Change {
     }
 }
 
-/// Write `shelf.ron` in the pre-ticket-12 shape, as an earlier build left it.
 fn write_legacy_store(project_dir: &Path, names: &[&str]) {
     let legacy: Vec<LegacyShelf> = names
         .iter()
@@ -62,10 +37,6 @@ fn write_legacy_store(project_dir: &Path, names: &[&str]) {
     std::fs::write(shelf_path(project_dir), text).unwrap();
 }
 
-/// A legacy `shelf.ron` — no `root` on any row — **loads** instead
-/// of failing, and each legacy row is bound to the project directory (the one
-/// root a legacy store could only ever have meant), so the pane lists it and an
-/// unshelve can find it by name again.
 #[test]
 fn a_legacy_shelf_row_without_a_root_loads_bound_to_the_project_dir() {
     let tmp = tempfile::tempdir().unwrap();
@@ -77,7 +48,6 @@ fn a_legacy_shelf_row_without_a_root_loads_bound_to_the_project_dir() {
 
     let names: Vec<&str> = shelves.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, vec!["wip: parser", "wip: cli"]);
-    // The row's own content rode along intact.
     assert_eq!(shelves[0].changes.len(), 1);
     assert_eq!(shelves[0].changes[0].path, PathBuf::from("src/main.rs"));
     for shelf in &shelves {
@@ -89,10 +59,6 @@ fn a_legacy_shelf_row_without_a_root_loads_bound_to_the_project_dir() {
     }
 }
 
-/// After a store this build cannot parse, a write must not erase what it never
-/// read. Both app-side writers used to discard `save_shelves`' result, so a
-/// failed launch load followed by the first shelve or unshelve-overwrote the
-/// file with a list that had never contained the unreadable records.
 #[test]
 fn a_write_after_an_unreadable_load_leaves_the_unreadable_records_intact() {
     let tmp = tempfile::tempdir().unwrap();
@@ -107,8 +73,6 @@ fn a_write_after_an_unreadable_load_leaves_the_unreadable_records_intact() {
         "an unparseable store reports itself rather than painting an empty pane"
     );
 
-    // The in-memory list is empty — exactly what the launch left behind — and a
-    // shelve now tries to write it.
     let written = shelve_stash::save_shelves(&project_dir, &[] as &[Shelf]);
     assert!(
         written.is_err(),
@@ -122,10 +86,6 @@ fn a_write_after_an_unreadable_load_leaves_the_unreadable_records_intact() {
     );
 }
 
-/// The refusal must not turn into a permanent lockout over a store that holds
-/// **nothing**: a 0-byte `shelf.ron` is what an interrupted write leaves behind,
-/// and it carries no records to lose, so it reads as an empty shelf and the next
-/// shelve writes through it normally.
 #[test]
 fn an_empty_store_is_an_empty_shelf_not_an_unreadable_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -153,18 +113,11 @@ fn an_empty_store_is_an_empty_shelf_not_an_unreadable_one() {
     );
 }
 
-/// The bug's actual shape from the user's side: a store this build cannot read,
-/// then a **create** — the shelve dialog's `save_shelves` passes the slice it just
-/// pushed onto, so it is non-empty and holds a record the file has never seen.
-/// Refusing an empty slice (above) is the easy half; refusing a *populated* one is
-/// what keeps the corrupt file's rows, and the pane must then say so.
 #[test]
 fn a_create_after_an_unreadable_store_refuses_and_leaves_the_bytes_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let project_dir = tmp.path().to_path_buf();
     std::fs::create_dir_all(project_dir.join(".turbogit")).unwrap();
-    // Non-empty, unparseable: a row truncated mid-object, the shape a partial write
-    // or a hand-edit leaves behind.
     let unreadable = r#"[{ name: "wip: parser", changes: [], created_at: "#;
     std::fs::write(shelf_path(&project_dir), unreadable).unwrap();
 
@@ -185,9 +138,6 @@ fn a_create_after_an_unreadable_store_refuses_and_leaves_the_bytes_alone() {
     );
 }
 
-/// A **valid RON value of the wrong shape** is unreadable in the same way — RON
-/// parses it, `Shelf` does not — so the guard cannot stop at "is this syntax"; the
-/// probe deserialises the store's own row type.
 #[test]
 fn a_parseable_but_wrongly_shaped_store_is_refused_too() {
     let tmp = tempfile::tempdir().unwrap();
@@ -211,12 +161,7 @@ fn a_parseable_but_wrongly_shaped_store_is_refused_too() {
     );
 }
 
-/// The lockout the refusal could have become, on the two axes the store's own
-/// discipline has to hold:
-///
-/// * **a second write** — the file a shelve just wrote must read back, or every
-///   later shelve is refused over a store this very build produced;
-/// * **an `Option` on the wire** — [`Change::orig_path`] (a rename) is the shelf's
+/// * **an `Option` on the wire**, [`Change::orig_path`] (a rename) is the shelf's
 ///   only optional field, and RON 0.12 deserialises an `Option` solely from its
 ///   `Some(..)` spelling. The store writes what it reads only if the serializer
 ///   emits that spelling, so a rename-bearing shelf is the case that proves it:
@@ -249,7 +194,6 @@ fn a_store_this_build_wrote_reads_back_and_stays_writable() {
         "the root this build wrote is the root it reads"
     );
 
-    // And the very next shelve still works: readable means writable.
     let second = shelve_stash::make_shelf("wip: cli", &[], root);
     shelve_stash::save_shelves(&project_dir, &[first, second]).unwrap();
     assert_eq!(
@@ -262,13 +206,6 @@ fn a_store_this_build_wrote_reads_back_and_stays_writable() {
     );
 }
 
-/// The read-time binding must never reach the **wire**. Binding a rootless row to
-/// `project_dir` is what makes it listable and unshelve-able in this session, but
-/// writing that invented path back gives the store a root no row ever recorded —
-/// a path that may not be a repository, frozen in as if it were a `RootId` someone
-/// chose. A later load matches nothing against it, so the binding silently changes
-/// meaning. The row must therefore round-trip rootless and still mean the same
-/// thing, because `load_shelves` binds an absent root to that very directory.
 #[test]
 fn rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had() {
     let tmp = tempfile::tempdir().unwrap();
@@ -291,7 +228,6 @@ fn rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had() {
         "the bound path must not be persisted as a recorded root:\n{text}"
     );
 
-    // And the rewrite neither lost the row nor changed what it means.
     let again = shelve_stash::load_shelves(&project_dir).unwrap();
     assert_eq!(
         again.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
@@ -301,15 +237,6 @@ fn rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had() {
     assert_eq!(again[0].changes.len(), 1);
 }
 
-/// An **independent** reading of the wire: per row, whether a `root` key is
-/// actually present.
-///
-/// The instrument cannot be the store's own row type, because that type *invent*s
-/// a root for a keyless row — `#[serde(default)] root: String` leaves the absent
-/// spelling as an empty value instead, so "recorded" and "omitted" stay two
-/// observable facts. Extra fields on the row (`changes`, `created_at`) are ignored
-/// by serde, which is what makes this a probe of the shape rather than a second
-/// copy of it.
 #[derive(serde::Deserialize)]
 struct WireRow {
     name: String,
@@ -317,7 +244,6 @@ struct WireRow {
     root: String,
 }
 
-/// Each stored row's name with whether the **file** recorded a root for it.
 fn wire_rows(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
     let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
     ron::from_str::<Vec<WireRow>>(&text)
@@ -330,15 +256,6 @@ fn wire_rows(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
         .collect()
 }
 
-/// The legacy shape survives a **mutation** of the list, not merely a copy of it.
-/// [`rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had`] saves the
-/// loaded slice back unchanged; every real verb changes it first. An add is the
-/// shape the shelve dialog writes (a root-bearing row appended to rootless ones)
-/// and a remove is the shape `Unshelve and Remove` writes, and each rewrites the
-/// **whole** file — so the question is whether the untouched neighbour rows keep
-/// the shape they arrived in. They must: `skip_serializing_if` is per row, and a
-/// legacy row gaining a recorded root would freeze the load's invented path into
-/// the index.
 #[test]
 fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -347,8 +264,6 @@ fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
 
     let mut shelves = shelve_stash::load_shelves(&project_dir).unwrap();
 
-    // An ADD of a row rooted somewhere else — a genuine recorded root, and the
-    // one row on this store that has ever had one.
     let other = project_dir.join("sibling");
     let other_root = RootId(std::sync::Arc::from(other.as_path()));
     shelves.push(shelve_stash::make_shelf(
@@ -382,7 +297,6 @@ fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
         "a real root is written, not dropped with the legacy key"
     );
 
-    // A REMOVE of an unrelated row rewrites the file from the remaining list.
     shelves.retain(|s| s.name != "wip: cli");
     shelve_stash::save_shelves(&project_dir, &shelves).unwrap();
     let rows = wire_rows(&project_dir);
@@ -402,7 +316,6 @@ fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
         "and the surviving legacy row is still rootless"
     );
 
-    // Re-loading after both mutations: the bindings are what they always were.
     let again = shelve_stash::load_shelves(&project_dir).unwrap();
     let bound: Vec<(&str, PathBuf)> = again
         .iter()
@@ -423,18 +336,6 @@ fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
     );
 }
 
-/// The single-root coincidence, tested as **identity**: for the project whose one
-/// real root *is* `project_dir`, a shelve's genuine `RootId` is erased to the
-/// absent spelling and the load re-binds it — so the question is whether what
-/// comes back is the same value, not a value that merely happens to work.
-///
-/// The store lives at `<project_dir>/.turbogit/shelf.ron`, so the erased root is
-/// always the directory the store itself sits in, and the load re-binds to that
-/// same directory: the two spellings cannot diverge for this row.
-///
-/// Checked for the multi-root shape in the same test, because that is where an
-/// erasure *could* change meaning: a project directory that is itself a repository
-/// alongside a nested one. A root that is not `project_dir` must be recorded.
 #[test]
 fn a_root_equal_to_the_project_dir_omits_and_rebinds_as_the_same_value() {
     let tmp = tempfile::tempdir().unwrap();
@@ -476,18 +377,6 @@ fn a_root_equal_to_the_project_dir_omits_and_rebinds_as_the_same_value() {
     );
 }
 
-// ------------------------------------------- the `source` field's own discipline --
-
-/// A row read off the **file**, in the same independent instrument as [`WireRow`]: its
-/// name and its payload file when the row carries a `source` key, `None` when it does
-/// not.
-///
-/// Deliberately not `ShelfSource` — the store's own type reads a missing key as `Stash`
-/// through `#[serde(default)]`, which is precisely the fact under test. `ron::Value`
-/// reports presence without deciding what absence means. It does drop RON's enum tag
-/// (`Patch(file: "…")` parses to the field alone), so the tag is asserted from the file's
-/// own text beside it, and a `source` of any shape this suite has not been shown fails
-/// loudly rather than reading as absent.
 fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
     let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
     let value: ron::Value = ron::from_str(&text)
@@ -513,9 +402,6 @@ fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// The payload field a recorded `source` holds. A `source` written any other way — a bare
-/// variant name, a map with no `file` — is a shape this store does not emit, and saying so
-/// is the point of reading the wire at all.
 fn payload_file(value: &ron::Value) -> String {
     match value {
         ron::Value::Map(fields) => match fields.get(&ron::Value::String("file".to_string())) {
@@ -526,15 +412,6 @@ fn payload_file(value: &ron::Value) -> String {
     }
 }
 
-/// An **imported patch** row is the one row whose content lives outside git: `source`
-/// names the payload file its bytes sit in, and the unshelve branches on that field — a
-/// row that read back as `Stash` would point an imported patch at a stash entry that was
-/// never made, and report failure over bytes the store is holding.
-///
-/// Pinned in both directions. The patch row's variant **and its file** survive a reload
-/// and survive a whole-file rewrite, which is what every shelf verb is; and the stash rows
-/// written beside it gain no `source` key, so the store a rewrite emits is the shape a
-/// rewrite reads.
 #[test]
 fn an_imported_patch_row_survives_the_store_as_a_patch_row_with_its_file() {
     let tmp = tempfile::tempdir().unwrap();
@@ -596,8 +473,6 @@ fn an_imported_patch_row_survives_the_store_as_a_patch_row_with_its_file() {
         "a stash row spells its mechanism by carrying no key, not by naming it:\n{text}"
     );
 
-    // The whole-file rewrite a verb actually is: an unrelated stash row is added and the
-    // file is written from scratch. The imported row must not degrade on the second pass.
     let mut shelves = loaded.clone();
     shelves.push(shelve_stash::make_shelf(
         "wip: cli",
@@ -644,10 +519,6 @@ fn an_imported_patch_row_survives_the_store_as_a_patch_row_with_its_file() {
     );
 }
 
-/// A store this build fills with **stash rows only** — every row a `shelve` has ever
-/// made — goes back with no `source` key anywhere, which is the shape every such row
-/// arrived in. This is the `skip_serializing_if` half of the mirror, checked on its own so
-/// a patch row cannot be the only thing keeping the key alive on the wire.
 #[test]
 fn a_store_of_stash_rows_gains_no_source_key_when_it_is_rewritten() {
     let tmp = tempfile::tempdir().unwrap();
@@ -674,7 +545,6 @@ fn a_store_of_stash_rows_gains_no_source_key_when_it_is_rewritten() {
         "a stash row is written back as the keyless row it was read as"
     );
 
-    // Rewriting the loaded list — what every shelf verb does — changes nothing observable.
     let loaded = shelve_stash::load_shelves(&project_dir).unwrap();
     shelve_stash::save_shelves(&project_dir, &loaded).unwrap();
     let text = std::fs::read_to_string(shelf_path(&project_dir)).unwrap();

@@ -1,19 +1,7 @@
-//! git's C-style path quoting: the two policies, the bytes each lists, and the
-//! bytes on which they disagree.
-//!
-//! The grammar is observable only as bytes in and bytes out, so every assertion
-//! here is about the answer a caller receives — never about which function
-//! produced it or which module a symbol lives in. That is also why the byte sets
-//! have a suite of their own: nothing above the grammar asserts them today, which
-//! is how a `needs_quote` and a rewriter's private `needs_quote` came to disagree
-//! for years without either naming the other.
-
 use turbogit_domain::git_path_quoting::{
     QuoteTrigger, escape, escape_c, find_quote, find_quote_c, needs_quote, unescape, unescape_c,
 };
 
-/// A path a writer can be handed: ordinary names first, then one byte of each
-/// kind the escape table has a spelling for.
 const RAW: &[&str] = &[
     "a/README.md",
     "a/two words/it is.txt",
@@ -23,8 +11,6 @@ const RAW: &[&str] = &[
     "a/café.txt",
 ];
 
-/// git's quoted spelling of a token's inner text — the quotes themselves are the
-/// reader's business, not the grammar's — and the name it resolves back to.
 const QUOTED: &[(&str, &str)] = &[
     (r"a/we\ttabbed.txt", "a/we\ttabbed.txt"),
     (r#"a/we\"quoted.txt"#, "a/we\"quoted.txt"),
@@ -32,7 +18,6 @@ const QUOTED: &[(&str, &str)] = &[
     (r"a/caf\303\251.txt", "a/café.txt"),
 ];
 
-/// One byte and what each policy says about it: `(byte, GitSpelling, HeaderPair)`.
 const TABLE: &[(u8, bool, bool)] = &[
     (0x00, true, true),
     (0x1f, true, true),
@@ -48,7 +33,6 @@ const TABLE: &[(u8, bool, bool)] = &[
     (b'z', false, false),
 ];
 
-/// Every byte of a path a header line can carry, answered under both policies.
 #[test]
 fn each_policy_has_an_answer_for_each_interesting_byte() {
     for (byte, git, pair) in TABLE {
@@ -65,9 +49,6 @@ fn each_policy_has_an_answer_for_each_interesting_byte() {
     }
 }
 
-/// The disagreement set, so a future edit that moves a boundary — a space that
-/// becomes a trigger everywhere, a backslash quietly added to one policy — fails
-/// by name instead of passing as a rewrite.
 #[test]
 fn the_two_policies_disagree_on_the_space_the_backslash_and_the_bytes_above_ascii() {
     let disagree: Vec<u8> = (0u8..=0xff)
@@ -86,8 +67,6 @@ fn the_two_policies_disagree_on_the_space_the_backslash_and_the_bytes_above_asci
     );
 }
 
-/// A path is one byte past its trigger that forces quoting — the other policy
-/// writes it plainly, on purpose.
 #[test]
 fn a_space_is_quoted_only_where_a_freshly_written_diff_git_line_is_written() {
     let spaced = b"a/two words/it is.txt";
@@ -101,8 +80,6 @@ fn a_space_is_quoted_only_where_a_freshly_written_diff_git_line_is_written() {
     );
 }
 
-/// The row the module doc records as a preserved defect: the rewriter does not
-/// list `\`, so the backslash does not force quoting there.
 #[test]
 fn a_backslash_is_quoted_only_where_gits_own_spelling_is_reproduced() {
     let slashed = b"a/we\\ird.txt";
@@ -116,9 +93,6 @@ fn a_backslash_is_quoted_only_where_gits_own_spelling_is_reproduced() {
     );
 }
 
-/// A non-ASCII byte is the third of the three: octal-escaped under git's
-/// spelling, passed through untouched by the rewriter, which is what keeps a
-/// non-UTF-8 name itself rather than a rewritten one.
 #[test]
 fn a_non_ascii_byte_is_quoted_only_where_gits_own_spelling_is_reproduced() {
     let accented = b"a/caf\xc3\xa9.txt";
@@ -132,9 +106,6 @@ fn a_non_ascii_byte_is_quoted_only_where_gits_own_spelling_is_reproduced() {
     );
 }
 
-/// No byte means no trigger under either policy: a rewriter that needs one for a
-/// two-token line asks separately, because the line must keep two tokens rather
-/// than because a byte in it demands quoting.
 #[test]
 fn no_byte_means_no_trigger_under_either_policy() {
     for trigger in [QuoteTrigger::GitSpelling, QuoteTrigger::HeaderPair] {
@@ -149,8 +120,6 @@ fn no_byte_means_no_trigger_under_either_policy() {
     }
 }
 
-/// The escape table, byte by byte. A spelling that moved would reach a patch
-/// that no longer re-renders as the text it was read from, so each row is named.
 #[test]
 fn the_escape_table_spells_the_bytes_git_spells_them() {
     for (byte, spelled) in [
@@ -179,7 +148,6 @@ fn the_escape_table_spells_the_bytes_git_spells_them() {
     }
 }
 
-/// Byte entry and `String` entry are one table, not two that agree today.
 #[test]
 fn the_string_escape_is_the_byte_escape_converted() {
     for path in RAW {
@@ -191,8 +159,6 @@ fn the_string_escape_is_the_byte_escape_converted() {
     }
 }
 
-/// The `String` entry adds exactly one conversion and nothing else — the lossy
-/// one a `&str` reader has always been handed.
 #[test]
 fn the_string_unescape_is_the_byte_unescape_behind_the_lossy_boundary() {
     for path in RAW {
@@ -216,8 +182,6 @@ fn the_string_unescape_is_the_byte_unescape_behind_the_lossy_boundary() {
     }
 }
 
-/// The exactness contract, stated where it is sharpest: the byte entry keeps a
-/// byte that is not text, and only the `String` entry loses it.
 #[test]
 fn the_byte_unescape_is_exact_where_the_string_one_is_lossy() {
     assert_eq!(
@@ -242,8 +206,6 @@ fn the_byte_unescape_is_exact_where_the_string_one_is_lossy() {
     );
 }
 
-/// Both entries return the same index because there is one scan. An escaped quote
-/// is not the end of the token.
 #[test]
 fn both_find_quote_entries_return_the_same_index() {
     for path in RAW {
@@ -253,8 +215,6 @@ fn both_find_quote_entries_return_the_same_index() {
             "{path:?}: the two entries disagree"
         );
     }
-    // Both readers hand the scan a token whose opening quote is already gone and
-    // whose closing one is still ahead of it, which is the shape below.
     assert_eq!(
         find_quote(br#"a/x.txt""#),
         find_quote_c(r#"a/x.txt""#),
@@ -268,8 +228,6 @@ fn both_find_quote_entries_return_the_same_index() {
     );
 }
 
-/// Each pair round-trips what it is handed: the byte pair exactly, the `String`
-/// pair modulo the conversion the boundary documents.
 #[test]
 fn each_pair_round_trips_its_own_input() {
     for path in RAW {

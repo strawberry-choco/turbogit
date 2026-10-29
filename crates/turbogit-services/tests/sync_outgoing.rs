@@ -1,10 +1,3 @@
-//! Issue #5 — outgoing commits (local-ahead SHAs) through the engine seam and
-//! the multi-root fan-out.
-//!
-//! Headless integration tests over real git repositories (tempdir + system
-//! `git`): one repo per scenario, a bare remote as upstream, and assertions on
-//! full commit SHAs in log order.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{git, repo_with_one_commit, repo_with_origin};
@@ -14,11 +7,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_services::multi_root::{build_root, register};
 use turbogit_services::sync_service::outgoing_per_root;
 
-/// Append a line to `file.txt` in `dir`, stage, commit, and return the new
-/// HEAD SHA (`git rev-parse HEAD`).
-///
-/// Not `git_seed::commit`: the shared primitive *overwrites* the file, this one
-/// appends, so three calls leave it at three lines.
 fn append_commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -35,15 +23,6 @@ fn append_commit(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repo on `main` with local identity configured, a bare remote, and
-/// `main` pushed to it (commit c1); then two more local commits c2 and c3 that
-/// are ahead of `origin/main`.
-///
-/// The floor is [`repo_with_origin`], so that recipe owns it. The two local
-/// commits on top are the part no recipe produces: this suite is about the
-/// divergence `rev-list @{u}..HEAD` has to enumerate, in log order.
-///
-/// Returns `(tempdir guard, repo path, [c1, c2, c3] SHAs)`.
 fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().to_path_buf();
@@ -59,8 +38,6 @@ fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, Vec<String>) {
 #[test]
 fn outgoing_commits_lists_local_ahead_shas_in_log_order() {
     let (_tmp, repo, shas) = repo_ahead_of_origin();
-    // c1 was pushed to origin/main by the setup; only c2 and c3 are
-    // local-ahead. rev-list/log order is newest-first.
     let expected = vec![shas[2].clone(), shas[1].clone()];
 
     let engine = CliExecutor {
@@ -71,7 +48,6 @@ fn outgoing_commits_lists_local_ahead_shas_in_log_order() {
         .expect("outgoing_commits");
     assert_eq!(got, expected);
 
-    // Cross-check against raw git output for the same range.
     let raw = git(&repo, &["log", "--format=%H", "@{u}..HEAD"]);
     let via_git: Vec<String> = raw
         .lines()
@@ -89,7 +65,6 @@ fn outgoing_per_root_returns_one_list_per_root() {
     };
     let mut mgr = MultiRootManager::default();
 
-    // Two independent repos, each with an upstream and two local-ahead commits.
     let (_tmp1, repo1, shas1) = repo_ahead_of_origin();
     let (_tmp2, repo2, shas2) = repo_ahead_of_origin();
     register(&mut mgr, build_root(&engine, &repo1).expect("root 1"));
@@ -114,10 +89,8 @@ fn outgoing_per_root_yields_empty_for_root_without_upstream() {
     };
     let mut mgr = MultiRootManager::default();
 
-    // Good root: upstream + two local-ahead commits.
     let (_tmp_good, good_repo, shas) = repo_ahead_of_origin();
 
-    // Second repo: current branch, but never pushed — no remote, no tracking.
     let tmp_solo = tempfile::tempdir().expect("tempdir");
     let solo_repo = repo_with_one_commit(tmp_solo.path(), "solo");
 

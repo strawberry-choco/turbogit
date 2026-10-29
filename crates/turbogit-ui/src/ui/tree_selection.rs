@@ -1,17 +1,3 @@
-//! Multi-selection over the recursive project tree (sidebar-project-tree
-//! issue 02): folder tri-state checkboxes at any depth, repo checkboxes
-//! independent of their children, and the selection summary walking the
-//! tree in pre-order.
-//!
-//! Pure presentation logic (multi_selection precedent): the checked set is
-//! plain data — a `HashSet<RootId>` living in `UiState` — and every rule
-//! here takes the tree nodes plus that set, so this module never owns
-//! state. A **folder node** exposes a tri-state checkbox over its whole
-//! subtree; a **repo node** keeps its own checkbox even when it contains
-//! nested repos — it never gets a separate folder checkbox. The summary
-//! aggregates one row per selected repo in tree order, so it matches the
-//! sidebar's paint order.
-
 use std::collections::HashSet;
 
 use turbogit_domain::model::RootId;
@@ -80,11 +66,7 @@ pub fn selection_summary(
         s.behind += repo.behind;
         s.dirty_files += repo.dirty_count;
         s.rows.push(SelectionRow {
-            // The root's own identity, in hand while the row is built, so a
-            // click aimed at the row never re-derives it from the label.
             id: repo.id.clone(),
-            // The summary matches the sidebar, so a promoted repo carries
-            // its path label.
             name: repo.label.clone(),
             branch: repo.branch.clone(),
             ahead: repo.ahead,
@@ -99,8 +81,6 @@ pub fn selection_summary(
     s
 }
 
-/// Every repo node under a folder, in pre-order (its subtree at any depth,
-/// including repos nested beneath repo children).
 fn subtree_repos(folder: &FolderNode) -> impl Iterator<Item = &RepoNode> {
     iter_repos_from(&folder.children)
 }
@@ -139,8 +119,6 @@ mod tests {
         RootId(PathBuf::from(path).into())
     }
 
-    /// R(a) > { R(b), F(c) > { R(d), R(e) } } — a repo with nested repos
-    /// and a folder two levels down.
     fn nested_tree() -> ProjectTree {
         let project = Path::new("/w/a");
         super::super::project_tree::build_tree(
@@ -197,18 +175,15 @@ mod tests {
         let c = folder_c(&tree);
         let mut selection = HashSet::new();
 
-        // Unchecked → checks the entire subtree.
         toggle_folder(&mut selection, c);
         assert_eq!(selection.len(), 2);
         assert!(selection.contains(&id_of("/w/a/c/d")));
         assert!(selection.contains(&id_of("/w/a/c/e")));
         assert_eq!(folder_state(&selection, c), CheckState::Checked);
 
-        // Checked → clears the entire subtree.
         toggle_folder(&mut selection, c);
         assert!(selection.is_empty());
 
-        // Partial → completes, never clears.
         selection.insert(id_of("/w/a/c/d"));
         toggle_folder(&mut selection, c);
         assert_eq!(selection.len(), 2);
@@ -225,9 +200,6 @@ mod tests {
         assert_eq!(selection.len(), 1, "the outer repo is selected alone");
         assert!(selection.contains(&a.id.clone()));
 
-        // Its nested repos stay unselected, and the folder beneath it
-        // stays unchecked (a repo-with-children never gets a folder
-        // checkbox).
         assert!(!selection.contains(&id_of("/w/a/b")));
         assert_eq!(
             folder_state(&selection, folder_c(&tree)),

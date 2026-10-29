@@ -1,14 +1,3 @@
-//! Issue #02 — Rich discard confirmation: affected-file list + Shelve-first.
-//!
-//! Contract (issue #02):
-//! - The Discard confirmation dialog lists every affected file by path.
-//! - Three buttons appear: `Shelve first` (alternative to destructive
-//!   discard), `Discard N-file changes` (destructive), and `Cancel`.
-//! - `Shelve first` stashes the changes (via `git stash push`) and closes
-//!   the confirm without performing the discard; surfaces a toast.
-//! - `Discard` runs the original destructive op (no change vs. pre-issue).
-//! - `Cancel` closes the confirm without any side effect.
-
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -20,8 +9,6 @@ use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, sh
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Change, ChangeStatus};
 
-// --- git fixture ---------------------------------------------------------------
-
 // No repository `user.*` here, so every call is pinned per call through the
 // fixture crate's runner, author AND committer: a headless machine has no global
 // identity to borrow, and this suite used to pin only the author, so its `init`
@@ -31,8 +18,6 @@ fn write(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
 }
 
-/// A repo with three modified tracked files: `a.txt`, `b.txt`, `c.txt`.
-/// Each gets a tracked baseline plus an uncommitted modification.
 fn repo_with_modified_files() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -54,22 +39,14 @@ fn repo_with_modified_files() -> (TempDir, std::path::PathBuf) {
     (tmp, project)
 }
 
-// --- harness -------------------------------------------------------------------
-
-/// The shared `shell_harness_over`, at the same 1024×768 box.
 fn feedback_harness(project_dir: std::path::PathBuf) -> Harness<'static, AppState> {
     shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
-// --- helpers -------------------------------------------------------------------
-
-/// Step frames until the confirm is cleared AND the async op's success
-/// toast lands (the stash/discard worker completed) or the deadline passes.
 fn wait_confirm_and_success(harness: &mut Harness<'_, AppState>, what: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         harness.step();
-        // Stepping paints the toast too; poll the state behind the harness.
         if harness.state().ui.confirm.is_none()
             && harness
                 .state()
@@ -110,7 +87,6 @@ fn plant_discard(harness: &mut Harness<'_, AppState>) {
     });
 }
 
-/// Wait until `state.ui.confirm` is cleared (Cancel/OK/Discard closed it).
 fn wait_confirm_cleared(harness: &mut Harness<'_, AppState>, what: &str) {
     for _ in 0..200 {
         harness.step();
@@ -125,9 +101,6 @@ fn wait_confirm_cleared(harness: &mut Harness<'_, AppState>, what: &str) {
     );
 }
 
-// --- tests ---------------------------------------------------------------------
-
-/// Contract: the Discard confirm dialog lists every affected file path.
 #[test]
 fn discard_confirm_lists_every_affected_file() {
     let (_tmp, project) = repo_with_modified_files();
@@ -138,12 +111,9 @@ fn discard_confirm_lists_every_affected_file() {
     for path in ["a.txt", "b.txt", "c.txt"] {
         assert_painted(&harness, path);
     }
-    // Sanity: a path NOT in the list must not appear.
     assert_not_painted(&harness, "d.txt");
 }
 
-/// Contract: the Discard confirm dialog shows three buttons: Shelve first,
-/// Discard N-file changes, Cancel.
 #[test]
 fn discard_confirm_offers_shelve_first_alongside_discard_and_cancel() {
     let (_tmp, project) = repo_with_modified_files();
@@ -156,8 +126,6 @@ fn discard_confirm_offers_shelve_first_alongside_discard_and_cancel() {
     assert_painted(&harness, "Cancel");
 }
 
-/// Contract: clicking Cancel closes the confirm without performing any
-/// side effect. The files remain modified (no `git stash`, no discard).
 #[test]
 fn discard_confirm_cancel_keeps_changes_intact() {
     let (_tmp, project) = repo_with_modified_files();
@@ -169,7 +137,6 @@ fn discard_confirm_cancel_keeps_changes_intact() {
     harness.get_by_label("Cancel").click();
     wait_confirm_cleared(&mut harness, "Cancel click");
 
-    // No stash entry was created.
     let out = Command::new("git")
         .args(["stash", "list"])
         .current_dir(&alpha)
@@ -180,15 +147,12 @@ fn discard_confirm_cancel_keeps_changes_intact() {
         stash_list.trim().is_empty(),
         "Cancel must not create a stash; got: {stash_list}"
     );
-    // The files remain modified.
     for name in ["a.txt", "b.txt", "c.txt"] {
         let body = std::fs::read_to_string(alpha.join(name)).unwrap();
         assert_eq!(body, "modified\n", "{name} should remain modified");
     }
 }
 
-/// Contract: clicking Discard runs the destructive op (clears the
-/// modifications).
 #[test]
 fn discard_confirm_discard_button_runs_the_destructive_op() {
     let (_tmp, project) = repo_with_modified_files();
@@ -198,8 +162,6 @@ fn discard_confirm_discard_button_runs_the_destructive_op() {
     settle_quiet(&mut harness);
 
     harness.get_by_label("Discard 3-file changes").click();
-    // The discard runs on the worker; wait for its success toast so the
-    // worktree assertions below see the finished revert.
     wait_confirm_and_success(&mut harness, "Discard");
     for name in ["a.txt", "b.txt", "c.txt"] {
         let body = std::fs::read_to_string(alpha.join(name)).unwrap();
@@ -207,9 +169,6 @@ fn discard_confirm_discard_button_runs_the_destructive_op() {
     }
 }
 
-/// Contract: clicking Shelve first stashes the listed changes, closes
-/// the confirm — and does NOT perform the destructive discard. After
-/// the stash the worktree is clean.
 #[test]
 fn discard_confirm_shelve_first_stashes_and_keeps_worktree_clean() {
     let (_tmp, project) = repo_with_modified_files();
@@ -219,11 +178,8 @@ fn discard_confirm_shelve_first_stashes_and_keeps_worktree_clean() {
     settle_quiet(&mut harness);
 
     harness.get_by_label("Shelve first").click();
-    // The stash runs on the worker; wait for its success toast so the
-    // worktree assertions below see the finished stash.
     wait_confirm_and_success(&mut harness, "Shelve first");
 
-    // The worktree is clean: the stash captured every modification.
     let out = Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(&alpha)
@@ -234,7 +190,6 @@ fn discard_confirm_shelve_first_stashes_and_keeps_worktree_clean() {
         porcelain.trim().is_empty(),
         "worktree must be clean after Shelve first; got: {porcelain}"
     );
-    // A stash entry exists.
     let out = Command::new("git")
         .args(["stash", "list"])
         .current_dir(&alpha)
@@ -247,7 +202,6 @@ fn discard_confirm_shelve_first_stashes_and_keeps_worktree_clean() {
     );
 }
 
-/// Contract: a Shelve-first toast surfaces after the action.
 #[test]
 fn discard_confirm_shelve_first_surfaces_a_toast() {
     let (_tmp, project) = repo_with_modified_files();
@@ -257,7 +211,6 @@ fn discard_confirm_shelve_first_surfaces_a_toast() {
 
     harness.get_by_label("Shelve first").click();
 
-    // Wait for a Shelve-related toast.
     let mut saw = false;
     for _ in 0..200 {
         harness.step();

@@ -1,23 +1,3 @@
-//! libgit2-backed [`GitExecutor`] (library-migration plan Phase L2).
-//!
-//! Composition over the CLI engine: an inner [`CliExecutor`] answers every
-//! operation that is not migrated yet, so this backend is a strict subset of
-//! the CLI backend's behavior — identical results, identical error shapes for
-//! everything below except the overridden methods.
-//!
-//! Migrated here (real `git2` implementations):
-//! - branches: create (+ checkout / start point), checkout, delete
-//!   (`-d`/`-D` semantics), rename
-//! - tags: create (lightweight + annotated), list
-//! - stash: push, pop, drop, apply
-//! - staging: add, add-all, unstage (`reset_default` against HEAD)
-//! - partial staging: `apply_patch_to_index` in the forward direction via
-//!   [`git2::Repository::apply`] + [`git2::ApplyLocation::Index`]
-//!
-//! Deliberately still on the CLI (see the method comments): reverse patch
-//! application and intent-to-add — libgit2 1.9 (as bound by git2 0.21) has no
-//! equivalent for either.
-
 use crate::cli::{CliExecutor, short_ref};
 use git2::{ApplyLocation, BranchType, ErrorCode, StashFlags};
 use std::path::{Path, PathBuf};
@@ -25,34 +5,24 @@ use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation};
 
-/// Executor that performs supported operations in-process through libgit2
-/// and falls back to the system `git` CLI for everything else.
 pub struct Git2Executor {
-    /// Fallback engine: every non-migrated operation delegates here.
     pub cli: CliExecutor,
 }
 
 impl Git2Executor {
-    /// Wrap a constructed [`CliExecutor`] as the delegation fallback.
     pub fn new(cli: CliExecutor) -> Self {
         Self { cli }
     }
 
-    /// Open the repository at `root`.
     fn open(&self, root: &Path) -> TgResult<git2::Repository> {
         git2::Repository::open(root).map_err(|_| TgError::NotARepo(root.display().to_string()))
     }
 }
 
-/// Map a `git2` error into [`TgError`]. The error type has no libgit2 variant
-/// yet (outside this phase's scope), so failures surface as
-/// [`TgError::Other`] carrying the full libgit2 message.
 fn err(e: git2::Error) -> TgError {
     TgError::Other(format!("libgit2: {e}"))
 }
 
-/// Repo-relative, forward-slash path form libgit2 expects for index paths.
-/// A libgit2-named alias for [`forward_slash_path`], not a second spelling.
 fn rel(p: &Path) -> String {
     forward_slash_path(p)
 }
@@ -68,9 +38,6 @@ fn merged_into(
     Ok(base == tip || repo.graph_descendant_of(base, tip)?)
 }
 
-/// The branch tip as the model carries it (issue 02): short hash, subject,
-/// author, committer time — read from a commit already peeled by the listing.
-/// Shape shared with the CLI adapter's `for-each-ref` loop.
 fn branch_tip_from_commit(c: &git2::Commit<'_>) -> BranchTip {
     BranchTip::from_parts(
         short_commit_ref(&c.id().to_string()),
@@ -86,16 +53,13 @@ fn branch_tip_from_commit(c: &git2::Commit<'_>) -> BranchTip {
 /// the upstream ref is pruned, which is exactly what `git branch -vv`
 /// reports as `[gone]`; libgit2's `Branch::upstream` instead errors once
 /// the ref disappears, so the config is the only stable source.
-///
 /// Returns `None` when the branch tracks nothing. A `"."` remote means a
 /// local branch tracks another local branch, so the ref to probe is
-/// `refs/heads/<name>` — which is what [`Upstream::git_ref`] answers for one.
+/// `refs/heads/<name>`, which is what [`Upstream::git_ref`] answers for one.
 fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(Upstream, bool)> {
     let config = repo.config().ok()?;
     let remote = config.get_string(&format!("branch.{name}.remote")).ok()?;
     let merge = config.get_string(&format!("branch.{name}.merge")).ok()?;
-    // This site's own call, mirroring `branch_upstream` in `cli.rs` — see
-    // `short_ref` for why the helper cannot make it.
     let branch = short_ref(&merge).unwrap_or(&merge).to_string();
     let upstream = Upstream { remote, branch };
     let probe = if upstream.remote == "." {
@@ -107,8 +71,6 @@ fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(Upstream, bool
     Some((upstream, !exists))
 }
 
-/// Tip commit OIDs of a local branch and its tracking ref, or `None` when
-/// either cannot be resolved (e.g. the upstream is gone).
 fn tip_oids(
     repo: &git2::Repository,
     branch: &str,
@@ -129,11 +91,6 @@ fn tip_oids(
     Some((local, up))
 }
 
-/// Map a libgit2 `Commit` to the project's `Commit` model. Used by `log`
-/// to honor the CLI's parser quirks: trailing whitespace stripped from
-/// the raw message, and the same author-time value used for both the
-/// `author.time` and `committer.time` fields (the CLI's `%at` only
-/// yields author time, but the model stores it twice).
 fn commit_to_commit(repo: &git2::Repository, commit: &git2::Commit<'_>, root: &RootId) -> Commit {
     let author = commit.author();
     let committer = commit.committer();
@@ -159,9 +116,8 @@ fn commit_to_commit(repo: &git2::Repository, commit: &git2::Commit<'_>, root: &R
 }
 
 /// libgit2 can see a commit's signature but never verify it (issue 17):
-/// presence maps to `Unverified`, absence to `Unsigned` — never to a
+/// presence maps to `Unverified`, absence to `Unsigned`, never to a
 /// claimed-good state.
-///
 /// **Do not merge this with `parse_signature_state` in `cli.rs`.** Two arms here
 /// against four there is the design: this backend has no verified state to
 /// report, and `SignatureState::Good` is reachable from exactly one backend
@@ -178,10 +134,9 @@ fn signature_state_of(repo: &git2::Repository, oid: &git2::Oid) -> SignatureStat
 /// Returns `true` if `commit` changed `path` relative to its first
 /// parent. The CLI's `git log -- <path>` filter is implemented by
 /// libgit2's revwalk having no path filter of its own, so we walk each
-/// commit and re-run the parent-vs-commit diff its single owner resolves
-/// — with rename detection off, because `git log -- <path>` is
+/// commit and re-run the parent-vs-commit diff its single owner resolves,
+/// with rename detection off, because `git log -- <path>` is
 /// rename-blind and does not follow a rename to the path's new name.
-///
 /// Any failure answering that diff counts the commit as NOT touching the
 /// path (`false`), unlike `commit_tree_diff`, which surfaces the same
 /// failure as a `TgError`; the filter only ever asks a yes/no question.
@@ -193,8 +148,6 @@ fn commit_touches_path(repo: &git2::Repository, commit: &git2::Commit<'_>, path:
         .any(|d| d.new_file().path() == Some(path) || d.old_file().path() == Some(path))
 }
 
-/// Resolve an empty tree OID (the `--root` baseline) into a `Tree`.
-/// Mirrors the same trick used by `commit_files`.
 fn empty_tree(repo: &git2::Repository) -> Result<git2::Tree<'_>, git2::Error> {
     let oid = repo.treebuilder(None)?.write()?;
     repo.find_tree(oid)
@@ -203,11 +156,10 @@ fn empty_tree(repo: &git2::Repository) -> Result<git2::Tree<'_>, git2::Error> {
 /// The tree-vs-parent diff of `commit`: `commit.tree()` against the first
 /// parent's tree, or against the empty tree when the commit is a root (the
 /// `--root` baseline). This is the one owner of that old-side rule.
-///
 /// `detect_renames` is a parameter, deliberately NOT a constant folded into
 /// one flavour: `commit_tree_diff` passes `true` to mirror `git diff-tree -M`,
 /// while the `log` path filter passes `false` because plain `git log -- <path>`
-/// is rename-blind — collapsing the two into rename-on would change the
+/// is rename-blind, collapsing the two into rename-on would change the
 /// filter's answer.
 fn parent_tree_diff<'a>(
     repo: &'a git2::Repository,
@@ -230,12 +182,6 @@ fn parent_tree_diff<'a>(
     Ok(diff)
 }
 
-/// The tree-vs-parent diff of `commit`, with rename detection on — libgit2's
-/// reading of `git diff-tree -r --root -M <commit>`. The CLI treats the parent
-/// as an empty tree when the commit has none (`--root`), and post-processes
-/// renames at git's default similarity; both are mirrored here so
-/// `commit_files` and `commit_file_stats` describe the same delta and can
-/// never disagree about the paths a commit touched.
 fn commit_tree_diff<'a>(repo: &'a git2::Repository, commit: &str) -> TgResult<git2::Diff<'a>> {
     let commit = repo
         .revparse_single(commit)
@@ -246,16 +192,11 @@ fn commit_tree_diff<'a>(repo: &'a git2::Repository, commit: &str) -> TgResult<gi
 }
 
 impl GitExecutor for Git2Executor {
-    // ---------------------------------------------------------------- read ----
-    // Reads stay on the CLI until the read-only migration phases land.
-
     fn status(&self, root: &Path) -> TgResult<RootStatus> {
         self.cli.status(root)
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
-        // Pickaxe (issue 17) has no libgit2 equivalent: delegate to the CLI
-        // fallback, like the other git2-unsupported operations.
         if opts.pickaxe.is_some() {
             return self.cli.log(root, opts);
         }
@@ -293,7 +234,7 @@ impl GitExecutor for Git2Executor {
             // CLI parity: `git log` in a repository nobody has committed in
             // refuses the read ("fatal: your current branch 'main' does not have
             // any commits yet"), and the CLI backend answers that as the EMPTY
-            // listing it means — a repository with no history has an empty
+            // listing it means, a repository with no history has an empty
             // history, which is an answer, and the Log surface's `No changes
             // committed.` state with its `Commit local changes` action is only
             // reachable if it is heard that way. libgit2 has no HEAD commit for
@@ -324,9 +265,6 @@ impl GitExecutor for Git2Executor {
             {
                 continue;
             }
-            // Paging: `skip` counts entries of the finished listing, so the
-            // discard happens here — after the path filter, before the cut —
-            // exactly like `git log --skip` on an already-filtered walk.
             if skipped < skip {
                 skipped += 1;
                 continue;
@@ -347,7 +285,7 @@ impl GitExecutor for Git2Executor {
             Ok(head) => head,
             Err(e) if e.code() == ErrorCode::UnbornBranch => {
                 // CLI parity: `symbolic-ref --short HEAD` succeeds on an
-                // unborn HEAD — the branch name exists before any commit
+                // unborn HEAD, the branch name exists before any commit
                 // does. `Repository::head` resolves the ref and fails
                 // instead, so read the symbolic target directly. This keeps
                 // `is_repo` true for freshly initialized repositories.
@@ -371,15 +309,10 @@ impl GitExecutor for Git2Executor {
     }
 
     fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>> {
-        // The index stage spec is not something libgit2's rev parser accepts,
-        // so the staged side comes from the CLI path.
         self.cli.index_file_bytes(root, path)
     }
 
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
-        // `rev` is a commit-ish naming this commit's version of the path; the
-        // index stages it cannot parse have their own reads now, so the spec is
-        // assembled straight onto libgit2's rev parser.
         let repo = self.open(root)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let obj = repo.revparse_single(&spec).map_err(err)?;
@@ -396,14 +329,12 @@ impl GitExecutor for Git2Executor {
         // Issue 17 states (remote `[gone]` via `%(upstream:track)`, tag
         // pushed/local-only via `ls-remote`) have no cheap libgit2 path,
         // and the one shared implementation keeps the classification from
-        // drifting — delegate to the CLI fallback like the other
+        // drifting, delegate to the CLI fallback like the other
         // git2-unsupported operations.
         self.cli.ref_decorations(root)
     }
 
     fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
-        // libgit2 parity for `git diff-tree --no-commit-id --name-status -r
-        // --root -M <commit>`; see `commit_tree_diff` for the diff itself.
         let repo = self.open(root)?;
         let diff = commit_tree_diff(&repo, commit)?;
 
@@ -438,11 +369,10 @@ impl GitExecutor for Git2Executor {
                 // Typechange and anything libgit2 reports that has no
                 // CLI name-status letter for it surfaces as Modified to
                 // match `parse_name_status_line`'s fallthrough in `cli.rs`.
-                //
                 // Do NOT merge this with `parse_name_status_line`: this asks libgit2
                 // what it saw, that reads a string git printed. Merging would couple
                 // one backend to the other, and `change_stats.rs` drives both against
-                // the same fixtures — it is where it fails.
+                // the same fixtures, it is where it fails.
                 _ => (ChangeStatus::Modified, None),
             };
             changes.push(Change {
@@ -458,10 +388,6 @@ impl GitExecutor for Git2Executor {
     }
 
     fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
-        // A merge preview asks about a merge base. libgit2 can compute that
-        // pair, but this adapter has no in-process line-count path for it, so
-        // the range question goes to the CLI — which owns the three-dot
-        // spelling that no caller sees any more.
         if matches!(question, ChangeQuestion::MergeIntoHead { .. }) {
             return self.cli.change_stats(root, question);
         }
@@ -472,17 +398,16 @@ impl GitExecutor for Git2Executor {
         // libgit2 has no numstat: walk the line events of the very diff
         // `commit_files` reports and count each delta's `+` / `-` side, so the
         // two lists can never disagree about which paths a commit touched.
-        // A binary delta emits no line events, so its row keeps `None` counts —
+        // A binary delta emits no line events, so its row keeps `None` counts,
         // the same answer git's two dashes give the CLI parser.
-        //
         // Do NOT merge this with `parse_numstat` in `cli.rs`: there is no shared code
-        // to extract, because one implementation does not exist upstream — that one
+        // to extract, because one implementation does not exist upstream, that one
         // parses text git printed, this one is all libgit2 leaves.
         let repo = self.open(root)?;
         let diff = commit_tree_diff(&repo, commit)?;
         let rows = std::cell::RefCell::new(Vec::<FileStat>::new());
         // libgit2 sets no BINARY flag on an added or deleted blob, so ask the
-        // blob itself — the same classification git's two dashes report.
+        // blob itself, the same classification git's two dashes report.
         let is_binary = |delta: &git2::DiffDelta<'_>| -> bool {
             let id = delta.new_file().id();
             let id = if id.is_zero() {
@@ -541,23 +466,6 @@ impl GitExecutor for Git2Executor {
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
-        // libgit2 parity for `git branch -a -vv`:
-        // - Local branches: `repo.branches(Some(Local))`, then `.upstream()`
-        //   gives the short remote-tracking ref (e.g. `origin/main`) matching
-        //   the CLI's `[origin/main: ...]` bracket. When no upstream is
-        //   configured the call returns an error; that maps to `None`.
-        // - Remote-tracking branches: `repo.branches(Some(Remote))` returns
-        //   names like `origin/main`. The CLI's parser strips the `remote/`
-        //   prefix and drops the `tracking` field for remotes. We do the
-        //   same here so downstream consumers (state::ahead_behind, the
-        //   branch popup) see identical shapes on both sides.
-        // - Detached HEAD: `BranchType::Local` iteration never yields a
-        //   phantom HEAD entry, so nothing extra to filter.
-        // - Issue 32 sync fields: tracking and `gone` come from the branch
-        //   config (`branch.<name>.remote`/`.merge`), which survives the
-        //   upstream ref being pruned — exactly the state `git branch -vv`
-        //   reports as `[gone]`. ahead/behind come from `graph_ahead_behind`
-        //   on the tip pair; last_touched from the tip commit time.
         let repo = self.open(root)?;
         let mut result = Vec::new();
 
@@ -578,9 +486,6 @@ impl GitExecutor for Git2Executor {
                 // bytes but the model can't hold non-UTF-8 names.
                 Ok(None) | Err(_) => continue,
             };
-            // _type is always Local here, but the Branches iterator
-            // yields (Branch, BranchType) tuples; silence the unused
-            // warning by consuming it.
             let _ = _type;
 
             let (tracking, gone) = match tracking_state(&repo, &name) {
@@ -679,8 +584,8 @@ impl GitExecutor for Git2Executor {
     }
 
     fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        // libgit2 answers `Repository::reflog` with `(oid, message)` pairs only
-        // — no timestamp — and the cross-repository Recent merge sorts by the
+        // libgit2 answers `Repository::reflog` with `(oid, message)` pairs only,
+        // no timestamp, and the cross-repository Recent merge sorts by the
         // checkout's own time, so the CLI's `--date=unix` selector is the only
         // adapter that can say when. Delegation, like the other reads that stay
         // on the CLI until the read-only migration phases land.
@@ -701,9 +606,6 @@ impl GitExecutor for Git2Executor {
             .peel_to_commit()
             .map_err(err)?
             .id();
-        // libgit2's `graph_ahead_behind` returns `(ahead, behind)` directly,
-        // matching the trait contract (`ahead_behind` returns `(usize, usize)`
-        // with that order per the CLI impl).
         let (ahead, behind) = repo
             .graph_ahead_behind(branch_oid, upstream_oid)
             .map_err(err)?;
@@ -711,8 +613,6 @@ impl GitExecutor for Git2Executor {
     }
 
     fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize> {
-        // Counting a range is a walk libgit2 can do but this adapter has no
-        // reason to duplicate: the CLI answers it with git's own revision walk.
         self.cli.commit_count_between(root, from, to)
     }
 
@@ -736,8 +636,6 @@ impl GitExecutor for Git2Executor {
             .peel_to_commit()
             .map_err(err)?
             .id();
-        // Reuse the local `merged_into` helper (used by `branch_delete`
-        // for the safe-delete path) — same answer, equal SHAs included.
         merged_into(&repo, upstream_oid, branch_oid).map_err(err)
     }
 
@@ -792,7 +690,7 @@ impl GitExecutor for Git2Executor {
                 root: RootId(root.to_path_buf().into()),
                 index,
             });
-            true // continue
+            true
         })
         .map_err(err)?;
         Ok(result)
@@ -821,9 +719,6 @@ impl GitExecutor for Git2Executor {
             let wt = match repo.find_worktree(&name) {
                 Ok(wt) => wt,
                 Err(_) => {
-                    // Metadata exists but worktree directory missing/corrupt —
-                    // surface it so the UI can show prunable worktrees
-                    // (matches CLI behavior). Dirtiness is unknown here.
                     result.push(Worktree {
                         path: PathBuf::from(name),
                         branch: String::new(),
@@ -839,14 +734,10 @@ impl GitExecutor for Git2Executor {
                 .canonicalize()
                 .unwrap_or_else(|_| wt.path().to_path_buf());
 
-            // Skip the main worktree — its path equals the repo root.
             if path == root {
                 continue;
             }
 
-            // The list is decoupled from the dirty probe (ticket 01):
-            // branch is answered here, dirtiness only on demand through
-            // `worktree_dirty`. Detached HEAD reports no branch.
             let branch = (|| -> Option<String> {
                 let wt_repo = git2::Repository::open_from_worktree(&wt).ok()?;
                 if wt_repo.head_detached().ok()? {
@@ -867,19 +758,10 @@ impl GitExecutor for Git2Executor {
     }
 
     fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
-        // Delegation, not a libgit2 read: the sequencer's markers are files in
-        // the git directory, and the CLI adapter is the one that ranks them.
-        // An answer that varied with the backend setting would gate a rewrite
-        // differently depending on which engine the developer selected.
         self.cli.holding_operation(root)
     }
 
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {
-        // Strictly cheaper than a full status scan, same answer (ticket 01):
-        // an unmerged-index check, then a HEAD↔workdir diff (staged +
-        // unstaged tracked changes, untracked included, ignored excluded)
-        // whose iteration stops at the first changed file. A prunable
-        // (missing) worktree cannot be opened and reads clean.
         let probe = (|| -> TgResult<bool> {
             let repo = git2::Repository::open(path).map_err(err)?;
             if repo
@@ -910,7 +792,7 @@ impl GitExecutor for Git2Executor {
             match diff.foreach(&mut file_cb, None, None, None) {
                 // Halt after the first changed file: in git2 0.21 a `false`
                 // callback return terminates iteration AND surfaces as
-                // `GIT_EUSER` — the probe's early stop, not a failure.
+                // `GIT_EUSER`, the probe's early stop, not a failure.
                 Ok(()) => {}
                 Err(e) if e.code() == ErrorCode::User => {}
                 Err(e) => return Err(err(e)),
@@ -920,7 +802,7 @@ impl GitExecutor for Git2Executor {
         Ok(probe.unwrap_or(false))
     }
 
-    /// Submodule reads parse `git submodule status` output — delegate to the
+    /// Submodule reads parse `git submodule status` output, delegate to the
     /// CLI adapter (the git2 submodule API carries no pinned-vs-recorded
     /// pairing).
     fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
@@ -928,9 +810,6 @@ impl GitExecutor for Git2Executor {
     }
 
     fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {
-        // libgit2's rev parser has no index-stage spec, so the sides come from
-        // the CLI path — which is the only place in this adapter that knows the
-        // stage numbering at all.
         self.cli.conflict_versions(root, path)
     }
 
@@ -948,7 +827,6 @@ impl GitExecutor for Git2Executor {
             Err(e) => Err(err(e)),
         }
     }
-    // ---------------------------------------------------------- mutating ----
 
     fn init(&self, root: &Path) -> TgResult<()> {
         self.cli.init(root)
@@ -1093,8 +971,6 @@ impl GitExecutor for Git2Executor {
         root: &Path,
         conflicted: &[PathBuf],
     ) -> TgResult<Vec<PathBuf>> {
-        // The git2 adapter has no shell — defer to the CLI for the merge
-        // metadata lookup, mirroring how abort/continue already delegate.
         self.cli.merge_auto_merged_files(root, conflicted)
     }
 
@@ -1118,13 +994,9 @@ impl GitExecutor for Git2Executor {
         self.cli.submodule_deinit(root, path, force)
     }
 
-    /// An arbitrary git command can only be exec'd — delegate to the CLI
-    /// fallback engine (issue 13 custom commands work on every backend).
     fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
         self.cli.run_raw(root, args)
     }
-
-    // --------------------------------------------------- staging / worktree ----
 
     fn add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         if paths.is_empty() {
@@ -1166,7 +1038,7 @@ impl GitExecutor for Git2Executor {
             paths.iter().map(|p| rel(p)).collect()
         };
         // `restore --staged` resets against HEAD, which an unborn branch does
-        // not have — git and libgit2 both fail to resolve it there, so the
+        // not have, git and libgit2 both fail to resolve it there, so the
         // error used to escape. With no HEAD there is also no baseline to diff
         // against: the index holds only additions, so dropping the named
         // entries is the same act git performs, and it is what returns a newly
@@ -1202,22 +1074,17 @@ impl GitExecutor for Git2Executor {
         // Forward maps 1:1 onto libgit2's `git apply --cached` emulation:
         // [`ApplyLocation::Index`] applies to the index only and commits the
         // index write itself (git_apply uses an index writer internally).
-        //
         // Reverse cannot migrate yet: libgit2 1.9 (bound by git2 0.21) has no
-        // reverse flag on `git_apply` — its only option flag is
-        // GIT_APPLY_CHECK — so the exact
+        // reverse flag on `git_apply`, its only option flag is
+        // GIT_APPLY_CHECK, so the exact
         // `git apply --cached --reverse --recount` behavior stays on the CLI.
         if direction == ApplyDirection::Reverse {
             return self.cli.apply_patch_to_index(root, patch, direction);
         }
         if patch.is_empty() {
-            // `git apply` succeeds silently on empty input.
             return Ok(());
         }
         let repo = self.open(root)?;
-        // libgit2 takes the patch as git's text, so this adapter renders the
-        // value it was handed — the only place upstream of the CLI that still
-        // speaks the format, and it speaks it as an output.
         let text = patch.to_string();
         let diff = git2::Diff::from_buffer(text.as_bytes()).map_err(err)?;
         repo.apply(&diff, ApplyLocation::Index, None).map_err(err)?;
@@ -1225,18 +1092,10 @@ impl GitExecutor for Git2Executor {
     }
 
     fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
-        // Delegated to the CLI: libgit2's GIT_APPLY_CHECK has no `--check`
-        // equivalent with the `--recount` tolerance the patch previews rely
-        // on, and the verbatim git stderr is the forecast's signal (issue 16).
         self.cli.check_patch(root, patch)
     }
 
     fn apply_patch_to_worktree(&self, root: &Path, patch: &Patch) -> TgResult<()> {
-        // Delegated to the CLI for the same reason [`Self::check_patch`] is:
-        // libgit2's `ApplyLocation::Worktree` has no `--recount`, and an apply
-        // whose accept/reject verdict comes from one tolerance while its
-        // write comes from another is how a patch that passed its own preflight
-        // fails to land. The two must agree, so they share one implementation.
         self.cli.apply_patch_to_worktree(root, patch)
     }
 
@@ -1250,14 +1109,8 @@ impl GitExecutor for Git2Executor {
     }
 
     fn exclude_dir(&self, root: &Path, dir: &Path) -> TgResult<()> {
-        // Delegated to the CLI: libgit2 exposes ignore *checks*
-        // (`git_ignore_path_is_ignored`) and `.gitignore` updates, but no API
-        // for the clone's own `info/exclude`, and resolving which exclude file
-        // git actually reads is the part with the worktree hazard (see the port).
         self.cli.exclude_dir(root, dir)
     }
-
-    // ----------------------------------------------------------- branches ----
 
     fn branch_create(
         &self,
@@ -1271,12 +1124,8 @@ impl GitExecutor for Git2Executor {
             .revparse_single(start_point.unwrap_or("HEAD"))
             .map_err(err)?;
         let commit = obj.peel_to_commit().map_err(err)?;
-        // force=false fails on an existing name, matching plain `git branch`.
         let branch = repo.branch(name, &commit, false).map_err(err)?;
         if checkout {
-            // Tree first, HEAD second — the standard libgit2 switch order.
-            // SAFE strategy carries uncommitted changes over or refuses,
-            // like `git checkout -b`.
             repo.checkout_tree(commit.as_object(), None).map_err(err)?;
             let refname = branch.get().name().map_err(err)?.to_string();
             repo.set_head(&refname).map_err(err)?;
@@ -1331,7 +1180,6 @@ impl GitExecutor for Git2Executor {
                 )));
             }
         }
-        // Refuses the checked-out branch, matching the CLI failure mode.
         branch.delete().map_err(err)?;
         Ok(())
     }
@@ -1343,12 +1191,9 @@ impl GitExecutor for Git2Executor {
     fn branch_rename(&self, root: &Path, old: &str, new: &str) -> TgResult<()> {
         let repo = self.open(root)?;
         let mut branch = repo.find_branch(old, BranchType::Local).map_err(err)?;
-        // force=false matches `git branch -m` (non-forced rename).
         branch.rename(new, false).map_err(err)?;
         Ok(())
     }
-
-    // --------------------------------------------------------------- tags ----
 
     fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()> {
         // git2 has no native GPG tag signing; a signed tag delegates to the
@@ -1361,8 +1206,6 @@ impl GitExecutor for Git2Executor {
         let obj = repo.revparse_single(target).map_err(err)?;
         match &spec.message {
             Some(m) => {
-                // The tagger override (issue 31); unset, the identity comes
-                // from config exactly like `git tag -a`.
                 let sig = match &spec.tagger {
                     Some(id) => {
                         let (name, email) = parse_identity(id);
@@ -1414,16 +1257,11 @@ impl GitExecutor for Git2Executor {
         self.cli.tag_push(root, remote, name, all)
     }
 
-    // ------------------------------------------------------- diff / blame ----
-
     fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
         self.cli.diff_patch(root, opts)
     }
 
     fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
-        // The CLI, for the reason every other diff-shaped verb here has: a
-        // created patch is git's own text, and a libgit2 rendering of it would be
-        // a second implementation of the format the artifact is read by.
         self.cli.patch_bytes(root, origin, reverse)
     }
 
@@ -1431,15 +1269,12 @@ impl GitExecutor for Git2Executor {
         self.cli.blame(root, path, rev)
     }
 
-    // ------------------------------------------------------ revert / undo ----
-
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()> {
         self.cli.revert(root, commit)
     }
 
     fn stash_push(&self, root: &Path, message: &str, keep_index: bool) -> TgResult<()> {
         let mut repo = self.open(root)?;
-        // Same identity source as `git stash push`: config user.name/email.
         let sig = repo.signature().map_err(err)?;
         let mut flags = StashFlags::empty();
         if keep_index {

@@ -1,10 +1,3 @@
-//! eframe application entry point (eframe 0.35 `App::ui` API).
-//!
-//! Owns [`AppState`] and pumps the event channel every frame — the async
-//! pattern from `execution-plan.md` §3.1. In 0.35 the `App` trait exposes
-//! `fn ui(&mut self, ui: &mut Ui, frame)`, and `egui::Context` is reached via
-//! `ui.ctx()`.
-
 use eframe::{App, Frame};
 use egui::Ui;
 use turbogit_app::state::AppState;
@@ -26,17 +19,12 @@ impl TurbogitApp {
     pub fn launch(project_dir: Option<std::path::PathBuf>) -> Self {
         let mut state = AppState::launch(project_dir);
         state.dir_picker = Some(Box::new(|| rfd::FileDialog::new().pick_folder()));
-        // The patch-path seam, installed beside it: the log's Create patch asks
-        // this for a destination and writes the commit's own diff there.
         state.patch_writer = Some(Box::new(|| {
             rfd::FileDialog::new()
                 .set_title("Create patch")
                 .set_file_name("patch.diff")
                 .save_file()
         }));
-        // The read twin of the seam above, for `Apply patch`: choose the patch file
-        // to write into the working tree. Declining is not an error — the window's
-        // path field is the same choice made by typing.
         state.patch_reader = Some(Box::new(|| {
             rfd::FileDialog::new().set_title("Apply patch").pick_file()
         }));
@@ -48,20 +36,16 @@ impl App for TurbogitApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
         let ctx = ui.ctx();
 
-        // Dark-only design tokens (ADR-0003); idempotent per-frame application.
         theme::configure_style(ctx);
 
         // Background incoming check (issue #27): tick the scheduler, then
-        // idle the frame loop until the next poll is due — egui sleeps
+        // idle the frame loop until the next poll is due, egui sleeps
         // between frames, so without the wake-up a poll could only fire
         // when the user happened to move the mouse.
         if let Some(wait) = self.state.tick_incoming_poll(std::time::Instant::now()) {
             ctx.request_repaint_after(wait);
         }
 
-        // Drain worker-thread events and apply them to state, then repaint.
-        // The pump itself lives on AppState so headless harnesses get
-        // production parity (issue #13).
         if self.state.drain_events() > 0 {
             ctx.request_repaint();
         }

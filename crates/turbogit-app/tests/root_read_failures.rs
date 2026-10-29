@@ -1,24 +1,3 @@
-//! The recorded failure of a root-wide diff read, graded against real git.
-//!
-//! `ensure_hunk_stats` asks one root for three whole-root diffs. When one of
-//! those reads dies, the fill now records the failure against that root and
-//! that view instead of swallowing it, and a surface displaying that view
-//! refuses: the whole file counts as failed to read, and only the message
-//! shows. Every fixture is a temporary repository driven by the CLI executor
-//! through `AppState::for_roots`, per `AGENTS.md`, and every claim about the
-//! index is read back out of `git status --porcelain` or `git diff --cached`,
-//! not out of an internal flag.
-//!
-//! The natural failing read is the `HEAD` one on a repository nobody has
-//! committed in: the engine's `guard_unborn_head` refuses it with
-//! `TgError::NoCommitsYet` while both index-facing reads answer. That is also
-//! the partially failed fill the module doc describes, so these tests do not
-//! need a double that can fail `diff_patch`: `FakeExecutor` answers `Ok`
-//! always, and none is extended here. The one case the unborn fixture cannot
-//! produce, a fresh per-path answer over a recorded root failure, is produced
-//! by recording the failure directly on the caches, which is the event-fed
-//! writer's own public door.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -41,7 +20,6 @@ fn app_state(project: &Path, repo: &Path) -> AppState {
     AppState::for_roots(project, std::slice::from_ref(&repo.to_path_buf()))
 }
 
-/// A repository with `git init` and nothing else: no commit, no HEAD.
 fn unborn_repo(project: &Path, name: &str) -> PathBuf {
     let work = project.join(name);
     git(
@@ -54,13 +32,11 @@ fn unborn_repo(project: &Path, name: &str) -> PathBuf {
     work
 }
 
-/// Fill `repo`'s hunk statistics the way the app fills them, on ask.
 fn fill(state: &mut AppState, repo: &Path) {
     let root = root_id(repo);
     state.ensure_hunk_stats(&root);
 }
 
-/// What the fill installed, without filling anything.
 fn held<'a>(state: &'a AppState, repo: &Path) -> &'a RootHunkStats {
     state
         .caches
@@ -76,7 +52,6 @@ fn preview_target(repo: &Path, rel: &str) -> DiffTarget {
     )
 }
 
-/// Ask, settle on the pump, ask again: the read's own two-frame life.
 fn read_value(state: &mut AppState, repo: &Path, rel: &str) -> Arc<DiffValue> {
     let target = preview_target(repo, rel);
     for _ in 0..6 {
@@ -88,8 +63,6 @@ fn read_value(state: &mut AppState, repo: &Path, rel: &str) -> Arc<DiffValue> {
     panic!("the diff read never settles for {rel}");
 }
 
-/// The changed rows of one display model as `(kind, text)`, sorted by text so
-/// the assertion prints stably.
 fn changed(model: &DiffValue) -> Vec<(RowKind, String)> {
     let mut out: Vec<(RowKind, String)> = model
         .model
@@ -106,11 +79,6 @@ fn changed(model: &DiffValue) -> Vec<(RowKind, String)> {
     out
 }
 
-/// **The partially failed fill, in its natural shape.** An unborn root fails
-/// only the HEAD-facing read; `git diff --cached` and `git diff` answer, and
-/// the data they feed must stay on screen while the failed view is refused.
-/// Git's own three answers are asserted first, because the shape of this
-/// fixture is the premise of every other test here.
 #[test]
 fn a_failed_head_read_marks_only_its_view_and_the_answered_views_still_fill() {
     let parent = tempfile::tempdir().unwrap();
@@ -206,9 +174,6 @@ fn a_failed_head_read_marks_only_its_view_and_the_answered_views_still_fill() {
     );
 }
 
-/// The other state of the same rule: an unversioned path is exempt because
-/// its pane never asked git the question that failed, while the whole-root
-/// pane is not exempt at all.
 #[test]
 fn an_unversioned_pane_is_exempt_and_the_whole_root_pane_is_not() {
     let parent = tempfile::tempdir().unwrap();
@@ -240,11 +205,6 @@ fn an_unversioned_pane_is_exempt_and_the_whole_root_pane_is_not() {
     );
 }
 
-/// The failure is not sticky: the same read answering forgets it, and the
-/// file becomes readable after the first commit. This is the non-sticky
-/// property the keyed path established for the pane read, and the fill's path
-/// must match it, because every completed operation invalidates the root and
-/// the refill is what clears the record.
 #[test]
 fn the_record_clears_when_the_same_read_answers_after_the_first_commit() {
     let parent = tempfile::tempdir().unwrap();
@@ -259,8 +219,6 @@ fn the_record_clears_when_the_same_read_answers_after_the_first_commit() {
 
     git(&repo, &["commit", "-q", "-m", "first"]);
     std::fs::write(repo.join("f.txt"), "alpha\nbravo\ncharlie\n").unwrap();
-    // What a completed operation's refresh does for the root: the entry and
-    // its records go together, so the next fill asks git again.
     state.refresh(Affected::Root(root.clone()));
     assert!(
         !state.caches.has_diff_view_failure(&root, StatsView::Repo),
@@ -298,10 +256,6 @@ fn the_record_clears_when_the_same_read_answers_after_the_first_commit() {
     );
 }
 
-/// The invalidation arms, one test with teeth on all three: `is_empty` must
-/// enumerate the new map or it can assert a leak-free cache while a failure
-/// leaks forever; the per-root retain must drop the root's records and no
-/// other root's; `invalidate_all` must clear the map with the rest.
 #[test]
 fn the_failure_map_lives_under_the_same_invalidation_as_the_entry() {
     let mut caches = RootCaches::default();
@@ -335,13 +289,6 @@ fn the_failure_map_lives_under_the_same_invalidation_as_the_entry() {
     );
 }
 
-/// The case the unborn fixture cannot produce: the per-path read answers with
-/// real content while the root read of the same view is recorded as failed.
-/// (No existing double can make `diff_patch` answer an error at all, so the
-/// record is written through the caches' own event-fed door against a
-/// committed repository whose reads would otherwise all answer.) The rule
-/// marks the whole file failed to read even against a `Fresh` answer: content
-/// the composition path cannot honour is not shown at all.
 #[test]
 fn a_recorded_view_failure_refuses_even_a_fresh_per_path_answer() {
     let parent = tempfile::tempdir().unwrap();

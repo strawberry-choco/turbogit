@@ -1,25 +1,10 @@
-//! The branch context menu: one right-click action list for a branch row.
-//!
-//! Twelve items for one `(RootId, Branch)` target — the union of every branch
-//! action the surface offers — rendered through the shared
-//! [`crate::ui::widgets::menu_item`] primitive. Props in, action out — the
-//! same contract [`crate::ui::branch_tree_view`] holds: the component decides
-//! no policy, dispatches nothing, and never touches `AppState`. The eleven
-//! gating rules live here once, in [`branch_menu_items`] — and they are the
-//! whole set, because the copy item reads the name it was handed and so has
-//! nothing to be blocked by — so the wording and enablement of a blocked action
-//! can never drift between surfaces.
-
 use turbogit_domain::model::{Branch, BranchKind};
 
 use crate::ui::icons::Icon;
 use crate::ui::widgets::{MenuItemKind, MenuItemProps, menu_item, menu_rule};
 
-/// What the user picked. Plain data — the surface owns what it means.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BranchMenuAction {
-    /// Copy THIS row's name — not the checked-out branch's, which may be another
-    /// row. Inert: no ref moves and no repository state is consulted.
     CopyBranchName,
     Checkout,
     NewBranchFrom,
@@ -27,10 +12,6 @@ pub enum BranchMenuAction {
     Merge,
     Rebase,
     Compare,
-    /// The reference's entry into its fifth integration verb: compare this
-    /// branch's files with the working tree, which is where `Get from Branch`
-    /// lives. Read-only, so — like [`Self::Compare`] — a remote-tracking row can be
-    /// one side of it.
     DiffWithWorkingTree,
     Pull,
     Push,
@@ -62,7 +43,6 @@ impl BranchMenuAction {
         Self::Delete,
     ];
 
-    /// The item's slot in the array [`branch_menu_items`] returns.
     pub const fn index(self) -> usize {
         match self {
             Self::CopyBranchName => 0,
@@ -81,14 +61,9 @@ impl BranchMenuAction {
     }
 }
 
-/// One item's gate: whether it acts, and what it says when it cannot.
-///
-/// The type moved to the widget layer with the second menu that needed it
-/// ([`crate::ui::widgets::MenuItemState`]); this is its established import path
-/// and stays.
 pub use crate::ui::widgets::MenuItemState;
 
-/// The twelve items' gates, in [`BranchMenuAction::ORDER`] — one function, one
+/// The twelve items' gates, in [`BranchMenuAction::ORDER`], one function, one
 /// set of strings. Every rule is a field read off the branch the listing
 /// already carries; none costs a git call. [`BranchMenuAction::CopyBranchName`]
 /// takes the array's default because the name it copies is the one it was
@@ -103,10 +78,6 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     } else {
         MenuItemState::enabled()
     };
-    // The pull family means "fetch and integrate this branch's upstream", so
-    // unlike the source-branch verbs below it is offered on remote rows only:
-    // on a local row `Merge`/`Rebase` are how commits move, and
-    // a "Pull" label there names an operation that is not what would run.
     items[BranchMenuAction::CheckoutAndPull.index()] = if is_current {
         MenuItemState::disabled("already checked out")
     } else if !has_upstream {
@@ -116,8 +87,6 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     } else {
         MenuItemState::enabled()
     };
-    // The history verbs move this branch's commits into the checked-out one,
-    // so they need a branch that is neither the target nor remote-only.
     items[BranchMenuAction::Merge.index()] = if is_current {
         MenuItemState::disabled("this is the current branch")
     } else if !is_local {
@@ -132,16 +101,11 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     } else {
         MenuItemState::enabled()
     };
-    // Comparing is read-only, so a remote-tracking row can be one side of it.
     items[BranchMenuAction::Compare.index()] = if is_current {
         MenuItemState::disabled("this is the current branch")
     } else {
         MenuItemState::enabled()
     };
-    // The same rule, for the same reason: comparing a branch with the working tree
-    // of that very branch is a list that can only come back empty, and a row that
-    // is HEAD has nothing to take from itself. Remote-tracking rows are legal,
-    // because `Get from Branch` reads a revision rather than moving a ref.
     items[BranchMenuAction::DiffWithWorkingTree.index()] = if is_current {
         MenuItemState::disabled("this is the current branch")
     } else {
@@ -168,8 +132,6 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     } else {
         MenuItemState::disabled("remote branches cannot be renamed")
     };
-    // A remote-tracking row is still deletable — that is what a delete means
-    // upstream. Only the branch the work is standing on is not.
     items[BranchMenuAction::Delete.index()] = if is_current {
         MenuItemState::disabled("the current branch cannot be deleted")
     } else {
@@ -178,30 +140,18 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     items
 }
 
-/// Everything the menu is told, each frame. Plain data: the owning
-/// repository's name for the multi-repo wording, whether more than one
-/// repository is in scope, and which branch is checked out. The last is both
-/// the gate's input — a row whose name matches it *is* the current branch —
-/// and the destination the history verbs name, so the two can never disagree.
 pub struct BranchMenuProps<'a> {
     pub repo_name: &'a str,
     pub multi_repo: bool,
     pub current_branch: Option<&'a str>,
 }
 
-/// Paint the twelve items for one branch and report which was clicked.
-///
-/// The menu is 296 px wide and grows to 320 px before the branch name
-/// middle-truncates — no wrapping inside a menu row. "Checkout and pull"
-/// carries `DOWNLOAD`: the embedded set has no checkout-and-pull composite
-/// yet, and the design's stated fallback beats an invented inline path.
 pub fn branch_menu(
     ui: &mut egui::Ui,
     props: &BranchMenuProps<'_>,
     target: &Branch,
 ) -> Option<BranchMenuAction> {
     let states = branch_menu_items(target, props.current_branch);
-    // Menu rows sit flush; the rules state their own air.
     ui.spacing_mut().item_spacing.y = 0.0;
     ui.set_min_width(296.0);
     ui.set_max_width(320.0);
@@ -211,8 +161,6 @@ pub fn branch_menu(
     } else {
         "Checkout".to_owned()
     };
-    // With no named branch checked out (detached HEAD) the verb falls back to
-    // its bare stem rather than painting a dangling preposition.
     let directed = |verb: &str, stem: &str| match props.current_branch {
         Some(current) => format!("{verb} {current}"),
         None => stem.to_owned(),
@@ -251,14 +199,8 @@ pub fn branch_menu(
         ui,
         BranchMenuAction::CopyBranchName,
         &states[BranchMenuAction::CopyBranchName.index()],
-        // `FILES` is this app's copy glyph — the one [`crate::ui::commit_menu`]
-        // gives both of its copy verbs, because the embedded set has no
-        // clipboard. `GIT_BRANCH` would be the literal match and would collide
-        // with `New branch from` two rows below it.
         Icon::FILES,
         "Copy branch name",
-        // The name is the value being copied, so it rides the data face — the
-        // same slot and face `Copy hash` uses for the short reference.
         Some(&target.name),
         None,
         MenuItemKind::Default,
@@ -309,9 +251,6 @@ pub fn branch_menu(
         ui,
         BranchMenuAction::Rebase,
         &states[BranchMenuAction::Rebase.index()],
-        // The embedded Lucide set has no rebase glyph; `LAYERS` reads as the
-        // commit stack being re-laid, and an approximate glyph from the set
-        // beats inventing path data outside it.
         Icon::LAYERS,
         &rebase_label,
         None,
@@ -332,9 +271,6 @@ pub fn branch_menu(
         ui,
         BranchMenuAction::DiffWithWorkingTree,
         &states[BranchMenuAction::DiffWithWorkingTree.index()],
-        // The comparison glyph again, deliberately: this item and the one above it
-        // are the two readings of the same question — commit-level and file-level —
-        // and a distinct icon would imply a distinct family.
         Icon::GIT_COMPARE,
         "Show Diff with Working Tree",
         None,

@@ -1,4 +1,4 @@
-# Current Git Client STORM — Pain Points, Features, and Market
+# Current Git client STORM. Pain points, features, and market
 
 Snapshot date: **2026-08-23**. This report uses a STORM-style method: multiple
 perspectives, contradiction mapping, synthesis, and self-critique. It is **not** a
@@ -49,7 +49,7 @@ already captured during this session; absent facts are marked `GAP`, not inferre
   evidence. Therefore this report does not estimate client shares.
 - **Concentration signal:** Visual Studio's documentation says its Git experience is
   optimized for GitHub and describes GitHub/Azure DevOps account integration; VS Code's
-  source-control overview includes a “Collaborate on GitHub” section. These support IDE
+  source-control overview includes a "Collaborate on GitHub" section. These support IDE
   integration with hosted platforms but do not prove installed-base dominance.
 - **Survey data gap:** Stack Overflow, JetBrains Developer Ecosystem, and Octoverse were
   not retrieved in this pass. Any Git-population or tool-usage claim from those surveys is
@@ -103,7 +103,7 @@ fast, accessible core loop with transparent Git semantics.
 | Tension | Evidence-backed observation | Resolution for synthesis |
 | --- | --- | --- |
 | Feature breadth vs. flow depth | Tower lists many capabilities while VS Code emphasizes staged changes, graph/history, worktrees, conflicts, and GitHub collaboration. | Breadth matters less than discoverability of the daily loop. |
-| Editor convenience vs. standalone focus | Visual Studio and VS Code embed Git near coding/cloud workflows; Tower/Fork/SmartGit sell dedicated Git surfaces. | Segment by context switching, repository scale, multi-host needs, and platform coverage—not by GUI versus IDE. |
+| Editor convenience vs. standalone focus | Visual Studio and VS Code embed Git near coding/cloud workflows; Tower/Fork/SmartGit sell dedicated Git surfaces. | Segment by context switching, repository scale, multi-host needs, and platform coverage, not by GUI versus IDE. |
 | Safety abstraction vs. Git transparency | Guided conflict/rebase UIs reduce friction, but the collected pages do not establish whether users always understand underlying refs. | Pair guidance with command preview/recovery paths; validate with users. |
 | Paid polish vs. free baseline | Tower/Fork monetize paid clients; GitHub Desktop is MIT licensed and VS Code source is MIT, though the distributed product uses a Microsoft license. | Compete on differentiated workflow quality, not simply free versus paid. |
 
@@ -165,9 +165,9 @@ was successfully captured in this session.
 ### Fork
 
 - **License / price / model:** Proprietary terms are **GAP**, except the homepage's purchase
-  link showing `$59.99` and “free evaluation.” Source: <https://git-fork.com/>.
-- **Platforms / target user:** Homepage download cards show Mac on “OS X 10.11+” and Windows
-  on “Windows 7+”; pricing text appears for both. Source: <https://git-fork.com/>.
+  link showing `$59.99` and "free evaluation." Source: <https://git-fork.com/>.
+- **Platforms / target user:** Homepage download cards show Mac on "OS X 10.11+" and Windows
+  on "Windows 7+"; pricing text appears for both. Source: <https://git-fork.com/>.
 - **Git engine:** **GAP.**
 - **Commit/staging / partial staging:** **GAP** in this pass.
 - **Branch/history graph:** **GAP** in this pass.
@@ -195,12 +195,12 @@ was successfully captured in this session.
   SAML SSO. Source: <https://www.git-tower.com/pricing>.
 - **Git engine:** **GAP.**
 - **Commit/staging / partial staging:** Windows page advertises integrated staged/unstaged
-  diffs and “Stage files hunks and lines,” also promoted as single-line staging. Source:
+  diffs and "Stage files hunks and lines," also promoted as single-line staging. Source:
   <https://www.git-tower.com/windows>.
 - **Branch/history graph:** File/blame/history and compare-branches features appear in the
   structured feature list; detailed graph behavior is **GAP**. Source:
   <https://www.git-tower.com/windows>.
-- **Conflicts:** “Conflict wizard for guided resolutions.” Source:
+- **Conflicts:** "Conflict wizard for guided resolutions." Source:
   <https://www.git-tower.com/windows>.
 - **Rebase/interactive history:** Interactive rebase with drag and drop; page headline also
   promotes Interactive Rebase. Source: <https://www.git-tower.com/windows>.
@@ -218,8 +218,8 @@ was successfully captured in this session.
   <https://www.git-tower.com/windows>.
 - **Collaboration/cloud:** Hosted-service manager and PR operations above. Source:
   <https://www.git-tower.com/pricing>.
-- **Differentiators:** Broad advertised safety/history surface—undo, reflog recovery,
-  guided conflicts, drag-and-drop rebase—with per-seat subscription and optional
+- **Differentiators:** Broad advertised safety/history surface, undo, reflog recovery,
+  guided conflicts, drag-and-drop rebase, with per-seat subscription and optional
   enterprise/team controls. Sources above.
 
 ### Sublime Merge
@@ -230,10 +230,10 @@ was successfully captured in this session.
 ### SmartGit
 
 - **License / price / model:** Current commercial/non-commercial terms and prices are **GAP**
-  despite the homepage audience labels “Free Open Source” and “Free Educational
-  Institutions.” Eligibility conditions are not established by the captured homepage.
-- **Platforms / target user:** Homepage accessibility label says “Available for Windows,
-  macOS, and Linux”; audience labels include Development Teams, Enterprises, Power Users,
+  despite the homepage audience labels "Free Open Source" and "Free Educational
+  Institutions." Eligibility conditions are not established by the captured homepage.
+- **Platforms / target user:** Homepage accessibility label says "Available for Windows,
+  macOS, and Linux"; audience labels include Development Teams, Enterprises, Power Users,
   Free Open Source, Free Educational Institutions, and Command Line Fans. Source:
   <https://www.syntevo.com/smartgit/>.
 - **Git engine:** **GAP.**
@@ -270,7 +270,7 @@ captured in this session.
 
 - **License / price / model:** License, packaging, and support model are **GAP** beyond the
   homepage's free project positioning; no license page was captured.
-- **Platform / target user:** Homepage calls Magit “A Git Porcelain inside Emacs,” implying
+- **Platform / target user:** Homepage calls Magit "A Git Porcelain inside Emacs," implying
   availability wherever Emacs runs; exact supported versions/platforms are **GAP**. Target
   user is Emacs users. Source: <https://magit.vc/>.
 - **Git engine:** **GAP.**
@@ -313,7 +313,7 @@ captured in this session.
 - **LFS/submodules/worktrees:** Branches/worktrees navigation is visible, but capability
   details are **GAP**; LFS/submodules are **GAP**. Source:
   <https://code.visualstudio.com/docs/sourcecontrol/overview>.
-- **Integrations/AI:** Overview includes a “Collaborate on GitHub” section and AI-generated
+- **Integrations/AI:** Overview includes a "Collaborate on GitHub" section and AI-generated
   commit messages from staged changes. Extension/marketplace specifics are **GAP**. Source:
   <https://code.visualstudio.com/docs/sourcecontrol/overview>.
 - **Accessibility:** **GAP** in this pass.
@@ -325,7 +325,7 @@ captured in this session.
 
 ### JetBrains IDEs
 
-- **Current evidence:** Captured IntelliJ IDEA “Git” help shell confirms the topic exists and
+- **Current evidence:** Captured IntelliJ IDEA "Git" help shell confirms the topic exists and
   was built on 2026-08-18, but rendered article content did not load in the saved capture.
   Source: <https://www.jetbrains.com/help/idea/using-git-integration.html>.
 - All requested dimensions are otherwise **GAP**, including pricing and platform matrix.
@@ -336,7 +336,7 @@ captured in this session.
 - **Platforms / target user:** Windows Visual Studio developers; explicit platform/system
   matrix is **GAP**.
 - **Git engine:** Documentation tells command-line users to install Git for Windows and calls
-  it “not a Microsoft product”; it does not state the embedded engine. Source:
+  it "not a Microsoft product"; it does not state the embedded engine. Source:
   <https://learn.microsoft.com/en-us/visualstudio/version-control/git-with-visual-studio?view=vs-2022>.
 - **Commit/staging:** Overview covers clone/create repository and commit workflows through
   linked tasks. Granular staging detail is **GAP**. Source:

@@ -1,12 +1,3 @@
-//! Issue 12 — recent bulk operations history: the app seam.
-//!
-//! Headless tests over real temporary repositories through the production
-//! registration path ([`AppState::for_roots`]): a completed bulk/cascade run
-//! is recorded — time, operation, repo count, outcome summary — through the
-//! real event pump; Details data (the per-repo outcomes) rides in the
-//! record; Rollback is a public [`AppState`] action offered only for
-//! reversible operations; and the list persists with the workspace.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::git_seed::git;
@@ -14,12 +5,6 @@ use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
 use turbogit_services::bulk_run::RowState;
 
-/// Create an initialized temp repository with one base commit on `main`
-/// plus an `origin` remote so upstream reads can be exercised.
-///
-/// **Kept local, NOT `git_seed::repo_with_origin`**: the committed path is load-bearing.
-/// `branch_project` writes `base.txt` over the seeded one, so the second commit would
-/// be an *add* rather than a *modify*.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -42,7 +27,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A two-repo project: `alpha` clean and synced, `ui` with a dirty worktree.
 fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join(tag);
@@ -67,11 +51,6 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
     turbogit_domain::model::RootId(path.to_path_buf().into())
 }
 
-/// Step the event pump until every monitor row is in a terminal state
-/// (Done / Failed / Skipped) or the deadline passes.
-///
-/// **Not a `test_support::harness` settle**: those fingerprint a *painted frame*, this
-/// exits on a *state* predicate.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -91,12 +70,6 @@ fn wait_for_run_end(state: &mut AppState) {
     }
 }
 
-/// Step the event pump until `pred` holds: the completion side effects
-/// (toast, activity, history) arrive as a `BulkCompleted` event that can
-/// lag the last monitor row event.
-///
-/// **Kept local for the same reason as `wait_for_run_end`**: an `AppState` pump
-/// exiting on a state predicate.
 fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -112,8 +85,6 @@ fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     }
 }
 
-/// Wait for the run to end and its record to land in the history with the
-/// expected summary.
 fn wait_for_record(state: &mut AppState, summary: &str) {
     wait_for_run_end(state);
     wait_for(state, |s| {
@@ -121,14 +92,11 @@ fn wait_for_record(state: &mut AppState, summary: &str) {
     });
 }
 
-// -- Recording completed runs --------------------------------------------------
-
 #[test]
 fn a_completed_run_is_recorded_with_time_op_count_and_outcome_summary() {
     let (_tmp, project, alpha, ui) = project("hist-record");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    // Pull all: alpha runs (clean + synced), ui is preflight-skipped (dirty).
     let plan = BulkPlan {
         op: BulkOp::PullAll,
         roots: vec![rid(&alpha)],
@@ -164,7 +132,6 @@ fn a_completed_run_is_recorded_with_time_op_count_and_outcome_summary() {
             reason: "dirty worktree".to_string()
         }
     );
-    // The recorded time is the completion time (within a minute of now).
     let now = chrono::Utc::now().timestamp_millis();
     assert!(
         (rec.at..=now + 60_000).contains(&rec.at) && now - rec.at < 60_000,
@@ -172,8 +139,6 @@ fn a_completed_run_is_recorded_with_time_op_count_and_outcome_summary() {
     );
 }
 
-/// A three-repo project for the branch cascade: `alpha` clean and synced,
-/// `existing` already carrying `feature/x`, and `ui` with a dirty worktree.
 fn branch_project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join(tag);
@@ -209,8 +174,6 @@ fn a_retry_pass_merges_into_the_same_history_record() {
     state.run_bulk_confirmed(plan);
     wait_for_record(&mut state, "2 ok · 1 skipped (dirty worktree)");
 
-    // ui gets cleaned, then Retry skipped forces the attempt the policy
-    // refused: the record updates in place instead of gaining a second row.
     std::fs::write(ui.join("dirty.txt"), "committed now\n").unwrap();
     git(&ui, &["add", "."]);
     git(&ui, &["commit", "-q", "-m", "clean up"]);
@@ -218,8 +181,6 @@ fn a_retry_pass_merges_into_the_same_history_record() {
     state.bulk_retry_skipped();
     wait_for_record(&mut state, "3 ok");
 }
-
-// -- Persistence across restarts ------------------------------------------------
 
 #[test]
 fn history_survives_a_restart_through_the_launch_path() {
@@ -235,7 +196,6 @@ fn history_survives_a_restart_through_the_launch_path() {
     state.run_bulk_confirmed(plan);
     wait_for_record(&mut state, "1 ok · 1 skipped (dirty worktree)");
 
-    // A fresh app process over the same workspace restores the history.
     let reloaded = AppState::launch_in(Some(project.clone()), None);
     assert_eq!(reloaded.ui.bulk_history.len(), 1);
     assert_eq!(
@@ -257,8 +217,6 @@ fn a_ui_ron_written_before_history_existed_loads_with_none() {
     let state = AppState::launch_in(Some(project.path().to_path_buf()), None);
     assert!(state.ui.bulk_history.is_empty());
 }
-
-// -- Rollback -------------------------------------------------------------------
 
 #[test]
 fn rollback_undoes_a_branch_cascade_and_marks_the_record() {
@@ -286,9 +244,6 @@ fn rollback_undoes_a_branch_cascade_and_marks_the_record() {
     let rec_id = state.ui.bulk_history[0].id;
     state.bulk_rollback(rec_id);
 
-    // The created branch is deleted and the prior checkout restored in
-    // alpha; existing keeps its branch (the run only checked it out) but is
-    // back on the branch it started on.
     assert_eq!(git(&alpha, &["branch", "--show-current"]).trim(), "main");
     assert!(
         !git(&alpha, &["branch", "--list", "feature/x"]).contains("feature/x"),
@@ -303,7 +258,6 @@ fn rollback_undoes_a_branch_cascade_and_marks_the_record() {
         state.ui.bulk_history[0].rolled_back,
         "the record remembers the rollback"
     );
-    // The rollback reached disk with the record.
     let loaded = turbogit_app::persistence::load_ui_state(&project);
     assert!(loaded.bulk_history[0].rolled_back);
 }

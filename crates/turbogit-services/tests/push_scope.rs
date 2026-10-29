@@ -1,10 +1,3 @@
-//! Issue #25 — push-scope resolution and protected-branch remediation.
-//!
-//! Pure snapshot tests over [`Root`] values: which roots a Push dialog scope
-//! covers, which roots in a scope sit on a protected branch, and pushing an
-//! explicit root subset through the engine seam (fake executor — no git on
-//! PATH needed for the resolution pieces; the execution test uses the fake).
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,14 +15,12 @@ fn settings_with(patterns: &[&str]) -> VcsSettings {
     }
 }
 
-/// A root sitting on `branch` with (optionally) an upstream tracking ref.
 fn root_on_branch(path: &str, branch: &str) -> Root {
     let mut r = root(path);
     r.current_branch = Some(branch.to_string());
     r
 }
 
-/// `root_on_branch` with a local branch that tracks `<remote>/<branch>`.
 fn root_tracking(path: &str, branch: &str, remote: &str) -> Root {
     let mut r = root_on_branch(path, branch);
     r.branches = vec![Branch {
@@ -57,9 +48,6 @@ fn root_tracking(path: &str, branch: &str, remote: &str) -> Root {
     r
 }
 
-/// `push_roots` pushes exactly the given subset, resolving each root's
-/// remote from its tracking ref (or first remote as fallback), and refusing
-/// force-pushes to protected roots without reaching the engine.
 #[test]
 fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
     let engine = FakeExecutor::new();
@@ -104,8 +92,6 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
     );
     drop(calls);
 
-    // Force + a protected root in the subset: that root is refused with no
-    // engine call; the unprotected root still pushes.
     let engine2 = FakeExecutor::new();
     let gamma = root_tracking("/proj/gamma", "main", "origin");
     let delta = root_tracking("/proj/delta", "topic", "origin");
@@ -152,17 +138,11 @@ fn selection(paths: &[&str]) -> HashSet<RootId> {
     paths.iter().map(|p| root_id(p)).collect()
 }
 
-/// `This repo` covers only the selected root; `Selected` covers the checked
-/// repos in registration order; `Project subtree` covers every root under the
-/// project directory; `All` covers every registered root — including any
-/// registered outside the project tree.
 #[test]
 fn scope_resolves_this_repo_selection_subtree_and_all() {
     let project = Path::new("/proj");
     let alpha = root("/proj/alpha");
     let beta = root("/proj/beta");
-    // A root registered outside the project tree (added manually), which
-    // separates `Project subtree` from `All`.
     let outer = root("/elsewhere/gamma");
     let roots = vec![alpha, beta, outer];
     let sel = selection(&["/proj/beta"]);
@@ -190,10 +170,6 @@ fn scope_resolves_this_repo_selection_subtree_and_all() {
     assert_eq!(all.len(), 3, "All covers every registered root");
 }
 
-/// Roots whose current branch matches a protected pattern are reported with
-/// the branch name and every matching pattern — exactly what the remediation
-/// banner names ("alpha and beta track main, which matches main|release/*").
-/// Detached roots (no current branch) can never be protected.
 #[test]
 fn protected_roots_reports_name_branch_and_matching_patterns() {
     let alpha = root_on_branch("/proj/alpha", "main");
@@ -222,9 +198,6 @@ fn protected_roots_reports_name_branch_and_matching_patterns() {
     );
 }
 
-/// Dry-runs run per root in scope with the SAME per-root remote resolution as
-/// the real push; `summarize_dry_runs` produces the aggregate line's numbers
-/// (distinct remotes, ref updates parsed from verbatim reports, rejections).
 #[test]
 fn dry_run_roots_resolves_per_root_and_summary_counts_refs_and_rejections() {
     let engine = FakeExecutor::new();
@@ -252,9 +225,6 @@ fn dry_run_roots_resolves_per_root_and_summary_counts_refs_and_rejections() {
     );
     drop(calls);
 
-    // Summary: distinct remotes, "->" ref-update lines per report, and one
-    // rejection for the failed root. Expected values are hand-worked from the
-    // report literals, not recomputed from the code under test.
     let hand_results = vec![
         (
             "origin".to_string(),

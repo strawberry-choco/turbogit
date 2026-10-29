@@ -1,19 +1,3 @@
-//! Branch widget (status bar) + redesigned Branches popup (spec §8.5).
-//!
-//! The popup is a searchable floating list grouped RECENT / LOCAL / REMOTE /
-//! TAGS with the current branch pinned top and check-marked. Row actions are
-//! live (issue 32): Checkout, Rename, Delete (through the rich confirmation
-//! from issue 02) and Compare… (a commit-list dialog, spec E9), with a
-//! "+ New branch" / "Manage remotes…" / "Compare…" footer. Protected
-//! branches carry a lock and gated destructive actions plus pull / merge
-//! hover quick-actions; stale rows show the tip's age ("3w") and remote rows
-//! show ↑n ↓m or `gone`. New Worktree… stays visibly inert until its flow
-//! exists (ADR-0012). Keyboard: typing filters live, ↑/↓ move the highlight,
-//! Enter checks the highlighted row out, Esc closes.
-//!
-//! All git mutations cross the `GitExecutor` seam via
-//! [`AppState::dispatch`]; the pure row-model helpers are unit-testable.
-
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
@@ -24,10 +8,8 @@ use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_app::sync_service;
 use turbogit_domain::model::{Branch, BranchKind, RootId};
 
-/// Favorite-star ink: the central warning token (spec §8.5 row anatomy).
 pub const STAR_COLOR: Color32 = Palette::STATE_WARNING;
 
-/// One selectable row of the branches popup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopupEntry {
     Recent {
@@ -59,7 +41,6 @@ pub enum PopupEntry {
 }
 
 impl PopupEntry {
-    /// Painted row label (remote rows carry the `origin/` prefix, §8.5).
     pub fn label(&self) -> String {
         match self {
             Self::Recent { name, .. } | Self::Local { name, .. } | Self::Tag { name } => {
@@ -69,7 +50,6 @@ impl PopupEntry {
         }
     }
 
-    /// The underlying branch name (no `origin/` prefix for remote rows).
     fn branch_name(&self) -> &str {
         match self {
             Self::Recent { name, .. } | Self::Local { name, .. } | Self::Remote { name, .. } => {
@@ -79,7 +59,6 @@ impl PopupEntry {
         }
     }
 
-    /// Branch-tip committer time for the stale badge (`None` for tags).
     fn last_touched(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         match self {
             Self::Recent { last_touched, .. }
@@ -89,7 +68,6 @@ impl PopupEntry {
         }
     }
 
-    /// Live-filter match against the display label.
     pub fn matches(&self, filter_lower: &str) -> bool {
         filter_lower.is_empty() || self.label().to_lowercase().contains(filter_lower)
     }
@@ -101,7 +79,6 @@ impl PopupEntry {
         )
     }
 
-    /// Section tag driving group-title emission (`RECENT`, …).
     fn section(&self) -> &'static str {
         match self {
             Self::Recent { .. } => "RECENT",
@@ -113,8 +90,8 @@ impl PopupEntry {
 }
 
 /// Flattened, ordered popup rows: RECENT (starred first), LOCAL (favorites
-/// first, alphabetical, current excluded — it is pinned separately), REMOTE,
-/// TAGS — every row filtered against `filter`.
+/// first, alphabetical, current excluded, it is pinned separately), REMOTE,
+/// TAGS, every row filtered against `filter`.
 pub fn popup_entries(
     locals: &[Branch],
     remotes: &[Branch],
@@ -134,9 +111,6 @@ pub fn popup_entries(
 
     let mut out = Vec::new();
 
-    // RECENT — starred rows first (§8.5), otherwise most-recent-first order.
-    // Sync markers come from the still-existing local branch when there is
-    // one (a recent may reference a branch deleted since).
     let mut recent: Vec<PopupEntry> = recents
         .iter()
         .filter(|n| Some(n.as_str()) != current)
@@ -155,8 +129,6 @@ pub fn popup_entries(
     recent.sort_by_key(|e| std::cmp::Reverse(e.starred()));
     out.extend(recent.into_iter().filter(|e| e.matches(&f)));
 
-    // LOCAL — favorites first, alphabetical; the current branch is pinned
-    // above the groups and never repeats here.
     let mut locs: Vec<&Branch> = locals
         .iter()
         .filter(|b| Some(b.name.as_str()) != current)
@@ -175,17 +147,11 @@ pub fn popup_entries(
             .filter(|e| e.matches(&f)),
     );
 
-    // REMOTE — the raw remote-tracking refs plus every upstream a local
-    // branch tracks. The synthesized rows are what render "gone" after the
-    // remote branch is deleted and its ref pruned: the local branch still
-    // carries the tracking config, so the popup shows `origin/x  gone`.
     let mut seen: Vec<String> = remotes.iter().map(|b| b.name.clone()).collect();
     let mut rem_rows: Vec<PopupEntry> = remotes
         .iter()
         .map(|b| {
             let local = locals.iter().find(|l| {
-                // Two fields compared, not a rebuilt git name: this is the
-                // site that used to construct `origin/<name>` to test it.
                 l.tracking.as_ref().is_some_and(|u| {
                     u.branch == b.name && b.remote.as_ref().is_some_and(|r| *r == u.remote)
                 })
@@ -228,7 +194,6 @@ pub fn popup_entries(
     rem_rows.sort_by(|a, b| a.branch_name().cmp(b.branch_name()));
     out.extend(rem_rows);
 
-    // TAGS — alphabetical.
     let mut t: Vec<String> = tags.to_vec();
     t.sort();
     out.extend(
@@ -240,18 +205,12 @@ pub fn popup_entries(
     out
 }
 
-/// Record a checked-out branch as most-recent (deduped, capped).
-///
-/// The popup's own bookkeeping, unchanged by the tab's reflog-derived group —
-/// but the cap is the same documented number, so it is read from
-/// [`branches_tree::RECENT_CAP`] rather than restated here as a fifth literal.
 pub fn push_recent(recents: &mut Vec<String>, name: &str) {
     recents.retain(|n| n != name);
     recents.insert(0, name.to_string());
     recents.truncate(crate::ui::branches_tree::RECENT_CAP);
 }
 
-/// Bottom info strip for multi-root projects (§8.5).
 pub fn sync_notice(roots: usize) -> String {
     format!("Synchronous branch operations across {roots} repositories")
 }
@@ -283,13 +242,6 @@ pub fn stale_badge(age: std::time::Duration) -> String {
     format!("{}y", secs / (365 * 24 * 60 * 60))
 }
 
-/// Sync marker for a remote row (issue 32): `gone` when the tracked
-/// upstream was deleted, `↑a ↓b` when the local counterpart diverged, and
-/// nothing when in sync.
-///
-/// Either side moving is enough for the marker (`DivergenceMeaning::AnyDrift`,
-/// the same reading the status bar's counter uses) — a row one side ahead of
-/// its upstream has something to say to the user either way.
 pub fn remote_marker(ahead: usize, behind: usize, gone: bool) -> Option<String> {
     if gone {
         Some("gone".into())
@@ -300,16 +252,10 @@ pub fn remote_marker(ahead: usize, behind: usize, gone: bool) -> Option<String> 
     }
 }
 
-/// Which row actions are offered and enabled for one popup entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowActions {
-    /// Delete is offered and enabled (gated on the current branch, protected
-    /// branches, and tag rows).
     pub delete: bool,
-    /// Rename is offered and enabled (local branches only).
     pub rename: bool,
-    /// The row is a protected branch: renders the lock and the hover
-    /// quick-actions (pull / merge).
     pub protected: bool,
 }
 
@@ -340,7 +286,7 @@ pub fn row_actions(
 }
 
 /// Why Delete is gated on this row, or `None` when it is enabled. Gated
-/// actions stay rendered (dimmed) with this explanation on hover — the
+/// actions stay rendered (dimmed) with this explanation on hover, the
 /// repo's disabled-with-reason convention, so the reason is always
 /// discoverable rather than the control silently vanishing.
 pub fn delete_gate(
@@ -363,7 +309,7 @@ pub fn delete_gate(
     })
 }
 
-/// Why Rename is gated on this row, or `None` when it is enabled — same
+/// Why Rename is gated on this row, or `None` when it is enabled, same
 /// contract as [`delete_gate`].
 pub fn rename_gate(
     entry: &PopupEntry,
@@ -382,9 +328,6 @@ pub fn rename_gate(
     })
 }
 
-// ------------------------------------------------------------------ widget --
-
-/// Compact branch indicator in the status bar; opens the popup on click.
 pub fn widget(ui: &mut Ui, state: &mut AppState) {
     let branch = state
         .selected_root
@@ -397,15 +340,11 @@ pub fn widget(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-// ------------------------------------------------------------------ popup --
-
-/// The Branches popup (spec §8.5).
 pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.branches_popup {
         return;
     }
 
-    // Esc closes (keyboard contract, §8.5).
     if ui.input(|i| i.key_pressed(Key::Escape)) {
         state.ui.branches_popup = false;
         return;
@@ -414,7 +353,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
 
-    // Snapshots so the window body never borrows `state` while mutating it.
     let root_id = state.selected_root.clone();
     let root = root_id
         .as_ref()
@@ -425,7 +363,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
         .open(&mut open)
         .default_width(420.0)
         .show(&ctx, |ui| {
-            // Header: search input (flex fill) + close X (§8.5.1).
             ui.horizontal(|ui| {
                 let search =
                     widgets::search_input(ui, "Search branches", &mut state.ui.branch_filter);
@@ -436,8 +373,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             });
             ui.separator();
 
-            // Wired top action (ADR-0012): opens the New Branch flow preset to
-            // create + check out, closing this popup so focus follows cleanly.
             if widgets::compact_button(ui, "New Branch…").clicked() {
                 state.open_new_branch(NewBranchBase::Unset, true, None);
                 state.ui.branches_popup = false;
@@ -450,7 +385,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             let id = root.id.clone();
             let current = root.current_branch.clone();
 
-            // Current branch pinned top, check-marked and emphasized (§8.5.2).
             if let Some(cur) = &current {
                 ui.add_space(2.0);
                 ui.label(
@@ -484,7 +418,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 &state.ui.branch_filter,
             );
 
-            // Keyboard: ↑/↓ move the highlight, Enter checks the row out.
             let n = entries.len();
             let (up, down, enter) = ui.input(|i| {
                 (
@@ -509,8 +442,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             // permanently culling lower rows; demanding the region up front
             // keeps the list scrollable at a stable size instead.
             let view_h = ctx.input(|i| i.raw.screen_rect.map_or(568.0, |r| r.height()));
-            // Floor lowered from 240 so short viewports can still fit the
-            // popup without clipping the checkout actions irrecoverably.
             let body_h = (view_h - 48.0).clamp(160.0, 620.0);
             ui.allocate_ui_with_layout(
                 vec2(ui.available_width(), body_h),
@@ -536,27 +467,13 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
 
                                 let selected = idx == state.ui.branches_cursor;
                                 let label = e.label();
-                                // Issue 32 row anatomy: the lock marks protected
-                                // branches (settings patterns), the stale badge
-                                // shows the tip's age, and the sync markers ride
-                                // the remote rows.
                                 let protected =
                                     sync_service::is_protected(&state.settings, e.branch_name());
-                                // Remote and tag rows are refs that exist by
-                                // definition; a recent/local row exists when its
-                                // branch is still listed locally.
                                 let exists = match e {
                                     PopupEntry::Remote { .. } | PopupEntry::Tag { .. } => true,
                                     _ => locals.iter().any(|b| b.name == e.branch_name()),
                                 };
                                 let actions = row_actions(e, current.as_deref(), protected, exists);
-                                // Hover band for the protected row's quick actions
-                                // (issue 32): the row's full rect from the previous
-                                // frame. Testing the pointer against the rect laid
-                                // out so far would collapse the band the moment the
-                                // pointer travels onto the revealed buttons, so the
-                                // last frame's rect is kept in egui memory — the
-                                // classic two-frame hover toolbar.
                                 let band_id = egui::Id::new(("branch-quick-actions", e.label()));
                                 let hinted = ui
                                     .ctx()
@@ -583,8 +500,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                     if ui.selectable_label(selected, label.clone()).clicked() {
                                         clicked = Some(e.clone());
                                     }
-                                    // Stale badge (issue 32): the branch tip's age
-                                    // in compact units, e.g. "3w".
                                     if let Some(ts) = e.last_touched() {
                                         let age = chrono::Utc::now()
                                             .signed_duration_since(ts)
@@ -596,9 +511,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                                 .color(Palette::INK_3),
                                         );
                                     }
-                                    // Remote rows carry the upstream sync state:
-                                    // `gone` when the tracked upstream was deleted,
-                                    // else `↑a ↓b` when diverged.
                                     if let PopupEntry::Remote {
                                         ahead,
                                         behind,
@@ -614,14 +526,9 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                         }));
                                     }
 
-                                    // Wired row action (ADR-0012).
                                     if widgets::compact_button(ui, "Checkout").clicked() {
                                         clicked = Some(e.clone());
                                     }
-                                    // Issue 32: rename / delete / compare dispatch real flows. Gated
-                                    // actions stay rendered but disabled with the
-                                    // reason on hover, so the mockup's action set
-                                    // is intact and the gate is discoverable.
                                     let rename = widgets::compact_button_enabled(
                                         ui,
                                         "Rename",
@@ -649,14 +556,10 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                     if widgets::compact_button(ui, "Compare…").clicked() {
                                         row_intent = Some(BranchRowAction::Compare(e.clone()));
                                     }
-                                    // New Worktree… stays visibly inert until the
-                                    // worktree-from-popup flow exists (ADR-0012).
                                     ui.scope(|ui| {
                                         ui.disable();
                                         let _ = widgets::compact_button(ui, "New Worktree…");
                                     });
-                                    // Protected branches: pull / merge quick actions appear on hover
-                                    // (issue 32, screen 13).
                                     if protected && hinted {
                                         if widgets::compact_button(ui, "Pull").clicked() {
                                             row_intent = Some(BranchRowAction::Pull(
@@ -670,9 +573,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                         }
                                     }
                                 });
-                                // Remember this frame's full row rect as the next
-                                // frame's hover band (includes the revealed
-                                // quick actions once they appear).
                                 let band = row.response.rect;
                                 ui.ctx().memory_mut(|m| m.data.insert_temp(band_id, band));
                             }
@@ -692,7 +592,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 },
             );
 
-            // Multi-root sync notice (§8.5 bottom info strip).
             let roots = state.multi.roots.len();
             if roots > 1 && state.settings.synchronous_branches {
                 ui.separator();
@@ -702,10 +601,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 });
             }
 
-            // Footer (issue 32, screen 13): "+ New branch" opens the create
-            // flow, "Manage remotes…" stays visibly inert until ticket 33's
-            // surface exists (ADR-0012), and "Compare…" compares the
-            // highlighted row against the current branch.
             ui.separator();
             ui.horizontal(|ui| {
                 if widgets::compact_button(ui, "+ New branch").clicked() {
@@ -714,8 +609,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.scope(|ui| {
                     if widgets::compact_button(ui, "Manage remotes…").clicked() {
-                        // Seed the apply scope with the focused root and
-                        // reset the manager's transient editing state.
                         state.ui.dlg.remotes_row_action = None;
                         state.ui.dlg.remotes_apply_results = None;
                         state.ui.dlg.remotes_apply_scope.clear();
@@ -734,13 +627,11 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             });
         });
 
-    // Propagate an X-button close unless an internal action already closed us.
     if state.ui.branches_popup {
         state.ui.branches_popup = open;
     }
 }
 
-/// Dispatch one row's checkout through the engine seam and close the popup.
 fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
     let affected = Affected::Root(id.clone());
     match e {
@@ -762,26 +653,15 @@ fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
     state.ui.branches_popup = false;
 }
 
-/// A non-checkout row action, deferred to after the row loop (issue 32).
-///
-/// **The name is the point.** `log_window::RowIntent` is a three-arm *click*
-/// intent with no payload; this is a five-arm *action* intent carrying a
-/// `PopupEntry` or a branch name. A name-keyed sweep must not merge them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum BranchRowAction {
     Rename(PopupEntry),
     Delete(PopupEntry),
     Compare(PopupEntry),
-    /// Protected-row hover quick-action: check the branch out and pull it.
     Pull(String),
-    /// Protected-row hover quick-action: merge the branch into the current
-    /// one via the existing merge dialog.
     Merge(String),
 }
 
-/// Dispatch one deferred row action (issue 32). Delete routes through the
-/// existing rich confirmation (issue 02); rename and compare open their
-/// dialogs via the AppState seams.
 fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowAction) {
     match intent {
         BranchRowAction::Rename(e) => state.open_rename_branch(id, e.branch_name()),
@@ -793,9 +673,6 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
                 });
             }
             PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
-                // The pre-flight disclosure is captured here too: whichever
-                // surface asked — the branch list or this popup — the
-                // confirmation links to the same list of what is discarded.
                 state.ui.branches_delete_unmerged = state.unmerged_commits(id, name.as_str());
                 state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch { name: name.clone() });
             }
@@ -803,10 +680,6 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
         },
         BranchRowAction::Compare(e) => state.open_compare(id, e.branch_name()),
         BranchRowAction::Pull(name) => {
-            // The quick-action checks the row's branch out and pulls it, so the
-            // row's own name is the branch a rebasing update would rewrite —
-            // which is what lets the guarded seam refuse a protected one before
-            // the checkout runs.
             state.dispatch_pull(format!("Pull {name}"), id.clone(), Some(name));
             state.ui.branches_popup = false;
         }

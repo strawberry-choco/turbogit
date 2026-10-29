@@ -1,19 +1,3 @@
-//! Issue 28 — merge dialog upgrade (screen 14).
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories, asserting painted labels, public `AppState`
-//! transitions, and the exact `MergeOpts` handed to the executor boundary
-//! (via [`RecordingExecutor`]).
-//!
-//! Covered behaviors:
-//! - STRATEGY segmented control (No-commit / Commit / Squash / Fast-forward);
-//!   clicking a segment selects it
-//! - the strategy + option rows map onto the dispatched `MergeOpts`
-//! - the preview box shows the merge-commit count and file/insertion/deletion
-//!   totals computed from the real repository before merging
-//! - the cascade banner appears only when sibling repos share the branch
-//!   being merged into; "View plan →" opens the cascade preflight for them
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -32,12 +16,6 @@ use turbogit_domain::model::{MergeOpts, MergeStrategy, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::bulk_ops::BulkOp;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit.
-///
-/// Built on `git_seed::commit`, which overwrites where this appended: the accumulated
-/// body is read back and rewritten whole, as that helper's own doc prescribes.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
     let mut body = std::fs::read_to_string(&file).unwrap_or_default();
@@ -46,8 +24,6 @@ fn commit(dir: &Path, name: &str, text: &str) {
     git_seed_commit(dir, name, &body, text);
 }
 
-/// Kept local rather than `git_seed::repo_with_one_commit`: the divergence
-/// `merge_repo` builds names these commits, so their subject and path are fixed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -58,9 +34,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// One repo on `main` that diverged from a local `feature` branch: feature
-/// carries two commits (a.txt +1 line; b.txt rewritten +1/−1) and main moved
-/// on with its own commit (c.txt), so the merge is a true merge.
 fn merge_repo(parent: &Path, name: &str) -> PathBuf {
     let repo = temp_repo(parent, name);
     commit(&repo, "a.txt", "a1");
@@ -75,7 +48,6 @@ fn merge_repo(parent: &Path, name: &str) -> PathBuf {
     repo
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -95,14 +67,12 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Open the Merge dialog on the given root.
 fn open_merge(h: &mut Harness<'_, AppState>, root: &Path) {
     h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
     h.state_mut().ui.dialog = Some(Dialog::Merge);
     h.run();
 }
 
-/// Pick `branch` as the source branch through the picker (Change… → click).
 fn pick_source_branch(h: &mut Harness<'_, AppState>, branch: &str) {
     dialog_node(h, "Change…").click();
     h.run();
@@ -110,9 +80,6 @@ fn pick_source_branch(h: &mut Harness<'_, AppState>, branch: &str) {
     h.run();
 }
 
-/// The node labeled `label` inside the merge dialog. The shell paints other
-/// nodes with the same labels (the Commit tab, sidebar branch names, menu
-/// items), so disambiguate by proximity to the in-dialog "Change…" anchor.
 fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     let anchor = h
         .query_all_by_label("Change…")
@@ -129,14 +96,11 @@ fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     best.expect("no in-dialog node with the label").1
 }
 
-/// The dialog's footer Merge button.
 fn dialog_merge_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
     h.query_all_by_label("Merge")
         .next()
         .expect("the dialog Merge button")
 }
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn dialog_paints_picker_strategy_and_options() {
@@ -172,8 +136,6 @@ fn picking_a_source_branch_shows_the_preview_totals() {
 
     pick_source_branch(&mut h, "feature");
 
-    // feature carries +1 (a.txt) and +2/−1 (b.txt): a true merge creates
-    // 1 merge commit bringing in 2 files, 3 insertions, 1 deletion.
     assert_painted(&h, "Will create 1 merge commit");
     assert_painted(&h, "2 files changed · 3 insertions · 1 deletion");
 }
@@ -186,15 +148,12 @@ fn strategy_clicks_select_the_segment() {
     let mut h = harness(state);
     open_merge(&mut h, &repo);
 
-    // No-commit is the default selection.
     assert_eq!(h.state().ui.dlg.merge_strategy, MergeStrategy::NoCommit);
     for (label, want) in [
         ("Commit", MergeStrategy::Commit),
         ("Squash", MergeStrategy::Squash),
         ("Fast-forward", MergeStrategy::FastForward),
     ] {
-        // Click inside the dialog only: pick the matching segment whose
-        // rect is in the modal (the centered dialog, below the tab strip).
         dialog_node(&h, label).click();
         h.run();
         assert_eq!(h.state().ui.dlg.merge_strategy, want, "clicked {label}");
@@ -251,7 +210,7 @@ fn fast_forward_strategy_drops_a_leftover_no_ff_option() {
     let repo = merge_repo(tmp.path(), "repo");
     let (mut state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     state.ui.dlg.merge_strategy = MergeStrategy::FastForward;
-    state.ui.dlg.merge_no_ff = true; // leftover toggle from an earlier pick
+    state.ui.dlg.merge_no_ff = true;
     let mut h = harness(state);
     open_merge(&mut h, &repo);
 
@@ -291,7 +250,6 @@ fn cascade_banner_names_the_sibling_repos_and_view_plan_opens_the_preflight() {
     dialog_node(&h, "View plan →").click();
     h.run();
 
-    // The hand-off opens the cascade preflight for the sibling repos.
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Merge));
     assert_eq!(
         h.state()
@@ -302,7 +260,6 @@ fn cascade_banner_names_the_sibling_repos_and_view_plan_opens_the_preflight() {
             .collect::<Vec<_>>(),
         vec![RootId(sibling.clone().into())],
     );
-    // The preflight matrix shows the sibling and what it will do.
     assert_painted(&h, "sibling");
     assert_painted(&h, "Merge feature");
 }

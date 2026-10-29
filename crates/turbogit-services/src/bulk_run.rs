@@ -1,12 +1,3 @@
-//! Cascade run engine (issue 10, screen 03): a bounded worker pool executing
-//! one step per root with live per-row state, replacing the strictly serial
-//! bulk fan-out for monitored runs.
-//!
-//! The engine is pure orchestration: the git-specific step is injected as a
-//! closure, so the pool bound, the event stream, and the stop semantics are
-//! testable without git. Row-state *rendering* stays in the UI; the app
-//! layer turns [`RunEvent`]s into monitor rows.
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,8 +7,6 @@ use std::time::{Duration, Instant};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::RootId;
 
-/// Default worker-slot count for a cascade run (the "2/4" of the queued
-/// row's "waiting for worker slot 2/4").
 pub const DEFAULT_WORKERS: usize = 4;
 
 /// Shared stop flag for one pool pass. `stop` is idempotent and safe to call
@@ -27,84 +16,67 @@ pub const DEFAULT_WORKERS: usize = 4;
 pub struct RunControl(Arc<AtomicBool>);
 
 impl RunControl {
-    /// Halt the pass: queued jobs will not start.
     pub fn stop(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
 
-    /// Has a stop been requested for this pass?
     pub fn stopped(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
 }
 
-/// The final outcome of one root in a pass.
 #[derive(Debug)]
 pub enum RunOutcome {
-    /// The step ran to completion (success or failure).
     Done(TgResult<()>),
-    /// The root was still queued when a stop landed; it never started.
     Stopped,
 }
 
-/// Live transitions of one pass, posted from worker threads.
 #[derive(Debug)]
 pub enum RunEvent {
-    /// A worker took the root's job.
-    Started { root: RootId },
-    /// The step finished, with its wall-clock duration.
+    Started {
+        root: RootId,
+    },
     Finished {
         root: RootId,
         result: TgResult<()>,
         duration: std::time::Duration,
     },
-    /// A queued root was halted by a stop before starting.
-    Stopped { root: RootId },
+    Stopped {
+        root: RootId,
+    },
 }
 
-/// Live state of one monitor row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowState {
-    /// Waiting for a worker slot; `slot` is 1-based ("waiting for worker
-    /// slot 2/4").
-    Queued { slot: usize },
-    /// A worker is executing the step.
+    /// Waiting for a worker slot; `slot` is 1-based.
+    Queued {
+        slot: usize,
+    },
     Running,
-    /// The step succeeded.
     Done,
-    /// Skipped before the run (preflight) or stopped while queued; `reason`
-    /// is display-ready.
-    Skipped { reason: String },
+    Skipped {
+        reason: String,
+    },
     /// The step failed. `error` is display-ready, and `protected_branch` says
-    /// whether that error was a protected-branch guard's refusal — decided
-    /// while the step's `TgResult` is still a type, because a row is the point
-    /// the error becomes a string and settlement owes a durable per-root entry
-    /// for refusals it must not re-read as prose.
+    /// whether that error was a protected-branch guard's refusal.
     Failed {
         error: String,
         protected_branch: bool,
     },
 }
 
-/// One row of the live monitor (screen 03).
 #[derive(Clone, Debug)]
 pub struct RunRow {
     pub root: RootId,
     pub name: String,
     pub state: RowState,
-    /// Wall-clock duration of the step, once finished.
     pub duration: Option<std::time::Duration>,
 }
 
-/// The 1-based worker slot the `index`-th queued row lands on, cycling over
-/// `workers` slots ("waiting for worker slot 2/4"). The seeder
-/// [`monitor_rows`] and a retry requeue both number their rows from zero
-/// through here, so the two cannot assign different slots.
 pub fn worker_slot(index: usize, workers: usize) -> usize {
     index % workers.max(1) + 1
 }
 
-/// Footer tallies `(done, running, queued, skipped, failed)`, live.
 pub fn tally(rows: &[RunRow]) -> (usize, usize, usize, usize, usize) {
     let mut t = (0, 0, 0, 0, 0);
     for row in rows {
@@ -119,21 +91,17 @@ pub fn tally(rows: &[RunRow]) -> (usize, usize, usize, usize, usize) {
     t
 }
 
-/// The header's "N of M done" numerator.
 pub fn done_count(rows: &[RunRow]) -> usize {
     tally(rows).0
 }
 
-/// The header's "M": one row per selected repo.
 pub fn total(rows: &[RunRow]) -> usize {
     rows.len()
 }
 
 /// Recompute the elapsed/ETA snapshot from the finished rows: elapsed runs
 /// from `started_at`, ETA is the average finished duration × remaining work /
-/// `workers`. `None` while nothing has finished or nothing remains. The
-/// average divides by `workers.max(1)` as a `u32`, so a zero worker count
-/// still yields a finite ETA.
+/// `workers`. `None` while nothing has finished or nothing remains.
 pub fn update_progress(
     rows: &[RunRow],
     workers: usize,
@@ -151,9 +119,6 @@ pub fn update_progress(
     (elapsed, eta)
 }
 
-/// Seed the monitor rows for a run: one row per fleet entry (will-run roots
-/// and pre-skipped roots interleaved in the caller's order). Queued rows
-/// cycle over `workers` slots; skipped rows carry their reason.
 pub fn monitor_rows(fleet: &[(RootId, String, Option<String>)], workers: usize) -> Vec<RunRow> {
     let workers = workers.max(1);
     let mut slot = 0usize;
@@ -227,7 +192,6 @@ pub fn run_cascade(
         }
     });
 
-    // Reorder into submission order: one entry per requested root.
     let mut collected = results.into_inner().unwrap();
     collected.sort_by_key(|(root, _)| roots.iter().position(|r| r == root).unwrap_or(usize::MAX));
     collected

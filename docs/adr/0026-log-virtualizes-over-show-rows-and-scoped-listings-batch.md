@@ -4,7 +4,7 @@ ADR-0014 settled how a long list stays fast in this codebase: not
 `egui_extras::Table`, but `ScrollArea::show_rows` given the total row count and a
 uniform row pitch, so a frame builds only the rows in its viewport. That ADR is
 about the diff viewer and its display-row model, and **this one extends it
-rather than replacing or contradicting it** — the same mechanism, the same
+rather than replacing or contradicting it**, the same mechanism, the same
 rejection of `Table`, the same uniform-height precondition, now applied to a
 second surface. The diff viewer's display rows, its hunk navigation and its
 cached model are untouched by this decision.
@@ -12,7 +12,7 @@ cached model are untouched by this decision.
 The commit list needed it for a second reason the diff viewer did not have. Its
 rows come from git, and a repository's history does not stop at whatever fits on
 screen: before this, the log asked for a whole listing in one request and a
-scope — one file's history, one ref's history, a pickaxe search — was asked for
+scope, one file's history, one ref's history, a pickaxe search, was asked for
 all of it. So the listing itself is now **batched**. A **loaded window** is the
 prefix of a listing the app currently holds; a **batch** is one fetched slice of
 it, and the unit every log read asks for. A cold read asks for one batch; a
@@ -32,8 +32,8 @@ window holding `c1, c2, c3` asks for `c4` next and is answered with a row from
 the middle of the history. A search batch is therefore asked for from the front
 of the filtered stream, sized to what the window already holds plus one batch,
 and taken from the tail of the answer, while a path or ref batch keeps the
-overlapping position. Everything around the batch — the anchor checksum, the
-short batch that ends a listing, the has-more flag — is the same rule for all
+overlapping position. Everything around the batch, the anchor checksum, the
+short batch that ends a listing, the has-more flag, is the same rule for all
 three. Batching also narrowed a search for the first time: `git log -S` used to
 be asked for uncapped and answered with every match, so leaving a broad search
 one batch deep would have been a silent loss of results rather than a
@@ -41,11 +41,11 @@ deferral.
 
 The batch is not called a page because the glossary reserves that word: **Tab**
 rejects `page` and `view` as its synonyms, and a tab is not a batch. The process
-still reads as paging — a list pages over its rows, a window pages in more
-history — while the unit is a batch.
+still reads as paging, a list pages over its rows, a window pages in more
+history, while the unit is a batch.
 
 Two things about the painted list follow from `show_rows` rather than from
-choice. The **lane** — the graph column a commit's node is drawn in — is assigned
+choice. The **lane**, the graph column a commit's node is drawn in, is assigned
 by a walk over the whole loaded window, before the live filter and before search
 hits are unioned in, and is held with the window rather than rebuilt per frame:
 a walk over the drawn rows would change a commit's colour as it crossed the
@@ -59,34 +59,34 @@ context menu are the three callers, and all three go through that one path.
 ## Considered options
 
 - **`egui_extras::Table` for the commit list**, as the product spec's
-  list-of-tables entry originally named — rejected: ADR-0014 already rejected it
+  list-of-tables entry originally named, rejected: ADR-0014 already rejected it
   for the diff viewer, for the same reasons that hold here. The row paints its
   cells directly, in a graph gutter and a details column that `Table` would
   impose a cell and widget model on. The spec entry was corrected rather than
   the code changed to match it.
-- **Virtualize the painted rows but keep asking git for whole listings** —
+- **Virtualize the painted rows but keep asking git for whole listings**,
   rejected: it fixes the frame cost and leaves the request cost, and a
   repository with a long history for one file would still hand the render thread
   a listing sized by the repository rather than by the screen. Batching is what
   makes the first paint independent of history depth.
-- **Keep the Load-more rule that suppressed the affordance inside a scope** —
+- **Keep the Load-more rule that suppressed the affordance inside a scope**,
   rejected: its premise was that a scope was fetched whole. That premise is gone,
   so the rule went with it rather than being reimplemented per scope.
 - **Leave the search scope out of the pager, as a scope whose batch cannot be
-  positioned** — rejected: this was what the first landing of batching did, and
+  positioned**, rejected: this was what the first landing of batching did, and
   it stopped being acceptable as soon as batching capped a listing that used to
   be uncapped. A search shown one batch deep with no way past it is a worse
   answer than a batch that costs a re-read, and the position rule is per-scope
   data in the plan rather than a property of the engine, so the exception is one
   branch and the pager keeps one rule for everything else.
-- **A position in the engine, or a filtered `skip`** — rejected: `LogOpts::skip`
+- **A position in the engine, or a filtered `skip`**, rejected: `LogOpts::skip`
   is an offset into the traversal and the pickaxe filter is applied after it, so
   no value of it addresses a search window's match stream. A new request option
   would buy the same answer the app gets by asking for a longer prefix and
   taking its tail, while putting a capability in the engine that one scope of one
   surface needs. Path and ref scopes still take the engine's own offset, so no
   executor, adapter or request option changes.
-- **A per-scope in-flight guard keyed by root** — rejected: it would let a slow
+- **A per-scope in-flight guard keyed by root**, rejected: it would let a slow
   scope block a fast one on the same root. The key is the pair, so two scopes of
   one root page at once.
 
@@ -104,7 +104,7 @@ context menu are the three callers, and all three go through that one path.
   returns in the same frame; a cold read that became asynchronous would show an
   empty scope for a frame and break that contract at every call site.
 - **A scope's window is dropped rather than emptied when its batch comes back
-  torn** — the listing moved under the request, so the rows measured against it
+  torn**, the listing moved under the request, so the rows measured against it
   no longer describe anything, and a window that claimed "no more history" over
   an emptied list would be believed by the next read. The restart re-reads the
   same listing from the front.

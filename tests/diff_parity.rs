@@ -1,23 +1,3 @@
-//! Phase L1 parity — in-process `similar` diffs vs the CLI `git diff`.
-//!
-//! Drives real temporary repositories and asserts, per fixture, that the
-//! **Git engine**'s patch value from [`turbogit_services::diff_engine`] equals
-//! the one from the executor. Both producers now answer with the same value
-//! type, so the comparison is structural equality rather than a match of two
-//! renderings of a text format: paths, **Hunk** spans, section headings, body
-//! lines and **Binary change** metadata all have to agree.
-//!
-//! Known cosmetic gap: the in-process answer carries no blob-pair **Index**
-//! header (hashes are not computed in-process). That one header is stripped on
-//! both sides before comparison, and each side is separately asserted to have
-//! taken its own path by whether it states it.
-//!
-//! The 3-way merge is checked against the canonical raw-marker parser:
-//! `similar`'s own marker rendering of a merge, fed through
-//! [`turbogit_services::conflict::parse_conflict_markers`], must produce the
-//! same segment tuples [`turbogit_services::diff_engine::merge_segments`]
-//! builds structurally from merge regions.
-
 use std::path::PathBuf;
 use tempfile::TempDir;
 use test_support::git_seed::git;
@@ -26,8 +6,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::conflict;
 use turbogit_services::diff_engine;
-
-// ---------------------------------------------------------------- helpers --
 
 struct Repo {
     path: PathBuf,
@@ -60,7 +38,6 @@ fn executor() -> CliExecutor {
     }
 }
 
-/// Diff options for one path against HEAD (the viewer's Repo chip).
 fn repo_opts(path: &str) -> DiffOpts {
     DiffOpts {
         left: Some("HEAD".to_owned()),
@@ -69,8 +46,6 @@ fn repo_opts(path: &str) -> DiffOpts {
     }
 }
 
-/// Both answers, equalized for the known cosmetic gap: the in-process patch
-/// states no blob pair.
 fn without_index_pairs(patch: &Patch) -> Patch {
     let mut out = patch.clone();
     for file in &mut out.files {
@@ -88,8 +63,6 @@ fn states_a_blob_pair(patch: &Patch) -> bool {
     })
 }
 
-/// Assert the two producers agree on one fixture, plus the provenance marker:
-/// git's answer states a blob pair, the in-process one cannot.
 #[track_caller]
 fn assert_patch_parity(cli: &Patch, ip: &Patch) {
     assert!(
@@ -139,8 +112,6 @@ fn commit_words(repo: &Repo, content: &str) {
     git(&repo.path, &["commit", "-q", "-m", "words"]);
 }
 
-// ------------------------------------------------------------ diff parity --
-
 #[test]
 fn parity_simple_modify_matches_cli() {
     let repo = temp_repo("parity-simple");
@@ -189,7 +160,6 @@ fn parity_multi_hunk_modify_matches_cli() {
 fn parity_newline_at_eof_changes_match_cli() {
     let repo = temp_repo("parity-eof-lost");
     commit_words(&repo, "end\n");
-    // Losing the final newline: git hints after the + side only.
     std::fs::write(repo.path.join("words.txt"), "end").unwrap();
 
     let ex = executor();
@@ -207,7 +177,6 @@ fn parity_newline_at_eof_changes_match_cli() {
     );
     assert_patch_parity(&cli, &ip);
 
-    // Appending an unterminated line: hint after the appended + line.
     let repo = temp_repo("parity-eof-append");
     commit_words(&repo, BASE);
     let mut worktree = BASE.to_owned();
@@ -240,7 +209,6 @@ fn parity_deleted_file_matches_cli() {
         )),
         "the missing side is named: {ip}"
     );
-    // A failed new-side read cannot prove deletion; the CLI answer is kept whole.
     assert_eq!(ip, cli);
 }
 
@@ -274,8 +242,6 @@ fn parity_no_changes_is_empty_like_git() {
     assert!(ip.is_empty(), "nothing changed: {ip}");
 }
 
-// ------------------------------------------------------- fallback behavior --
-
 #[test]
 fn fallback_whole_tree_target_delegates_to_cli() {
     let repo = temp_repo("fallback-whole-tree");
@@ -304,8 +270,6 @@ fn fallback_whole_tree_target_delegates_to_cli() {
 #[test]
 fn fallback_unreadable_old_side_delegates_to_cli() {
     let repo = temp_repo("fallback-added");
-    // Staged addition: HEAD lacks the path, so rename/new-file metadata is
-    // git's call — the in-process path must defer to the CLI answer.
     std::fs::write(repo.path.join("added.txt"), "fresh\n").unwrap();
     git(&repo.path, &["add", "added.txt"]);
 
@@ -321,10 +285,6 @@ fn fallback_unreadable_old_side_delegates_to_cli() {
     assert!(delegated.files[0].new_file(), "{delegated}");
 }
 
-// ------------------------------------------------------------- 3-way merge --
-
-/// The structured merge segments must equal what the canonical marker parser
-/// extracts from `similar`'s own marker rendering of the same merge.
 fn assert_merge_parity(base: &str, ours: &str, theirs: &str) {
     let rendered = similar::TextMerge::from_lines(base, ours, theirs).to_string();
     let (parser_segs, parser_conflicts) = conflict::parse_conflict_markers(&rendered);
@@ -351,7 +311,6 @@ fn merge_segments_match_marker_parser_on_conflict() {
 
 #[test]
 fn merge_segments_match_marker_parser_on_insertion_conflict() {
-    // Both sides insert different content at the same boundary.
     assert_merge_parity("one\n", "ours\none\n", "theirs\none\n");
 }
 

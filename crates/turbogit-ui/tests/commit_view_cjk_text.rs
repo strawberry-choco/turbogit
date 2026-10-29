@@ -1,18 +1,3 @@
-//! Chinese content must paint real glyphs in the commit view, not egui's
-//! notdef box.
-//!
-//! The report was that a Chinese commit subject showed up as a row of empty
-//! boxes. The strings themselves reach the frame intact — the git read, the
-//! display model and the galley all carry the right characters — so a
-//! painted-text assertion cannot see this defect: `assert_painted` matches the
-//! galley's *string*, and a galley full of boxes carries the string just the
-//! same. What has to be measured is whether the face chain the shell installs
-//! can actually display each character, which is what these two tests do.
-//!
-//! The first pins the font stack itself; the second drives the real commit
-//! view over a seeded repository and checks every CJK-bearing galley in the
-//! frame, in the family that galley was laid out with.
-
 use egui::{FontFamily, FontId};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
@@ -20,16 +5,12 @@ use test_support::harness::{painted_galleys, settle, shell_harness_over};
 use turbogit_app::state::{AppState, Tab};
 use turbogit_ui::theme::font_definitions;
 
-/// The commit subject the defect report named, in the script it named.
 const SUBJECT: &str = "修复提交视图无法显示中文";
 
-/// Characters outside everything the design stack leads with, i.e. the ones a
-/// reader sees as boxes when no fallback face covers them.
 fn uncovered_script(text: &str) -> Vec<char> {
     text.chars().filter(|c| *c > '\u{2e80}').collect()
 }
 
-/// A repository whose root name, commit subject and file name are all Chinese.
 fn repo_with_chinese(parent: &Path) -> PathBuf {
     let path = parent.join("中文仓库");
     std::fs::create_dir_all(&path).unwrap();
@@ -42,7 +23,6 @@ fn repo_with_chinese(parent: &Path) -> PathBuf {
     path
 }
 
-/// Every face chain registered by the design stack.
 fn chains() -> Vec<FontFamily> {
     font_definitions().families.keys().cloned().collect()
 }
@@ -81,7 +61,6 @@ fn the_commit_view_paints_chinese_in_real_glyphs() {
     settle(&mut h);
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
     h.state_mut().ui.selected_commit = Some(head);
-    // The changed-file rows of the selected commit are a worker round-trip.
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();

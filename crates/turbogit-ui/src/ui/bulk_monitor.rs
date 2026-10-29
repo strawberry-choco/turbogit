@@ -1,13 +1,3 @@
-//! Cascade run monitor modal (issue 10, screen 03): the live view of a
-//! fleet run — one row per repo (Done / Skipped / Running with the current
-//! git command / Failed / Queued with its worker slot), per-row durations,
-//! an overall progress header with elapsed time and ETA, live footer
-//! tallies, and the Stop remaining / Retry skipped / Resolve actions.
-//!
-//! The monitor is plain data — `turbogit_app::bulk_run_view::BulkRunView`
-//! advanced by the event pump — rendered here; it never derives run state
-//! from git itself.
-
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::conflicts;
@@ -18,10 +8,6 @@ use turbogit_app::bulk_run::RowState;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, subject_of_message};
 
-/// One row of the running-operation table, where both copies of this literal
-/// said 26.0 (conformance issue 13). Local rather than
-/// [`crate::theme::GROUP_ROW_HEIGHT`], which happens to be 26 too but names the
-/// changes tree's group band, not a monitor row.
 const ROW_H: f32 = 26.0;
 
 #[derive(Clone, Copy)]
@@ -44,14 +30,11 @@ impl Tally {
         }
     }
 
-    /// The progress bar's numerator. **Done plus failed**: a failed repository
-    /// is settled, so an all-failing run is complete.
     fn settled(self) -> usize {
         self.done + self.failed
     }
 }
 
-/// One rendered run row; `resolve` is set for failed rows only.
 struct RunRow {
     name: String,
     state_text: String,
@@ -61,8 +44,6 @@ struct RunRow {
     resolve: Option<RootId>,
 }
 
-/// The run view's rows as a snapshot, so the frame can hand `&mut AppState` to
-/// the footer's verbs.
 fn run_rows(
     rows: &[turbogit_app::bulk_run::RunRow],
     workers: usize,
@@ -106,8 +87,6 @@ fn run_rows(
         .collect()
 }
 
-/// The progress bar both monitors' headers paint. An empty run is **complete**,
-/// not stalled, so the fraction is 1 rather than `0 / 0`.
 fn progress(settled: usize, total: usize) -> ProgressBar {
     let frac = if total == 0 {
         1.0
@@ -119,8 +98,6 @@ fn progress(settled: usize, total: usize) -> ProgressBar {
         .text(format!("{settled} of {total} done"))
 }
 
-/// The header's right-aligned elapsed / ETA label. The em dash is the **unknown
-/// ETA**, not zero.
 fn elapsed_eta(elapsed_secs: f32, eta_secs: Option<f32>) -> String {
     format!(
         "elapsed {} · ETA {}",
@@ -131,7 +108,6 @@ fn elapsed_eta(elapsed_secs: f32, eta_secs: Option<f32>) -> String {
     )
 }
 
-/// The run table's four columns, the same for the bulk run and the cherry run.
 const RUN_COLUMNS: [PaneColumn; 4] = [
     PaneColumn::start("REPO", 0.0),
     PaneColumn::start("STATE", 130.0),
@@ -139,17 +115,8 @@ const RUN_COLUMNS: [PaneColumn; 4] = [
     PaneColumn::start("DURATION", 700.0),
 ];
 
-/// The header band the run table paints.
 const HEADER_H: f32 = 22.0;
 
-/// The run table: the `REPO / STATE / DETAIL / DURATION` header row, then one
-/// row per repository, `Resolve <name>` on the failed ones.
-///
-/// The row band's width is the row's own business: a row carrying a Resolve
-/// button claims `width - 120.0` of cells so the button flows after them inside
-/// the row's horizontal, whose child rect is `interact_size.y` tall rather than
-/// [`ROW_H`] — which is why the button sits at the band's top rather than
-/// centred in it.
 fn run_table(
     ui: &mut Ui,
     rows: &[RunRow],
@@ -191,7 +158,6 @@ fn run_table(
     );
 }
 
-/// The live tally sentence both monitors' footers print.
 fn run_tallies(ui: &mut Ui, tally: Tally) {
     ui.label(format!(
         "{} done · {} running · {} queued · {} skipped · {} failed",
@@ -199,15 +165,12 @@ fn run_tallies(ui: &mut Ui, tally: Tally) {
     ));
 }
 
-/// Render the monitor while a cascade run is live or just finished
-/// (`ui.bulk_run` is `Some`).
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     if state.ui.bulk_run.is_none() {
         return;
     }
     let title = format!("{} — live", state.ui.bulk_run.as_ref().unwrap().op.label());
     let ctx = ui.ctx().clone();
-    // Keep the elapsed ticker and progress bar moving between events.
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
     let mut open = true;
     egui::Window::new(title)
@@ -231,8 +194,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     let elapsed_secs = view.started_at.elapsed().as_secs_f32();
     let eta_secs = view.eta.map(|d| d.as_secs_f32());
 
-    // Keep the custom-command label visible even when every Running event is
-    // drained before the first frame.
     if view.op == BulkOp::Custom {
         ui.label(
             egui::RichText::new(&running_command)
@@ -242,7 +203,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(4.0);
     }
 
-    // Header: overall progress bar + elapsed/ETA.
     ui.horizontal(|ui| {
         ui.add(progress(tally.settled(), total));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -251,21 +211,17 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Table: REPO / STATE / DETAIL / DURATION (+ Resolve on failed rows).
     run_table(ui, &rows, state, &mut resolve_root);
 
     ui.add_space(8.0);
     ui.separator();
 
-    // Footer: live tallies + the run actions.
     ui.horizontal(|ui| {
         run_tallies(ui, tally);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Close").clicked() {
                 state.ui.bulk_run = None;
             }
-            // **The one action the cherry footer does not have.** A skipped
-            // repository is retryable here because a cascade is idempotent.
             let retry = ui.add_enabled(
                 tally.skipped > 0,
                 egui::Button::new(format!("Retry {} skipped", tally.skipped)),
@@ -281,9 +237,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Resolve deep link (issue 10): jump to the failed row's repo, and when
-/// its snapshot shows unresolved conflicts, straight into the conflict
-/// resolver.
 fn resolve_root(state: &mut AppState, root: RootId) {
     let conflict = state
         .multi
@@ -302,8 +255,6 @@ fn resolve_root(state: &mut AppState, root: RootId) {
     }
 }
 
-/// The row's one-line failure text: the first line of the error, never a whole
-/// git transcript.
 fn first_line(s: &str) -> String {
     subject_of_message(s).to_string()
 }
@@ -325,19 +276,11 @@ fn fmt_secs(s: f32) -> String {
     }
 }
 
-// ------------------------------------------------ cherry-pick across ----
-
-/// Cherry-pick-across run monitor (issue 16): the same row model and pool
-/// events as the bulk run above, one row per target repo with its commits
-/// applied in order. No Retry pass — a conflicted repo is held for manual
-/// resolution and re-run through the dialog. Failed rows deep-link into the
-/// held repo's conflict, never auto-resolving anything.
 pub fn show_cherry(ui: &mut Ui, state: &mut AppState) {
     if state.ui.cherry_run.is_none() {
         return;
     }
     let ctx = ui.ctx().clone();
-    // Keep the elapsed ticker and progress bar moving between events.
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
     let mut open = true;
     egui::Window::new("Cherry-pick across — live")
@@ -367,7 +310,6 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
         "continue past conflicts"
     };
 
-    // Header: the `{commits} · {policy}` line is the cherry run's own identity.
     ui.horizontal(|ui| {
         ui.strong(format!(
             "{} · {policy}",
@@ -382,13 +324,11 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Table: REPO / STATE / DETAIL / DURATION (+ Resolve on failed rows).
     run_table(ui, &rows, state, &mut resolve_cherry_root);
 
     ui.add_space(8.0);
     ui.separator();
 
-    // Footer: live tallies + the run actions (Stop remaining / Close).
     ui.horizontal(|ui| {
         run_tallies(ui, tally);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -405,9 +345,6 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Resolve deep link for the cherry run monitor (issue 16): jump to the
-/// held repo, and when its snapshot shows unresolved conflicts, straight
-/// into the conflict resolver. Nothing is auto-resolved here.
 fn resolve_cherry_root(state: &mut AppState, root: RootId) {
     let conflict = state
         .multi

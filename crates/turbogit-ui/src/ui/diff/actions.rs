@@ -1,6 +1,3 @@
-//! Diff actions and toolbar widgets: hunk/line staging dispatch,
-//! the mode and hunk-nav toolbar, and the gutter stage buttons (spec R2).
-
 use super::model::{DisplayRow, RowKind, mono_font};
 use crate::theme::Palette;
 use crate::ui::components;
@@ -15,18 +12,8 @@ use turbogit_app::keyed_read::DiffTarget;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, ChangeStatus};
 
-/// The nav buttons' square, shared with [`hunk_nav_width`] so the width the
-/// toolbar reserves for the nav is the width it paints.
 const NAV_BUTTON_SIZE: f32 = 24.0;
 
-// --- partial staging (spec R2) ----------------------------------------------
-
-/// Hunk count of the diff the Commit window's preview would render right
-/// now — 0 while nothing is selected, still loading, errored, or the text
-/// parses to no hunks (binary). Peeks the diff read, which answers a value
-/// that already carries its display model (ADR-0014, ADR-0021), so F7/Shift+F7
-/// (spec R7) can consult it per keypress without rebuilding any row map — and
-/// without starting a fetch the preview never asked for.
 pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
     let Some(change) = state.ui.preview_change.clone() else {
         return 0;
@@ -36,10 +23,6 @@ pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
         .map_or(0, |diff| diff.model.hunk_count())
 }
 
-/// The commit window's preview target for `change`: the repository is the one the
-/// change names, because the changes list spans every registered root and a
-/// repo-relative path cannot say which one to read. The viewer's policy pair
-/// decides its model, and a peek of it spends no git work (ADR-0021).
 fn preview_target(state: &AppState, change: &ChangeRef) -> DiffTarget {
     DiffTarget::working_tree(
         change.root.as_path().to_path_buf(),
@@ -48,16 +31,6 @@ fn preview_target(state: &AppState, change: &ChangeRef) -> DiffTarget {
     )
 }
 
-/// The line the caret sits on, with the change that owns it — the target of `F4`
-/// (Jump to Source), which has to land in the same place the reader was looking,
-/// in the same repository.
-///
-/// The caret is **derived**, not stored: it is the first changed row of the
-/// current hunk on the active side, which is the position the hunk navigator just
-/// aimed at and the row the pane's own caret bar is painted over. A second cursor
-/// of its own would be a second canonical selection, which CONTEXT.md "Current
-/// hunk" exists to forbid. A side with no numbered row there — a pure insertion
-/// read as the `Before` pane — has no line to jump to, and says so.
 pub(crate) fn preview_caret_line(state: &AppState) -> Option<(ChangeRef, usize)> {
     let change = state.ui.preview_change.clone()?;
     let diff = state.peek(preview_target(state, &change))?;
@@ -76,17 +49,6 @@ pub(crate) fn preview_caret_line(state: &AppState) -> Option<(ChangeRef, usize)>
         .map(|line| (change, line))
 }
 
-/// The diff viewer's settings menu (`⌃⇧D`): the two five-value policies, in the
-/// reference's order — what counts as a difference first, then how finely a
-/// difference is highlighted.
-///
-/// Both groups are in one menu rather than two controls because they are decided
-/// together: a reviewer and the code they are reviewing agree on what changed only
-/// once both questions have an answer.
-///
-/// Answers whether the frame changed anything, which is when the choice is
-/// written down: a policy outlives the session it was picked in, because two
-/// people reading one commit have to be reading it the same way tomorrow.
 pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     use turbogit_domain::model::{DiffHighlighting, DiffWhitespace};
     let mut changed = false;
@@ -125,15 +87,6 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     changed
 }
 
-// --- toolbar widgets ---------------------------------------------------------
-
-/// The toolbar's **Diff options** trigger and its popup menu (`⌃⇧D`): the
-/// viewer's two five-value policies, one menu because the two questions are
-/// decided together.
-///
-/// `⌃⇧D` opens this from the keyboard by arming [`AppState`]'s
-/// `diff_options_open` flag, and the popup's own close — a click outside, or
-/// `Escape` — takes the arm back, so the keyboard route toggles cleanly.
 pub(super) fn diff_options_button(ui: &mut Ui, state: &mut AppState) {
     let trigger = ui.button(
         RichText::new("Diff options").font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
@@ -148,14 +101,10 @@ pub(super) fn diff_options_button(ui: &mut Ui, state: &mut AppState) {
         Some(shown) => policies_changed = shown.inner,
     }
     if policies_changed {
-        // Policies are presentation the reader agreed on, so they survive the
-        // session.
         state.save_durable_ui();
     }
 }
 
-/// Hunk navigation ‹ n/N › (spec §8.4). Stepping clamps to [0, total):
-/// Previous never goes above the first hunk, Next never past the last.
 pub(super) fn hunk_nav(ui: &mut Ui, state: &mut AppState, total_hunks: usize) {
     let enabled = total_hunks > 0;
     let prev = nav_button(ui, Icon::CHEVRON_LEFT, "Previous hunk", enabled);
@@ -173,9 +122,6 @@ pub(super) fn hunk_nav(ui: &mut Ui, state: &mut AppState, total_hunks: usize) {
     }
 }
 
-/// The width [`hunk_nav`] paints, in the layout it paints it with: the
-/// toolbar right-aligns the nav by sizing ONE spacer in front of it, so the
-/// estimate has to be this layout, not a guess that drifts from it.
 pub(super) fn hunk_nav_width(ui: &Ui, current: usize, total_hunks: usize) -> f32 {
     let gap = ui.spacing().item_spacing.x;
     let label_w = if total_hunks > 0 {
@@ -191,10 +137,6 @@ pub(super) fn hunk_nav_width(ui: &Ui, current: usize, total_hunks: usize) -> f32
     NAV_BUTTON_SIZE + gap + label_w + NAV_BUTTON_SIZE
 }
 
-/// Square ghost icon button with an explicit accessibility label.
-///
-/// The nav scale: a standard 24 px square the host allocates itself, delegating
-/// the ghost ladder to [`widgets::ghost_icon_button`].
 fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     const ICON_SIZE: f32 = 14.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(NAV_BUTTON_SIZE), Sense::hover());
@@ -205,12 +147,6 @@ fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     })
 }
 
-/// Compact ghost action button painted inside an already-allocated row rect
-/// (gutter scale, 18px): transparent at rest, SURFACE_2 hover fill with
-/// INK_2→INK glyph ink, SURFACE_3 while pressed — the same ladder
-/// [`nav_button`] uses, shrunk onto the hunk band. A real interactable widget
-/// carrying labeled Button accessibility info, so kittest and screen readers
-/// can find it.
 fn gutter_button(
     ui: &mut Ui,
     rect: Rect,
@@ -224,8 +160,6 @@ fn gutter_button(
         let ink = widgets::ButtonVariant::Ghost.text(state);
         widgets::paint_centered_text(ui.painter(), rect, glyph, mono_font(), ink);
     });
-    // The tooltip (and the reason a disabled control is inert) is the host's
-    // wiring, not the ladder's: the vocabulary never decides wording.
     if enabled {
         response.on_hover_text(tooltip)
     } else {
@@ -233,11 +167,6 @@ fn gutter_button(
     }
 }
 
-/// Stage/unstage gutter pair on a hunk-header band (spec R2): two compact
-/// buttons at the band's left edge — "+" stages that whole hunk forward,
-/// "−" reverse-applies it out of the index (1-based numbering in labels).
-/// Conflicted files keep the pair visible but inert; conflicts resolve
-/// through the conflict modal.
 pub(super) fn hunk_gutter_actions(
     ui: &mut Ui,
     state: &mut AppState,
@@ -282,10 +211,6 @@ pub(super) fn hunk_gutter_actions(
         enabled,
     );
 
-    // The gutter pair means exactly one thing per button: this hunk, whole. In a
-    // combined view a hunk can hold both staged and unstaged rows, so the button
-    // names the direction and `Whole` resolves which appliable section's hunks
-    // that direction reaches.
     if stage.clicked()
         && let Some(change) = change.clone()
     {
@@ -306,8 +231,6 @@ pub(super) fn hunk_gutter_actions(
     }
 }
 
-/// Hunk-header right side (issue 20, screen 06): the changed-line count, or
-/// "N hidden" while the hunk is collapsed, plus the collapse toggle.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hunk_header_extras(
     ui: &mut Ui,
@@ -363,12 +286,6 @@ pub(super) fn hunk_header_extras(
     );
 
     let base_id = ui.id().with(("diff-gutter", paint));
-    // NOT a `widgets::ghost_icon_button` host, deliberately. This toggle has no
-    // `enabled` axis (it is never inert) and its glyph is a constant INK_2 with
-    // no hover-ink step, so folding it in would need either a pixel change or a
-    // configuration flag on the ladder — the configurable-universal-widget shape
-    // the role contract forbids. Revisit only if a shared "constant-ink toggle"
-    // role earns its own vocabulary entry.
     let response = ui.interact(btn_rect, base_id.with(("collapse", hunk)), Sense::click());
     let fill = if response.is_pointer_button_down_on() {
         Palette::SURFACE_3
@@ -398,11 +315,11 @@ pub(super) fn hunk_header_extras(
 }
 
 /// Aim the current hunk (CONTEXT.md "Current hunk") at the row under the
-/// pointer — but only when the pointer genuinely rests on the rendered diff
+/// pointer, but only when the pointer genuinely rests on the rendered diff
 /// rows AND moved this frame. A stationary pointer must not fight keyboard
 /// or button navigation that just scrolled a different hunk underneath it
-/// (spec R7: one canonical selection). Elsewhere — other panes, floating
-/// popups, headless state injection — the previous value stays authoritative,
+/// (spec R7: one canonical selection). Elsewhere, other panes, floating
+/// popups, headless state injection, the previous value stays authoritative,
 /// so navigation and the palette verbs operate on the hunk last aimed at.
 pub(super) fn commit_current_hunk(
     state: &mut AppState,

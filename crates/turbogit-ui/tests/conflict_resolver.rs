@@ -1,31 +1,3 @@
-//! Issue #22 — Editable conflict resolver (screen 07) tests.
-//!
-//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] against a
-//! temporary repository seeded with a REAL merge conflict, asserting only on
-//! public surfaces:
-//!
-//! - **Painted output** — three panes, header actions, file list groups,
-//!   per-conflict action labels, "Edit manually", "Auto-advance" toggle,
-//!   "Apply to all N remaining".
-//! - **State transitions** — public `AppState.ui.conflict_*` fields and the
-//!   on-disk file after Apply.
-//!
-//! Covered behavior (matches screen 07 + issue acceptance criteria):
-//! - the redesigned resolver is a dedicated surface (separate from the
-//!   existing inline 3-way merge editor), reachable when any conflict exists
-//! - three EQUAL panes Local | Result | Incoming with discrete conflict
-//!   blocks, free-text editing of the Result pane replaces the composed text
-//! - per-conflict actions: Take ours / Take theirs / Take both (theirs first)
-//! - per-conflict Undo restores the conflict to unresolved
-//! - Prev/Next navigate across the file's conflicts, with Auto-advance
-//!   moving focus after each resolution
-//! - "Apply to all N remaining" applies the current choice to every
-//!   still-unresolved conflict in the file
-//! - the left list splits auto-merged (resolved by git without interaction)
-//!   from conflicted files
-//! - header Abort merge restores pre-merge state; Continue merge completes
-//!   the merge once every conflicted file is resolved
-
 use std::path::{Path, PathBuf};
 use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
@@ -41,21 +13,12 @@ use test_support::git_seed::git;
 use test_support::srcscan;
 use test_support::wait_until;
 use turbogit_ui::theme::Palette;
-// ---------------------------------------------------------------- helpers --
 
-/// The resolver module's own source, read at compile time.
 const RESOLVER_SRC: &str = include_str!("../src/ui/conflict_resolver.rs");
 
-/// Composed text for resolutions [ours, theirs] on the seeded two-conflict
-/// file. Spelled out here, in the resolver's own suite, because this is where
-/// the cross-surface comparison lives: the same two choices must land the
-/// same bytes whichever surface took them.
 const PARITY_COMPOSED: &str =
     "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n";
 
-/// Run `git` WITHOUT asserting success, and deliberately NOT
-/// `test_support::git_seed::git`: the seeds below end in a `git merge` expected
-/// to exit non-zero, and that refusal is what leaves the conflict state.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -67,10 +30,6 @@ struct Repo {
     path: PathBuf,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly.
-/// Local builder, not a `git_seed` recipe: `init -q` with **no `-b main`**, so
-/// the default branch is the machine's, and the base commit is `base.txt`.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -126,7 +85,6 @@ fn seed_two_conflicts(repo: &Path, branch: &str) {
 /// is conflicted. Both files diverge on both branches but only `auto.txt`
 /// has IDENTICAL changes on both sides so git resolves it itself.
 fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
-    // base: auto.txt = "shared-0\n", conf.txt = ten lines
     std::fs::write(repo.join("auto.txt"), "shared-0\n").unwrap();
     std::fs::write(
         repo.join("conf.txt"),
@@ -136,7 +94,6 @@ fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
     git(repo, &["add", "."]);
     git(repo, &["commit", "-q", "-m", "base"]);
 
-    // side: auto.txt to "shared-1\n", conf.txt to SIDE-*
     git(repo, &["checkout", "-q", "-b", "side"]);
     std::fs::write(repo.join("auto.txt"), "shared-1\n").unwrap();
     std::fs::write(
@@ -148,7 +105,6 @@ fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
     git(repo, &["commit", "-q", "-m", "side"]);
     git(repo, &["checkout", "-q", branch]);
 
-    // main: auto.txt to "shared-1\n" (identical to side), conf.txt to MAIN-*
     std::fs::write(repo.join("auto.txt"), "shared-1\n").unwrap();
     std::fs::write(
         repo.join("conf.txt"),
@@ -160,11 +116,6 @@ fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
     git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected: auto clean, conf conflict
 }
 
-/// Seed a merge with TWO different file-level clash kinds: `conf.txt` is
-/// BOTH MODIFIED (UU: both branches rewrote it) and `victim.txt` is DELETED
-/// BY THEM (UD: ours rewrote it, theirs deleted it — a modify/delete clash).
-/// The resolver's file list must name each kind on its row so the merge can
-/// be triaged by reading the list.
 fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
     std::fs::write(
         repo.join("conf.txt"),
@@ -180,7 +131,7 @@ fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
         "SIDE-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n",
     )
     .unwrap();
-    git(repo, &["rm", "-q", "victim.txt"]); // theirs deletes
+    git(repo, &["rm", "-q", "victim.txt"]);
     git(repo, &["add", "."]);
     git(repo, &["commit", "-q", "-m", "side commit"]);
     git(repo, &["checkout", "-q", branch]);
@@ -189,7 +140,7 @@ fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
         "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nMAIN-nine\nten\n",
     )
     .unwrap();
-    // Ours REWRITES victim.txt — an untouched file's deletion merges cleanly
+    // Ours REWRITES victim.txt, an untouched file's deletion merges cleanly
     // and no UD row would exist to name.
     std::fs::write(repo.join("victim.txt"), "rewritten by ours\n").unwrap();
     git(repo, &["add", "."]);
@@ -197,7 +148,6 @@ fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
     git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected: UU + UD
 }
 
-/// Headless harness over the given repository roots.
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
         .first()
@@ -207,18 +157,9 @@ fn app_state(roots: &[PathBuf]) -> AppState {
     AppState::for_roots(&dir, roots)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// `4096` is required, not tuned: this suite calls `Harness::run()` eighteen
-/// times and `run()` is the path that enforces the step budget, which kittest
-/// defaults to 4 — the styled constructor takes no budget. Unstyled also means
-/// no `configure_style`/`install_fonts`, and the pane widths and marker tints
-/// here are measured against egui's default face.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 4096)
 }
-
-// --------------------------------------------- tint + geometry mirror fns --
 
 fn tint_over_bg(accent: Color32, t: f32) -> Color32 {
     let bg = Palette::BG;
@@ -241,11 +182,6 @@ fn theirs_bg() -> Color32 {
 fn marker_bg() -> Color32 {
     tint_over_bg(Palette::STATE_WARNING, 0.15)
 }
-/// Stroked rectangles the last frame painted, as `(rect, stroke colour)`.
-///
-/// Deliberately NOT `test_support::harness::stroked_rects`, a *different* query:
-/// it returns a three-tuple carrying the width and filters on `width > 0.0`, so
-/// a zero-width stroke passes here and is excluded there.
 fn stroked_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
     harness
         .output()
@@ -258,8 +194,6 @@ fn stroked_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
         .collect()
 }
 
-/// Paint-time origin of the first text galley whose content equals `text`
-/// modulo trailing newlines.
 fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
     harness
         .output()
@@ -271,13 +205,6 @@ fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
         })
 }
 
-/// The pane header's own hairline across `label`'s column: the shared pane
-/// header's one `RULE_STRUCTURAL` rule, the nearest one below the label.
-///
-/// The header used to paint a `SURFACE`-filled box around its label; it no
-/// longer does, because a pane header is a band and a hairline and a stroke
-/// would mean the header floats. The assertion downstream is unchanged in
-/// meaning: the three panes are the same width.
 fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let pos = galley_origin(harness, label)
         .unwrap_or_else(|| panic!("{label} header label was not painted"));
@@ -298,13 +225,6 @@ fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
         })
 }
 
-/// Open the redesigned conflict resolver for the seeded conflicted file
-/// via the Commit tool window's new "Resolve…" entry point.
-///
-/// The Commit tab's conflict section hosts one `Resolve…` PER conflicted
-/// file, so a two-kind seed makes the label ambiguous; the FIRST entry opens
-/// the resolver on the first conflicted file, which is every suite here
-/// wants.
 fn open_resolver(h: &mut Harness<'_, AppState>) {
     h.get_all_by_role(Role::Button)
         .find(|n| n.accesskit_node().label().is_some_and(|l| l == "Resolve…"))
@@ -313,11 +233,6 @@ fn open_resolver(h: &mut Harness<'_, AppState>) {
     h.run();
 }
 
-// ------------------------------------------------------------------ tests --
-
-/// RED: The redesigned resolver surface is reachable while any conflict
-/// exists. It must render the three pane headers AND the new header
-/// actions (Abort merge / Continue merge / Auto-advance / Apply to all).
 #[test]
 fn redesigned_resolver_renders_three_panes_and_header_actions() {
     let parent = tempfile::tempdir().unwrap();
@@ -328,27 +243,21 @@ fn redesigned_resolver_renders_three_panes_and_header_actions() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Three pane headers paint.
     assert_painted(&h, "Local (Yours)");
     assert_painted(&h, "Result");
     assert_painted(&h, "Incoming (Theirs)");
 
-    // Header actions visible while a merge is in progress.
     assert_painted(&h, "Abort merge");
     assert_painted(&h, "Continue merge");
 
-    // Per-conflict and global action labels visible.
     assert_painted(&h, "Take ours");
     assert_painted(&h, "Take theirs");
-    assert_painted(&h, "Take both"); // theirs first per spec
+    assert_painted(&h, "Take both");
     assert_painted(&h, "Edit manually");
     assert_painted(&h, "Apply to all");
     assert_painted(&h, "Auto-advance to next conflict");
 }
 
-/// The active Result cell is a real multiline TextEdit exposed through
-/// AccessKit; typing through that widget must reach the resolver's public
-/// editing state.
 #[test]
 fn result_pane_exposes_multiline_editor_and_accepts_text_input() {
     let parent = tempfile::tempdir().unwrap();
@@ -385,9 +294,6 @@ fn result_pane_exposes_multiline_editor_and_accepts_text_input() {
     );
 }
 
-/// RED: "Take both · theirs first" resolves a conflict by keeping both
-/// sides with THEIRS before OURS (the spec order; existing "Ignore"
-/// choice is ours before theirs).
 #[test]
 fn take_both_theirs_first_keeps_both_with_theirs_before_ours() {
     let parent = tempfile::tempdir().unwrap();
@@ -415,7 +321,6 @@ fn take_both_theirs_first_keeps_both_with_theirs_before_ours() {
     );
 }
 
-/// RED: Per-conflict Undo restores the conflict to unresolved and recomposes.
 #[test]
 fn per_conflict_undo_reverts_resolution() {
     let parent = tempfile::tempdir().unwrap();
@@ -441,8 +346,6 @@ fn per_conflict_undo_reverts_resolution() {
     assert_painted(&h, "2 conflicts remaining");
 }
 
-/// RED: Prev/Next navigate between the file's conflicts; the active one
-/// is the one whose actions appear in the action row.
 #[test]
 fn prev_next_navigates_between_conflicts() {
     let parent = tempfile::tempdir().unwrap();
@@ -453,7 +356,6 @@ fn prev_next_navigates_between_conflicts() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Initially on conflict 1.
     assert_eq!(h.state().ui.conflict_resolver_active_idx, 0);
 
     h.get_by_label("Next >").click();
@@ -465,8 +367,6 @@ fn prev_next_navigates_between_conflicts() {
     assert_eq!(h.state().ui.conflict_resolver_active_idx, 0);
 }
 
-/// RED: With Auto-advance enabled, resolving the current conflict moves
-/// focus to the next unresolved conflict in the file.
 #[test]
 fn auto_advance_moves_focus_after_resolution() {
     let parent = tempfile::tempdir().unwrap();
@@ -477,19 +377,15 @@ fn auto_advance_moves_focus_after_resolution() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Toggle auto-advance on.
     h.get_by_label("Auto-advance to next conflict").click();
     h.run();
     assert!(h.state().ui.conflict_resolver_auto_advance);
 
-    // Resolving the active conflict advances the cursor.
     h.get_by_label("Take ours 1").click();
     h.run();
     assert_eq!(h.state().ui.conflict_resolver_active_idx, 1);
 }
 
-/// RED: "Apply to all N remaining" applies the active conflict's choice
-/// to every still-unresolved conflict in the file.
 #[test]
 fn apply_to_all_remaining_resolves_every_conflict_in_the_file() {
     let parent = tempfile::tempdir().unwrap();
@@ -500,9 +396,6 @@ fn apply_to_all_remaining_resolves_every_conflict_in_the_file() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Resolve the first conflict via the active buttons so a recorded
-    // choice exists; "Apply to all N remaining" applies that choice to
-    // every other still-unresolved conflict in the file.
     h.get_by_label("Take theirs 1").click();
     h.run();
     h.get_by_label("Apply to all 1 remaining").click();
@@ -515,7 +408,6 @@ fn apply_to_all_remaining_resolves_every_conflict_in_the_file() {
     );
 }
 
-/// RED: The left list splits conflicted files from auto-merged files.
 #[test]
 fn left_list_splits_auto_merged_from_conflicted() {
     let parent = tempfile::tempdir().unwrap();
@@ -532,11 +424,6 @@ fn left_list_splits_auto_merged_from_conflicted() {
     assert_painted(&h, "auto.txt");
 }
 
-/// A merge with one `both modified` and one
-/// `deleted by them` file paints both status words on their own rows.
-/// Scoped by each row's `Node::rect()`: "modified"/"deleted" also appear in
-/// the change-kind colouring elsewhere in the Commit window behind the
-/// resolver, so an unscoped substring assert would match the wrong row.
 #[test]
 fn file_list_rows_paint_their_file_level_conflict_kind() {
     let parent = tempfile::tempdir().unwrap();
@@ -569,9 +456,6 @@ fn file_list_rows_paint_their_file_level_conflict_kind() {
     }
 }
 
-/// Negative case: a bulk apply with nothing left to
-/// resolve reports the NEGATIVE result instead of staying silent — the
-/// outcome that regresses silently.
 #[test]
 fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     let parent = tempfile::tempdir().unwrap();
@@ -582,11 +466,6 @@ fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Resolve both conflicts individually, so the bulk apply has nothing
-    // left to do — then click it and expect it to say so. The second take
-    // lands on a file that already carries merged changes, so the Overwrite
-    // Changes pre-check holds it and the dangerous affirmative
-    // is what applies it.
     h.get_by_label("Take ours 1").click();
     h.run();
     h.get_by_label("Next >").click();
@@ -596,8 +475,6 @@ fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     h.get_by_label("Discard and Accept").click();
     h.run();
 
-    // The control stays clickable at zero remaining — that is how the
-    // negative result is reportable at all.
     h.get_by_label("Apply to all 0 remaining").click();
     h.run();
 
@@ -605,9 +482,6 @@ fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     assert_not_painted(&h, "All conflicts were resolved automatically");
 }
 
-/// Positive case: a bulk apply that resolves
-/// everything reports the positive result — a distinct string for a
-/// distinct outcome.
 #[test]
 fn bulk_apply_reports_all_resolved_when_everything_resolves() {
     let parent = tempfile::tempdir().unwrap();
@@ -625,11 +499,6 @@ fn bulk_apply_reports_all_resolved_when_everything_resolves() {
     assert_not_painted(&h, "No conflicts were resolved automatically");
 }
 
-/// The finish control's fill is WITHHELD — no
-/// fill rect for its slot, not a tinted one — while anything is unresolved,
-/// and paints `Palette::ACCENT` once everything is resolved. Assert the
-/// rect's absence/presence at the control's own slot, never a colour change:
-/// a disabled control in this design is withheld, not greyed.
 #[test]
 fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
     let parent = tempfile::tempdir().unwrap();
@@ -647,13 +516,11 @@ fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
             .any(|(r, c)| *c == Palette::ACCENT && r.contains(slot.center()))
     };
 
-    // None resolved: withheld — no fill paints for the finish slot.
     assert!(
         !accent_fill_on_finish(&h),
         "the finish control must paint no fill while nothing is resolved"
     );
 
-    // Partially resolved: still withheld.
     h.get_by_label("Take ours 1").click();
     h.run();
     assert!(
@@ -661,9 +528,6 @@ fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
         "the finish control must paint no fill while conflicts remain"
     );
 
-    // All resolved: the finish control paints its ACCENT fill. The second
-    // take is held by the Overwrite Changes pre-check; the
-    // dangerous affirmative applies it.
     h.get_by_label("Next >").click();
     h.run();
     h.get_by_label("Take ours 2").click();
@@ -676,8 +540,6 @@ fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
     );
 }
 
-/// RED: Abort merge restores the pre-merge state — the conflicted file
-/// disappears and the index is no longer mid-merge.
 #[test]
 fn abort_merge_restores_pre_merge_state() {
     let parent = tempfile::tempdir().unwrap();
@@ -693,8 +555,6 @@ fn abort_merge_restores_pre_merge_state() {
 
     assert!(
         wait_until(10_000, || {
-            // After `git merge --abort`, the unmerged paths are gone and
-            // HEAD points back at the pre-merge commit.
             let status = git(&repo.path, &["status", "--porcelain"]);
             !status.lines().any(|l| l.starts_with("UU")) && !repo.path.join("conf.txt").exists()
                 || std::fs::read_to_string(repo.path.join("conf.txt"))
@@ -705,7 +565,6 @@ fn abort_merge_restores_pre_merge_state() {
     );
 }
 
-/// RED: Continue merge completes the merge once zero conflicts remain.
 #[test]
 fn continue_merge_completes_when_no_conflicts_remain() {
     let parent = tempfile::tempdir().unwrap();
@@ -716,12 +575,6 @@ fn continue_merge_completes_when_no_conflicts_remain() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Resolve every conflict in the file. After resolving conflict 1 the
-    // active cursor stays on it (Auto-advance is off by default); we
-    // navigate to conflict 2 and then resolve it. That second side-take
-    // happens on a file that now carries merged changes (conflict 1 is
-    // resolved), so the Overwrite Changes pre-check holds it and the
-    // dangerous affirmative is what applies it.
     h.get_by_label("Take ours 1").click();
     h.run();
     h.get_by_label("Next >").click();
@@ -731,14 +584,9 @@ fn continue_merge_completes_when_no_conflicts_remain() {
     h.get_by_label("Discard and Accept").click();
     h.run();
 
-    // Apply writes the composed buffer to the working tree and stages it,
-    // clearing the unmerged state; only then can `git merge --continue`
-    // succeed.
     h.get_by_label("Apply").click();
     h.run();
 
-    // The composed buffer is the file content; the in-progress merge has
-    // no conflicts left in the index but the MERGE_HEAD is still pending.
     h.get_by_label("Continue merge").click();
     h.run();
 
@@ -751,8 +599,6 @@ fn continue_merge_completes_when_no_conflicts_remain() {
     );
 }
 
-/// RED: The three panes are equal width with discrete tinted conflict blocks
-/// (the redesign preserves the EQUAL layout from issue #15).
 #[test]
 fn resolver_renders_equal_width_panes_with_tinted_blocks() {
     let parent = tempfile::tempdir().unwrap();
@@ -763,16 +609,13 @@ fn resolver_renders_equal_width_panes_with_tinted_blocks() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Three pane headers paint.
     assert_painted(&h, "Local (Yours)");
     assert_painted(&h, "Result");
     assert_painted(&h, "Incoming (Theirs)");
 
-    // Both sides of the first conflict block paint.
     assert_painted(&h, "MAIN-one");
     assert_painted(&h, "SIDE-one");
 
-    // The three panes are EQUAL width.
     let local = header_band(&h, "Local (Yours)");
     let result = header_band(&h, "Result");
     let incoming = header_band(&h, "Incoming (Theirs)");
@@ -785,7 +628,6 @@ fn resolver_renders_equal_width_panes_with_tinted_blocks() {
         incoming.width()
     );
 
-    // Yours/theirs sections are tinted behind their block text.
     let ours_pos = origin_of(&h, "MAIN-one").expect("ours text painted");
     let theirs_pos = origin_of(&h, "SIDE-one").expect("theirs text painted");
     assert!(
@@ -801,16 +643,11 @@ fn resolver_renders_equal_width_panes_with_tinted_blocks() {
         "theirs section must be tinted behind its text"
     );
 
-    // Marker strips paint as warning-tinted bands.
     assert!(
         filled_rects(&h).iter().any(|(_, c)| *c == marker_bg()),
         "conflict marker strips must be painted"
     );
 
-    // The shared kit keeps the focused Result treatment on the header — as R1's
-    // 2pt accent rail at the pane's leading edge, painted by the one rail
-    // painter — and keeps the BRAND focus outline on the inactive read-only
-    // cell, which really is a floating editor.
     let result_header_pos = galley_origin(&h, "Result").expect("Result header painted");
     assert!(
         filled_rects(&h).iter().any(|(r, c)| {
@@ -863,18 +700,6 @@ fn resolver_panes_and_controls_remain_reachable_at_small_window() {
     }
 }
 
-/// The Overwrite Changes pre-check. `Take ours` / `Take theirs`
-/// are the resolver's Accept Yours / Accept Theirs; on a file that already
-/// carries merged changes (any conflict resolved, or the Result free-edited)
-/// they confirm first. The trigger is per FILE — the reference's
-/// "This file already contains merged changes" — assumed per file by the
-/// ticket (UNVERIFIED against the running product). The affirmative button is
-/// the dangerous sentence (`Discard and Accept`); the safe option does
-/// nothing.
-///
-/// Both title strings are asserted **inside the confirm's own window rect**:
-/// the resolver's file list and body reuse enough words that an unscoped
-/// substring assert would match them.
 #[test]
 fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
     let parent = tempfile::tempdir().unwrap();
@@ -885,16 +710,12 @@ fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Fresh file — no merged changes: Accept Yours resolves directly and no
-    // confirm paints.
     h.get_by_label("Take ours 1").click();
     h.run();
     assert_eq!(h.state().ui.conflict_res[0], Some(0));
     assert_not_painted(&h, "Overwrite Changes");
     assert_not_painted(&h, "Discard and Accept");
 
-    // The file now carries merged changes: Accept Theirs (the compact row of
-    // the still-unresolved conflict 2) confirms first.
     h.get_by_label("Take theirs").click();
     h.run();
     let confirm = h.get_by_role_and_label(Role::Window, "Overwrite Changes");
@@ -914,8 +735,6 @@ fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
         );
     }
 
-    // The safe option does nothing: the pending take is dropped, the
-    // conflict stays unresolved, the confirm closes.
     h.get_by_label("Keep Merged Changes").click();
     h.run();
     assert_eq!(
@@ -925,7 +744,6 @@ fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
     );
     assert_not_painted(&h, "Overwrite Changes");
 
-    // The dangerous affirmative IS the accept: it applies the pending side.
     h.get_by_label("Take theirs").click();
     h.run();
     h.get_by_label("Discard and Accept").click();
@@ -938,10 +756,6 @@ fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
     assert_not_painted(&h, "Overwrite Changes");
 }
 
-/// The confirm's two options are *visually* distinguishable, not
-/// two identical rects: the dangerous affirmative wears the primary kit idle
-/// fill ([`Palette::ACCENT`], what `KitButton::Primary` already paints), and
-/// the safe option wears the raised-on-card surface (`Palette::SURFACE_2`).
 #[test]
 fn overwrite_confirm_affirmative_and_safe_option_paint_different_fills() {
     let parent = tempfile::tempdir().unwrap();
@@ -974,15 +788,6 @@ fn overwrite_confirm_affirmative_and_safe_option_paint_different_fills() {
     );
 }
 
-/// The folded bulk control. TurboGit deliberately folds the
-/// reference's `Apply Non-Conflicting Changes` / `Resolve All Simple
-/// Conflicts` pair into one `Apply to all N remaining` control, so with a
-/// conflict present (the class the reference calls "simple") neither
-/// reference string ever paints. The scope option set to *ours* resolves
-/// every remaining conflict from the left side — the right side's hunk
-/// content stops painting while the left's remains, asserted from geometry
-/// (the Incoming header band marks the right column), because the resolution
-/// state is a marker, not a word.
 #[test]
 fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings() {
     let parent = tempfile::tempdir().unwrap();
@@ -993,16 +798,9 @@ fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings()
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // Resolve conflict 1 with the RIGHT side first: now the active choice
-    // is theirs, so only the scope option can make the bulk fill resolve
-    // the rest from the left. (On a fresh file this take resolves directly —
-    // no merged changes yet.)
     h.get_by_label("Take theirs 1").click();
     h.run();
 
-    // Scope the bulk apply to the left side, then fill the remaining one.
-    // egui's radio exposes both a Button and a RadioButton node under the
-    // same label — query by role.
     h.get_by_role_and_label(Role::RadioButton, "Ours").click();
     h.run();
     h.get_by_label("Apply to all 1 remaining").click();
@@ -1017,10 +815,6 @@ fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings()
     assert_not_painted(&h, "Resolve All Simple Conflicts");
     assert_not_painted(&h, "Apply non-conflicting");
 
-    // The resolution state is a marker, not a word: the sides each choice
-    // kept/dropped are asserted from geometry. Conflict 1 kept the right
-    // side (its `MAIN-one` hunk stops painting); conflict 2 kept the left
-    // (its `SIDE-nine` hunk stops painting).
     assert!(
         origin_of(&h, "MAIN-one").is_none(),
         "the first conflict kept theirs, so its ours hunk must stop painting"
@@ -1030,10 +824,6 @@ fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings()
         "the second conflict kept ours, so its theirs hunk must stop painting"
     );
 
-    // What each side kept paints inside that side's own column. The band
-    // hairline is inset by the pane header's 8pt air while a side section's
-    // text is inset 6pt, so a kept hunk legitimately starts up to that much
-    // left of the band — the right edge is exact.
     let local_band = header_band(&h, "Local (Yours)");
     let incoming_band = header_band(&h, "Incoming (Theirs)");
     let column_left = |band: Rect| band.left() - 8.0;
@@ -1051,17 +841,6 @@ fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings()
     );
 }
 
-/// PARITY: the two surfaces interpret the same choices to the same bytes.
-///
-/// The two surfaces used to carry their own character-identical copy of the
-/// composer, which is exactly why nothing compared them — the agreement was
-/// guaranteed by hand and invisible to every suite. One seeded repository,
-/// the same two choices, taken through the resolver and then through the
-/// inline editor: both buffers must land the bytes this suite spells out.
-///
-/// The second side-take on each surface lands on a file that already carries
-/// merged changes, so the overwrite confirm's dangerous affirmative is what
-/// applies it there.
 #[test]
 fn both_surfaces_compose_the_same_bytes_for_the_same_choices() {
     let parent = tempfile::tempdir().unwrap();
@@ -1071,7 +850,6 @@ fn both_surfaces_compose_the_same_bytes_for_the_same_choices() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Resolver: Take ours 1, Take theirs 2.
     open_resolver(&mut h);
     h.get_by_label("Take ours 1").click();
     h.run();
@@ -1083,12 +861,6 @@ fn both_surfaces_compose_the_same_bytes_for_the_same_choices() {
     h.run();
     let resolver_text = h.state().ui.conflict_text.clone();
 
-    // Inline editor, same repository, same two choices. The resolver is
-    // dismissed first: the two tool windows are not meant to be open at once,
-    // and its window area would otherwise swallow the click on the changelist
-    // entry behind it. Opening the inline editor reseeds the shared state from
-    // the file on disk, so this is a claim about the composer rather than
-    // about whichever choices survived.
     h.state_mut().ui.conflict_resolver_open = false;
     h.run();
     h.get_by_label("Merge…").click();
@@ -1118,7 +890,7 @@ fn both_surfaces_compose_the_same_bytes_for_the_same_choices() {
 /// its `merge_editor_segments` and its `compose`; nothing else in the tree
 /// compares the two modules, and the copy this refuses was character-identical
 /// to its neighbour, so no render assertion can tell them apart. Read the
-/// source at compile time and refuse the declaration, not the mention — the
+/// source at compile time and refuse the declaration, not the mention, the
 /// resolver still *names* all of these, as imports and call sites.
 ///
 /// The scan reads top-level items by their rustfmt column-0 head, which is

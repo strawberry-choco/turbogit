@@ -1,22 +1,3 @@
-//! The `Apply patch` window: the two routes, the preflight
-//! that mutates nothing, the two titled outcomes, and the recovery the second one
-//! carries.
-//!
-//! The ticket states the rule this suite is built around: **the content check is
-//! the real assertion — the string alone is a claim the UI makes about itself.**
-//! So the aborted state is reached end to end, over a real repository through the
-//! production dispatch, and the test then reads the file off disk. The painted
-//! strings are asserted alongside it, because a guarantee the developer cannot read
-//! is not yet a guarantee.
-//!
-//! The two titled states are asserted **against each other**: a rollback that could
-//! not finish paints `Rollback failed` and has to be unable to paint `Apply patch
-//! aborted` in the same frame. Both painted is the failure this surface exists to
-//! avoid, and an assert that only checked the first string would miss it.
-//!
-//! No golden image: `acceptance_matrix.rs` owns the per-page PNGs and this window is
-//! not one of those pages, so a screenshot here would be an invented baseline.
-
 use std::path::{Path, PathBuf};
 
 use egui::Vec2;
@@ -32,14 +13,10 @@ use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_services::patch_apply::{ApplyOutcome, Preflight, Unrestored};
 use turbogit_ui::ui::popups::Action;
 
-// ------------------------------------------------------------------ fixtures --
-
 fn root_id(dir: &Path) -> RootId {
     RootId(dir.to_path_buf().into())
 }
 
-/// One repository with two committed files, so a two-section patch can be written
-/// where the first section applies and the second cannot.
 fn repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(&dir).unwrap();
@@ -52,8 +29,6 @@ fn repo(parent: &Path) -> PathBuf {
     dir
 }
 
-/// The failing patch, written next to the repository rather than inside it so
-/// `git status` is never describing the fixture.
 fn conflicting_patch(parent: &Path) -> PathBuf {
     let path = parent.join("change.patch");
     std::fs::write(
@@ -81,8 +56,6 @@ diff --git a/second.txt b/second.txt
     path
 }
 
-/// A real `git format-patch` file, so the provenance assertions are about git's
-/// output and not about text this file invented.
 fn format_patch(parent: &Path, dir: &Path) -> PathBuf {
     git(dir, &["format-patch", "-1", "-o", "out"]);
     let written = std::fs::read_dir(dir.join("out"))
@@ -96,7 +69,6 @@ fn format_patch(parent: &Path, dir: &Path) -> PathBuf {
     dest
 }
 
-/// The shell with the window open on `dir`, by the route the palette item runs.
 fn window(dir: &Path, parent: &Path, source: PatchSource) -> Harness<'static, AppState> {
     let mut state =
         AppState::for_roots(parent, &[dir.to_path_buf()]).with_settings(VcsSettings::default());
@@ -122,21 +94,10 @@ fn click(harness: &mut Harness<'_, AppState>, label: &str) {
     harness.step();
 }
 
-/// The painted form of a shipped title. `group_title` runs the design system's
-/// mandatory uppercase transform (`widgets::group_title`), so the window
-/// paints the title's uppercase — an assertion against the mixed-case constant
-/// would pin the transform's spelling rather than the state. The mixed-case
-/// constants themselves are pinned by the services suite and by the feed
-/// assertions here, which read state rather than pixels.
 fn painted_title(title: &str) -> String {
     title.to_uppercase()
 }
 
-// ------------------------------------------------------- the two apply routes --
-
-/// The reference's two verbs are two routes, and the second one is defined by the
-/// question it does not ask. An assert on what the clipboard route *omits* is the
-/// only one that tells the two apart.
 #[test]
 fn the_clipboard_route_skips_the_file_path_the_file_route_asks_for() {
     let tmp = tempfile::tempdir().unwrap();
@@ -151,8 +112,6 @@ fn the_clipboard_route_skips_the_file_path_the_file_route_asks_for() {
     assert_painted(&clipboard, "Paste the patch below — no file is read.");
 }
 
-/// Both routes reach the window from the palette, because TurboGit has no main menu
-/// bar — and neither joins the VCS popup, whose action set is a frozen pin.
 #[test]
 fn both_routes_are_palette_verbs_and_neither_touches_the_frozen_popup() {
     let palette: Vec<&str> = Action::palette_actions()
@@ -174,11 +133,6 @@ fn both_routes_are_palette_verbs_and_neither_touches_the_frozen_popup() {
     }
 }
 
-// ------------------------------------------------------ preflight, not confirm --
-
-/// `Show Diff` answers the question and changes nothing: no dispatch, no busy flag,
-/// and a working tree whose bytes are still what the commit left. This is the verb a
-/// developer is meant to press repeatedly and then walk away from.
 #[test]
 fn show_diff_returns_git_verdict_without_writing_and_without_dispatching() {
     let tmp = tempfile::tempdir().unwrap();
@@ -189,7 +143,6 @@ fn show_diff_returns_git_verdict_without_writing_and_without_dispatching() {
     let mut harness = window(&dir, tmp.path(), PatchSource::File);
     harness.state_mut().ui.dlg.apply_patch_path = patch.to_string_lossy().into_owned();
     settle(&mut harness);
-    // The patch's blast radius is stated before anything runs.
     assert_painted(&harness, "FILES THE PATCH NAMES · 2");
     assert_painted(&harness, "first.txt");
 
@@ -200,8 +153,6 @@ fn show_diff_returns_git_verdict_without_writing_and_without_dispatching() {
         &harness,
         "The patch does not apply cleanly. No file has been changed.",
     );
-    // git's own line, named by the file it conflicts in — the lines the reference
-    // highlights, stated here as the text that carries them.
     let painted = painted_text(&harness);
     assert!(
         painted.iter().any(|t| t.contains("second.txt")),
@@ -223,9 +174,6 @@ fn show_diff_returns_git_verdict_without_writing_and_without_dispatching() {
     );
 }
 
-/// A preflight verdict is an answer about one tree. Pointing the window at a second
-/// root has to drop it, or the window keeps certifying a repository it is no longer
-/// looking at.
 #[test]
 fn switching_the_target_root_drops_a_verdict_measured_against_another_tree() {
     let tmp = tempfile::tempdir().unwrap();
@@ -251,12 +199,6 @@ fn switching_the_target_root_drops_a_verdict_measured_against_another_tree() {
     assert_not_painted(&harness, "Applies cleanly");
 }
 
-// ------------------------------------------------------------- provenance ----
-
-/// A git-format patch carries its commit's author and subject, and the window fills
-/// those fields from the patch rather than making the developer retype what the file
-/// already says. Produced by real `git format-patch`, read through the same entry
-/// point the file route uses.
 #[test]
 fn a_git_format_patch_fills_the_authors_and_message_it_already_states() {
     let tmp = tempfile::tempdir().unwrap();
@@ -277,8 +219,6 @@ fn a_git_format_patch_fills_the_authors_and_message_it_already_states() {
     assert_eq!(state.ui.dlg.apply_patch_message, "Raise the note");
 }
 
-/// A plain `git diff` file has no header, and the window says so instead of painting
-/// two fields that look like they failed to fill.
 #[test]
 fn a_patch_with_no_header_says_it_has_none() {
     let tmp = tempfile::tempdir().unwrap();
@@ -295,12 +235,6 @@ fn a_patch_with_no_header_says_it_has_none() {
     );
 }
 
-// --------------------------------------------------- the two titled states ----
-
-/// THE ticket assertion, run as far as it can be run: a real repository, a real
-/// patch that fails on its second file, the production dispatch, and the tree read
-/// back off disk afterwards. The painted strings ride along, but what makes the test
-/// worth writing is the byte comparison beside them.
 #[test]
 fn a_failed_apply_paints_the_aborted_state_over_a_tree_that_is_back_to_what_it_held() {
     let tmp = tempfile::tempdir().unwrap();
@@ -317,8 +251,6 @@ fn a_failed_apply_paints_the_aborted_state_over_a_tree_that_is_back_to_what_it_h
     turbogit_app::apply_patch::dispatch(harness.state_mut());
     settle(&mut harness);
 
-    // The content check: the first file WAS written by the apply, and the tree has
-    // to be holding its original bytes now.
     assert_eq!(
         std::fs::read(dir.join("first.txt")).unwrap(),
         before_first,
@@ -329,17 +261,14 @@ fn a_failed_apply_paints_the_aborted_state_over_a_tree_that_is_back_to_what_it_h
         before_second
     );
 
-    // The two strings the ticket ships, painted by the state that earned them.
     assert_painted(&harness, &painted_title(ApplyOutcome::ABORTED_TITLE));
     assert_painted(&harness, ApplyOutcome::ABORTED_MESSAGE);
     assert_painted(&harness, "ROLLED BACK · 2");
-    // …and the third state is not said by a rollback that did finish.
     assert_not_painted(
         &harness,
         &painted_title(ApplyOutcome::ROLLBACK_FAILED_TITLE),
     );
 
-    // The durable record, not the toast: the feed outlives the notification.
     let feed: Vec<&String> = harness
         .state()
         .ui
@@ -354,9 +283,6 @@ fn a_failed_apply_paints_the_aborted_state_over_a_tree_that_is_back_to_what_it_h
     );
 }
 
-/// The state that makes the promise above honest. Painted **instead** of the aborted
-/// one: an outcome that could not be restored has no way to also claim that
-/// everything was rolled back, and this test's second half is exactly that absence.
 #[test]
 fn a_rollback_that_cannot_finish_paints_its_own_state_and_never_the_aborted_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -380,25 +306,15 @@ fn a_rollback_that_cannot_finish_paints_its_own_state_and_never_the_aborted_one(
     );
     assert_painted(&harness, "COULD NOT BE RESTORED · 1");
     assert_painted(&harness, "first.txt");
-    // Never both. The two titled states are one value's two variants, and a frame
-    // that showed them together would be the UI contradicting its own guarantee.
     assert_not_painted(&harness, &painted_title(ApplyOutcome::ABORTED_TITLE));
     assert_not_painted(&harness, ApplyOutcome::ABORTED_MESSAGE);
-    // The recovery is offered as a control, not as prose.
     assert_painted(&harness, "Restore recorded content");
 }
 
-/// The `Rollback failed` state's recovery action, executed: the recorded bytes are
-/// written again, the tree really comes back, and the window then states the aborted
-/// outcome — truthfully, because by that point every file the apply changed is back.
-/// This is the resolution of the question the ticket leaves unresolved, and it is
-/// asserted as behaviour rather than as a button.
 #[test]
 fn the_failed_rollback_offers_one_action_and_that_action_fixes_the_tree() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = repo(tmp.path());
-    // The state the apply would have left: `first.txt` holding what the patch wrote,
-    // with the pre-apply content held only in the outcome's record.
     std::fs::write(dir.join("first.txt"), b"one\nTWO\nthree\n").unwrap();
 
     let mut harness = window(&dir, tmp.path(), PatchSource::Clipboard);
@@ -423,7 +339,6 @@ fn the_failed_rollback_offers_one_action_and_that_action_fixes_the_tree() {
         recorded,
         "the retry wrote the recorded bytes back"
     );
-    // The state moved with the tree: `Aborted` is now the sentence that is true.
     let state = harness.state();
     assert!(
         matches!(
@@ -439,15 +354,10 @@ fn the_failed_rollback_offers_one_action_and_that_action_fixes_the_tree() {
     );
 }
 
-/// A retry that is refused again leaves the named state in place rather than
-/// reporting a recovery that did not happen.
 #[test]
 fn a_second_refused_retry_keeps_the_state_named_and_records_it_again() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = repo(tmp.path());
-    // A path the filesystem cannot write back: the destination is replaced by a
-    // directory, so the recorded content has nowhere to go and the retry
-    // genuinely fails.
     std::fs::remove_file(dir.join("first.txt")).unwrap();
     std::fs::create_dir_all(dir.join("first.txt")).unwrap();
 
@@ -490,23 +400,9 @@ fn a_second_refused_retry_keeps_the_state_named_and_records_it_again() {
     );
 }
 
-// ------------------------------------------------ the recovery's lifetime --
-//
-// The promise `Apply patch` makes is about the WORKING TREE, and the record that
-// pays it is the failed rollback's held bytes. A transition inside the window —
-// typing in the patch field, changing route, closing and reopening — changes
-// nothing on disk, so it cannot be allowed to be the thing that decides whether
-// the developer can still get their file back. Each test below strands a real
-// half-applied tree, runs one transition, and then asks the window to finish the
-// restore it promised: the file's bytes are the assertion, not a field.
-
-/// The pre-apply content, and the content the failed apply left behind.
 const RECORDED: &[u8] = b"one\ntwo\nthree\n";
 const LEFT_BY_APPLY: &[u8] = b"one\nTWO\nthree\n";
 
-/// The window in the state a failed rollback leaves: `first.txt` on disk holding
-/// what the apply wrote, and the bytes it held before living only in the
-/// outcome's record.
 fn stranded(dir: &Path, parent: &Path) -> Harness<'static, AppState> {
     std::fs::write(dir.join("first.txt"), LEFT_BY_APPLY).unwrap();
     let mut harness = window(dir, parent, PatchSource::Clipboard);
@@ -527,14 +423,8 @@ fn stranded(dir: &Path, parent: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-/// Every transition has to leave the same two things true: the state is still
-/// named on screen with its one action, and that action still has the bytes to
-/// write. Shared because the three tests differ only in the transition.
 #[track_caller]
 fn assert_still_rescuable(harness: &mut Harness<'static, AppState>, dir: &Path) {
-    // The state is still named on screen, with its one action attached: a frame
-    // that painted the patch list instead would be the transition retiring the
-    // failure it owes an answer to.
     assert_painted(harness, &painted_title(ApplyOutcome::ROLLBACK_FAILED_TITLE));
     assert_painted(harness, "Restore recorded content");
     click(harness, "Restore recorded content");
@@ -546,8 +436,6 @@ fn assert_still_rescuable(harness: &mut Harness<'static, AppState>, dir: &Path) 
     );
 }
 
-/// The stranding this feature cannot ship with: one keystroke in the patch field
-/// erasing the only copy of the content the working tree lost.
 #[test]
 fn editing_the_patch_text_leaves_the_failed_rollback_resolvable() {
     let tmp = tempfile::tempdir().unwrap();
@@ -562,8 +450,6 @@ fn editing_the_patch_text_leaves_the_failed_rollback_resolvable() {
     assert_still_rescuable(&mut harness, &dir);
 }
 
-/// A route switch drops the payload the other route read — it has no business
-/// dropping the tree's recovery with it.
 #[test]
 fn switching_the_patch_route_leaves_the_failed_rollback_resolvable() {
     let tmp = tempfile::tempdir().unwrap();
@@ -576,8 +462,6 @@ fn switching_the_patch_route_leaves_the_failed_rollback_resolvable() {
     assert_still_rescuable(&mut harness, &dir);
 }
 
-/// Closing the window is not fixing the tree: reopening it has to find the same
-/// unresolved rollback where it left it.
 #[test]
 fn reopening_the_window_leaves_the_failed_rollback_resolvable() {
     let tmp = tempfile::tempdir().unwrap();

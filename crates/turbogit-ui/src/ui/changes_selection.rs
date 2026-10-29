@@ -25,29 +25,20 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Which gesture a row-body click is, decided by the modifier keys held at the
-/// click. Shift outranks command and command outranks a plain click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClickKind {
-    /// Select this row alone; everything else leaves the set.
     Replace,
-    /// Move this row between the set and outside it, touching nothing else.
     Toggle,
-    /// Replace the set with the painted range from the anchor to this row.
     Range,
 }
 
-/// One visible row of the file list, in paint order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowSlot {
     /// The row's canonical key: `<root path>/<repo-relative path>`.
     pub key: PathBuf,
-    /// Whether a click may put this row in the set. `false` is the
-    /// Merge-conflicts row, which holds a range position and stays out.
     pub selectable: bool,
 }
 
-/// Map the two modifier keys a row-body click was taken with onto a gesture.
 pub fn click_kind(shift: bool, command: bool) -> ClickKind {
     if shift {
         ClickKind::Range
@@ -58,14 +49,6 @@ pub fn click_kind(shift: bool, command: bool) -> ClickKind {
     }
 }
 
-/// Apply one row-body click to the selection and the anchor.
-///
-/// The anchor is the shift-range origin. A replace or a toggle moves it to the
-/// clicked row; a range leaves it where it is, so repeated shift-clicks reshape
-/// one span instead of walking the selection down the list. A range whose anchor
-/// no longer resolves to a painted row falls back to a plain replace, which is
-/// the answer for a file that vanished, a group that collapsed or a filter that
-/// hid it.
 pub fn apply(
     selection: &mut HashSet<PathBuf>,
     anchor: &mut Option<PathBuf>,
@@ -106,8 +89,6 @@ pub fn apply(
     }
 }
 
-/// The whole set, and nothing but this row. A row that cannot be selected
-/// clears the set and adds nothing to it.
 fn select_one(selection: &mut HashSet<PathBuf>, clicked: &Path, selectable: bool) {
     selection.clear();
     if selectable {
@@ -115,7 +96,6 @@ fn select_one(selection: &mut HashSet<PathBuf>, clicked: &Path, selectable: bool
     }
 }
 
-/// Where a key sits in the painted rows, if it is painted at all.
 fn position(order: &[RowSlot], key: &Path) -> Option<usize> {
     order.iter().position(|slot| slot.key == key)
 }
@@ -124,9 +104,6 @@ fn position(order: &[RowSlot], key: &Path) -> Option<usize> {
 mod tests {
     use super::*;
 
-    /// Paint order `a.txt b.txt C/conf.txt c.txt d.txt`: two files, the
-    /// conflicts row, then two more files, so every range test can put an
-    /// endpoint on either side of the row that cannot be selected.
     fn order() -> Vec<RowSlot> {
         ["a.txt", "b.txt"]
             .iter()

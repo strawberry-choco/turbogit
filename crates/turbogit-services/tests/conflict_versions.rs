@@ -1,11 +1,3 @@
-//! Issue 04 (deepen-git-engine) — a **Conflict**'s versions as three answers.
-//!
-//! The resolver used to ask the **Git engine** for index stage revisions by
-//! string (`:1`, `:2`, `:3`), and the substitutable adapter served one content
-//! per path whatever it was asked for — so no test in the repo could tell ours
-//! from theirs. These run through that adapter, with no `git` binary, and name
-//! the scenario the old seam could not express.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::ConflictVersions;
@@ -20,7 +12,6 @@ fn merged() -> PathBuf {
     PathBuf::from("merged.txt")
 }
 
-/// One conflicted path whose three index versions hold three different bodies.
 fn fake_with_three_sides() -> (FakeExecutor, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let mut v = FakeExecutor::new();
@@ -76,8 +67,6 @@ fn accepting_theirs_writes_their_side() {
 
 #[test]
 fn an_absent_side_is_answered_as_absent_not_as_an_empty_one() {
-    // An add/add conflict has no ancestor: `git show :1:<path>` fails, and a
-    // resolver that read that as an empty base merges against a phantom.
     let mut v = FakeExecutor::new();
     v.conflicts.insert(
         merged(),

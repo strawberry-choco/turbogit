@@ -1,18 +1,3 @@
-//! The shared tab view widget (`src/ui/widgets/tabs.rs`).
-//!
-//! The component is app-free, so this suite renders it over a local enum and a
-//! plain context struct — the contract under test is the widget's, not the
-//! shell's. Assertions read painted output (galleys, filled rects) and the
-//! harness's accessibility tree, the way the shell strip's own suite
-//! (`workspace_shell_frame.rs`) pins the same marks at full-app scale:
-//!
-//! - the bar is the top `TAB_STRIP_HEIGHT` band, the active tab its one
-//!   `BRAND` underline;
-//! - the content sits `PANEL_PADDING` inside the claimed region, beneath the bar;
-//! - a click reaches `on_select` with the right id and switches the body
-//!   same-frame (content reads the caller's fresh state);
-//! - the end section renders in the bar and its control is clickable.
-
 use egui::{Ui, WidgetInfo, WidgetType};
 use egui_kittest::{Harness, kittest::Queryable as _};
 use test_support::harness::{filled_rects, painted_galleys, settle};
@@ -26,8 +11,6 @@ enum Tab {
     Two,
 }
 
-/// The app-free context: the selection the caller owns, the observations the
-/// closures record, and the region the caller saw the widget claim.
 struct Ctx {
     selected: Tab,
     clicks: Vec<Tab>,
@@ -111,8 +94,6 @@ fn fresh_ctx() -> Ctx {
     }
 }
 
-/// The tab label's painted rect, located by its string: one tab paints "One"
-/// and the content body never does.
 fn label(harness: &Harness<'_, Ctx>, text: &str) -> egui::Rect {
     let hits: Vec<_> = painted_galleys(harness)
         .into_iter()
@@ -122,8 +103,6 @@ fn label(harness: &Harness<'_, Ctx>, text: &str) -> egui::Rect {
     hits.into_iter().next().expect("one hit").rect
 }
 
-/// The frame's BRAND-filled rects — the tab underlines, and nothing else this
-/// fixture paints.
 fn brand_fills(harness: &Harness<'_, Ctx>) -> Vec<egui::Rect> {
     filled_rects(harness)
         .into_iter()
@@ -132,9 +111,6 @@ fn brand_fills(harness: &Harness<'_, Ctx>) -> Vec<egui::Rect> {
         .collect()
 }
 
-/// The bar is the region's top `TAB_STRIP_HEIGHT` band: the active tab's
-/// underline rides the band's bottom edge, its label centred in a
-/// `TAB_ITEM_HEIGHT` item at the band's top.
 #[test]
 fn the_bar_is_the_top_strip_height_band() {
     let h = harness(fresh_ctx());
@@ -148,9 +124,6 @@ fn the_bar_is_the_top_strip_height_band() {
     );
     let rule = underlines[0];
 
-    // The label is vertically centred in its `TAB_ITEM_HEIGHT` item, and the
-    // item starts at the region's top — so the painted label's centre yields
-    // the band's top edge, and the band's bottom edge is one full strip below.
     let one = label(&h, "One");
     let top = one.center().y - TAB_ITEM_HEIGHT / 2.0;
     assert!(
@@ -167,9 +140,6 @@ fn the_bar_is_the_top_strip_height_band() {
     );
 }
 
-/// The content sits `PANEL_PADDING` inside the claimed region on the sides the
-/// frame can see: one strip height plus one padding below the top edge, one
-/// padding in from the left.
 #[test]
 fn the_content_sits_panel_padding_inside_the_region() {
     let h = harness(fresh_ctx());
@@ -189,9 +159,6 @@ fn the_content_sits_panel_padding_inside_the_region() {
     );
 }
 
-/// A click calls `on_select` with the clicked id and switches the body on the
-/// same frame: `on_select` runs before the content closure, which reads the
-/// caller's state fresh.
 #[test]
 fn a_click_selects_the_tab_and_switches_the_body_same_frame() {
     let mut h = harness(fresh_ctx());
@@ -217,7 +184,6 @@ fn a_click_selects_the_tab_and_switches_the_body_same_frame() {
     );
 }
 
-/// The end section renders in the bar and its control works.
 #[test]
 fn the_end_section_renders_in_the_bar_and_clicks() {
     let mut h = harness(fresh_ctx());

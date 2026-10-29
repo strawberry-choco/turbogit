@@ -1,8 +1,3 @@
-//! The tab strip's right-anchored action buttons: the keyboard button opens a
-//! passive shortcuts help window, the gear button opens the existing Settings
-//! modal. Asserts only on public surfaces — painted output and public
-//! `AppState` state — over a real repository so the tab strip renders.
-
 use egui::{Key, Modifiers};
 use egui_kittest::kittest::Queryable;
 use test_support::harness::{assert_painted, repo_shell_harness, settle_reads};
@@ -44,7 +39,6 @@ fn frozen_shortcuts_do_not_dispatch_while_the_shortcuts_window_is_open() {
     let (mut harness, _project) = repo_shell_harness();
     settle_reads(&mut harness);
 
-    // Positive control: with no help window open, Ctrl+K reaches the shell.
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
     settle_reads(&mut harness);
     assert_eq!(harness.state().ui.tab, Tab::Commit);
@@ -57,7 +51,6 @@ fn frozen_shortcuts_do_not_dispatch_while_the_shortcuts_window_is_open() {
     settle_reads(&mut harness);
     assert!(harness.state().ui.shortcuts_open);
 
-    // The same key is now suppressed: the help window is a Tier-1 surface.
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
     settle_reads(&mut harness);
     assert_eq!(harness.state().ui.tab, Tab::Log);

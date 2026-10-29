@@ -1,27 +1,27 @@
-# History-reword mapping table (ADR-0028 D8 — Gate 1 draft)
+# History-reword mapping table (ADR-0028 D8. Gate 1 draft)
 
-**Status: APPROVED (Gate 1) — being executed (Gate 2 confirmed).** The operator
+**Status: APPROVED (Gate 1), being executed (Gate 2 confirmed).** The operator
 approved the table and the force-push; the reword runs against `main` via
 `git filter-branch --msg-filter` applying the identical first-line-only dict below
-(`git-filter-repo` is unavailable on this machine and ruled out by the operator —
+(`git-filter-repo` is unavailable on this machine and ruled out by the operator,
 the callback snippet stays as the record of the approved mapping).
 
-Why `docs/` and not the issue tracker: the table must survive the history rewrite — a
-fresh-clone verification looks it up afterward — and `.scratch/` is gitignored.
+Why `docs/` and not the issue tracker: the table must survive the history rewrite, a
+fresh-clone verification looks it up afterward, and `.scratch/` is gitignored.
 
 ## Provenance
 
-- Sweep: `git log --format=%s main` over the whole of `main` — **383 subjects =
-  314 non-merge commits + 69 merge commits** — plus the merge-only sweep
+- Sweep: `git log --format=%s main` over the whole of `main`, **383 subjects =
+  314 non-merge commits + 69 merge commits**, plus the merge-only sweep
   `git log --format=%s --merges main`.
 - Parser: cocogitto 7.0.0 as configured by this repo's `cog.toml`, driven through
   `commit-lint` (the bin `cog verify` agrees with). Classification was mechanical:
-  every one of the 314 non-merge subjects was fed to `commit-lint` individually —
+  every one of the 314 non-merge subjects was fed to `commit-lint` individually,
   212 parse, 102 fail.
 - Result: **83 unique non-conventional subjects** (covering those 102 commits) are
-  mapped below; every row is enumerated — there is no "…and others".
+  mapped below; every row is enumerated, there is no "…and others".
 - Reconciliation with ADR-0028's "roughly forty-five": the sweep found nearly twice
-  that — 83 unique subjects / 102 commits. The ADR named the families (`issue-N:`,
+  that, 83 unique subjects / 102 commits. The ADR named the families (`issue-N:`,
   `wip`, `icons`, `improve ui`, `foundation`, `cleanup`, …) but undercounted them:
   the `issue-N:` family alone is 22 subjects, `welcome:` is 9, the bare `refactor`
   subject repeats on 14 commits, `ui adjustments` on 5. Per the ticket, the sweep is
@@ -45,7 +45,7 @@ one-offs:
   `(ddd split issue NN)` parentheticals refer to a different tracker and are kept
   verbatim where they already trail.
 - **Minimal touch.** Where the original wording already reads as a subject, it is kept
-  verbatim after `type(scope): ` — only the type prefix is added. Rewording happens
+  verbatim after `type(scope): `, only the type prefix is added. Rewording happens
   only where the original is unusable as a subject (bare `refactor`, `foundation`,
   `cleanup`, `redesign`, `fix bugs`, …), and the note records the diff evidence used.
 - **Repeated subjects share one replacement.** The callback dict is keyed by the
@@ -61,7 +61,7 @@ one-offs:
 | Old subject | New subject | Commit(s) | Note |
 |---|---|---|---|
 | `Initial commit` | `chore: initial commit` | `bddd8b33d` | adds `.gitignore` + `README.md` only |
-| `foundation` | `chore: set up the project foundation` | `decc30eff` | 40 files: workspace `Cargo.toml`/lock, `CONTEXT.md`, bundled fonts/assets — scaffolding, not a feature |
+| `foundation` | `chore: set up the project foundation` | `decc30eff` | 40 files: workspace `Cargo.toml`/lock, `CONTEXT.md`, bundled fonts/assets, scaffolding, not a feature |
 | `add agent instructions` | `docs: add agent instructions` | `5068cbdf6` | creates `AGENTS.md` |
 | `add design system pointer` | `docs: add design system pointer` | `1dad97392` | `AGENTS.md` addition |
 | `add ci` | `ci: add the CI workflow` | `68a4ffb1f` | creates `.github/workflows/ci.yml` |
@@ -76,7 +76,7 @@ one-offs:
 | `ui adjustments and performance optimization` | `perf: ui adjustments and performance optimization` | `0b690b86a` | app events/root_caches/state; the commit itself claims the perf gain, so `perf` is the honest type |
 | `ui adjustments, performance improvement` | `perf: ui adjustments and performance improvement` | `ee4adb698` | 29 files incl. persistence; same mixed shape |
 | `adjust project tree indentation` | `style(ui): adjust the project tree indentation` | `e289e0a4a` | theme + tree/sidebar spacing only |
-| `refactor` | `refactor: general codebase refactoring` | `a9127ec8`, `5ad7f1a4`, `ac13c2ca`, `693dba34`, `53b104c3`, `df81a423`, `d90fba7b`, `9d59e256`, `e358c7ba`, `14a957bc`, `0508565c`, `5d1a3043`, `1d2a2615`, `a1ebd422` | ×14, one shared replacement — the dict is keyed by subject and the originals carried no detail to preserve. Occurrences span UI passes, core-service reworks, doc pruning (`a9127ec8` removes ~77k lines) and CI/workspace churn |
+| `refactor` | `refactor: general codebase refactoring` | `a9127ec8`, `5ad7f1a4`, `ac13c2ca`, `693dba34`, `53b104c3`, `df81a423`, `d90fba7b`, `9d59e256`, `e358c7ba`, `14a957bc`, `0508565c`, `5d1a3043`, `1d2a2615`, `a1ebd422` | ×14, one shared replacement, the dict is keyed by subject and the originals carried no detail to preserve. Occurrences span UI passes, core-service reworks, doc pruning (`a9127ec8` removes ~77k lines) and CI/workspace churn |
 | `refactoring` | `refactor: rework the app diff plumbing` | `18035c0b9` | 30 files, mostly turbogit-app `diff_data`/`diff_load`/`diff_model`/`granular`/`keyed_read` |
 | `refactor caching` | `refactor: rework the caching` | `755cd6817` | engine + `root_caches` + lib wiring |
 | `refactor ui` | `refactor: rework the ui` | `6b44d5288` | app state + branches UI, net −200 lines |
@@ -99,14 +99,14 @@ one-offs:
 | `diff redesign` | `refactor(ui): redesign the diff pane` | `8e7dbdade` | diff module restructure |
 | `cleanup` | `chore: remove the superseded redesign docs` | `435d771d2` | deletes `docs/execution-plan.md`, `ui-redesign-audit.md`, `ui-redesign-spec.md` (−1155 lines, no code) |
 | `remove scratch folder` | `chore: remove the scratch folder` | `71e6fab4a`, `c3fce6b0` | ×2; first gitignores it, second deletes `.scratch/ddd-subcrate-split` |
-| `remove useless content` | `refactor: remove the useless content` | `c88933c0c` | 25 files, app state + ui popups, mixed ins/del — broader than a deletion |
+| `remove useless content` | `refactor: remove the useless content` | `c88933c0c` | 25 files, app state + ui popups, mixed ins/del, broader than a deletion |
 | `remove useless files` | `chore: remove the useless files` | `d67648a68` | deletes `MIGRATION_PLAN.md`, `ddd-subcrate-proposal.md`, `followups.md` |
 | `remove useless remotes button` | `fix(ui): remove the useless remotes button` | `a6a20ffc9` | branches UI button + its test; correcting a mistake → `fix` |
-| `remove useless toolbar` | `refactor: remove the useless toolbar` | `5dbb76ba4` | 33 files: harness, app state, tests — a removal pass, not a one-widget fix |
+| `remove useless toolbar` | `refactor: remove the useless toolbar` | `5dbb76ba4` | 33 files: harness, app state, tests, a removal pass, not a one-widget fix |
 | `complete composition root cutover and remove shims (ddd split issue 10)` | `refactor: complete composition root cutover and remove shims (ddd split issue 10)` | `1b9cf886f` | ddd-split tracker ref kept verbatim |
 | `extract turbogit-app crate (ddd split issue 08)` | `refactor: extract turbogit-app crate (ddd split issue 08)` | `1f07307f6` | structural extraction, no behaviour change |
 | `extract turbogit-ui and test-support crates (ddd split issue 09)` | `refactor: extract turbogit-ui and test-support crates (ddd split issue 09)` | `c4679cc18` | same |
-| `merge issue-16 into ui: keep typed-toast renderer and settings modal, drop legacy inline settings` | `refactor(ui): keep typed-toast renderer and settings modal, drop legacy inline settings (issue-16)` | `c3cdbc55b` | **not a git merge** — integrates the issue-16 topic into the ui stream; the `merge … into ui` pseudo-type is dropped |
+| `merge issue-16 into ui: keep typed-toast renderer and settings modal, drop legacy inline settings` | `refactor(ui): keep typed-toast renderer and settings modal, drop legacy inline settings (issue-16)` | `c3cdbc55b` | **not a git merge**, integrates the issue-16 topic into the ui stream; the `merge … into ui` pseudo-type is dropped |
 | `test+docs: first tests through the engine seam; CONTEXT.md; ADR-0001` | `test: first tests through the engine seam; CONTEXT.md; ADR-0001` | `1d9c98ef2` | mixed commit; `test` chosen as the type (cocogitto takes one), the docs half stays visible in the subject |
 | `issue-6: shared widget library with token-driven state styling` | `feat(ui): shared widget library with token-driven state styling (issue-6)` | `ab044b4d2` | |
 | `issue-9: IDE shell frame — topbar, toolbar, rail, tab strip, status bar` | `feat(ui): IDE shell frame — topbar, toolbar, rail, tab strip, status bar (issue-9)` | `8e044e51f` | |
@@ -146,7 +146,7 @@ one-offs:
 
 ## Merge commits: retained, not mapped (D8)
 
-All **69 merge commits** on `main` are retained exactly as they are — their subjects are
+All **69 merge commits** on `main` are retained exactly as they are, their subjects are
 never mapped and the callback dict below cannot touch them (verified: zero of the 83 old
 subjects appear as any merge-commit subject). The tooling skips them by design:
 `cog check`/`cog verify` skip git-level merges via parentage
@@ -155,22 +155,22 @@ beginning `Merge ` / `Pull request` inside cocogitto's `verify`.
 
 Breakdown of the 69 retained subjects:
 
-- **5 × `Merge pull request #N`** — GitHub's merge subjects, called out per D8:
-  - `30110de` — `Merge pull request #1 from strawberry-choco/arch`
-  - `4865403` — `Merge pull request #25 from strawberry-choco/ui`
-  - `c9b2a87` — `Merge pull request #26 from strawberry-choco/arch`
-  - `8a64126` — `Merge pull request #27 from strawberry-choco/arch-2`
-  - `b84647b` — `Merge pull request #28 from strawberry-choco/strawberry-choco/partial-staging`
+- **5 × `Merge pull request #N`**. GitHub's merge subjects, called out per D8:
+  - `30110de`, `Merge pull request #1 from strawberry-choco/arch`
+  - `4865403`, `Merge pull request #25 from strawberry-choco/ui`
+  - `c9b2a87`, `Merge pull request #26 from strawberry-choco/arch`
+  - `8a64126`, `Merge pull request #27 from strawberry-choco/arch-2`
+  - `b84647b``Merge pull request #28 from strawberry-choco/strawberry-choco/partial-staging`
 - 25 × `Merge branch '…' into …`
 - 26 × `merge: ticket …` (hand-written merge-commit subjects from the ticket era)
 - 1 × `merge issue-13 into ui: …` (same family, older shape)
 - 12 × conventional-typed subjects that happen to sit on git-level merge commits
-  (e.g. `feat(ui): copy the branch a row names from its context menu`) — retained like
+  (e.g. `feat(ui): copy the branch a row names from its context menu`), retained like
   the rest; D8 keeps merge commits, not merge subjects, out of the rewrite
 
 ## Ready-to-run rewrite command (executed only after Gate-1 approval, by a later ticket)
 
-`git filter-repo` is not installed on this machine and must not be run now — this
+`git filter-repo` is not installed on this machine and must not be run now, this
 snippet is the verbatim input for the human-gated execution ticket. It applies the dict
 to each commit's **first message line only**; message bodies, authors, committer
 dates/timestamps and parentage (hence merge topology) are untouched, and any first line
@@ -280,14 +280,14 @@ a multi-line message keeps its body verbatim; the merge commits are unreachable 
 construction (none of their first lines is a dict key) even though the callback runs on
 them.
 
-## Verification (mechanical, every row — no sampling)
+## Verification (mechanical, every row, no sampling)
 
 How this table was verified, all against the repo's own parser (`commit-lint`, i.e.
 cocogitto 7.0.0 reading this `cog.toml`):
 
 1. **Complete classification.** All 314 non-merge subjects from `git log --format=%s
    main` were fed to `commit-lint` one message per file: **212 pass, 102 fail**. The 102
-   failing commits reduce to exactly the 83 unique old subjects in the table above —
+   failing commits reduce to exactly the 83 unique old subjects in the table above,
    the table's old-subject set is set-equal to the parser-failing set, so the
    enumeration is complete by construction, not by review.
 2. **Old side fails.** Each of the 83 old subjects was written to a temp file and run

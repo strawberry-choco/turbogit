@@ -1,11 +1,3 @@
-//! Logs-panels redesign issue 02 — the per-commit file-stats cache.
-//!
-//! The changed-files pane asks for `+N −M` counts every frame it renders a
-//! selected commit, so the request has to be once per commit id, off the render
-//! thread, memoized in the root caches and dropped with the rest of its root.
-//! Everything here is driven through the public surface: [`AppState`] over a
-//! real repository with the [`RecordingExecutor`] counting engine calls.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -16,13 +8,6 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-/// A repository whose HEAD commit edits `a.txt` (+2 / −1) and deletes
-/// `b.txt` (+0 / −1).
-///
-/// **Kept local, not a `git_seed` recipe.** No shared recipe is a two-commit
-/// edit-then-delete, and the churn totals asserted here (`a.txt → (2, 1)`,
-/// `b.txt → (0, 1)`) exist only if the first commit added both files and the
-/// second edited one and removed the other.
 fn seeded_root() -> (TempDir, RootId, PathBuf, String) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("stats");
@@ -52,8 +37,6 @@ fn file_stats_are_requested_once_per_commit_and_served_from_the_cache() {
     let mut state =
         AppState::for_roots(&repo, std::slice::from_ref(&repo)).with_executor(recorder.clone());
 
-    // Three same-frame requests for one commit (what a three-frame render
-    // burst does) → exactly one engine call.
     state.fetch_file_stats(root.clone(), head.clone());
     state.fetch_file_stats(root.clone(), head.clone());
     state.fetch_file_stats(root.clone(), head.clone());
@@ -77,10 +60,8 @@ fn file_stats_are_requested_once_per_commit_and_served_from_the_cache() {
     assert_eq!((total_added, total_removed), (2, 2), "churn totals");
     assert_eq!(file_stat(counts, Path::new("a.txt")), Some((2, 1)));
     assert_eq!(file_stat(counts, Path::new("b.txt")), Some((0, 1)));
-    // A path the commit never touched has no stat — the row renders none.
     assert_eq!(file_stat(counts, Path::new("c.txt")), None);
 
-    // Once settled, asking again is a pure cache hit: no second call.
     state.fetch_file_stats(root.clone(), head.clone());
     state.drain_events();
     assert_eq!(
@@ -112,7 +93,6 @@ fn invalidating_a_root_drops_its_cached_file_stats() {
         "invalidation must drop the stats with every other per-commit cache"
     );
 
-    // And the next request runs again rather than serving the dropped entry.
     state.fetch_file_stats(root.clone(), head);
     state.drain_events();
     assert_eq!(recorder.stats_call_count(), 2, "the refetch ran again");

@@ -1,20 +1,3 @@
-//! Settings modal (issue #16, upgraded in issue #26 per screen 11): a
-//! ~768px category-list dialog opened ONLY from the toolbar gear — the
-//! tab-strip Settings page was deleted outright (spec §9.1 correction).
-//!
-//! Editing model: opening snapshots the loaded [`VcsSettings`] into
-//! [`UiState::settings_draft`]; rows edit the draft only. The footer follows
-//! IDE semantics — **Restore defaults** (screen 11) resets the visible
-//! category's fields to their defaults, **Cancel** (and the window X)
-//! discards the draft, **Apply** persists via `persistence.rs`, rebuilds the
-//! engine behind the seam (ADR-0001) and stays open. Apply is disabled until
-//! the draft differs from the loaded settings.
-//!
-//! Categories (issue #26): General, Git, Update Method, Multi-Root,
-//! Protected Branches, Appearance, Advanced — every backed `VcsSettings`
-//! field lives on exactly one page; unbacked placeholders render
-//! visible-but-disabled with tooltips and never persist.
-
 use egui::{
     Align, Align2, CornerRadius, Pos2, RichText, Sense, TextEdit, Ui, UiBuilder, Vec2, WidgetInfo,
     WidgetType,
@@ -29,15 +12,9 @@ use turbogit_domain::model::{
     VcsSettings,
 };
 
-/// Spec §8.8: large modal, ~768px wide.
 const MODAL_WIDTH: f32 = 768.0;
-/// Left category list width (spec §8.8: 176px).
 const CATEGORY_WIDTH: f32 = 176.0;
-/// Right pane width: whatever the modal body offers beyond the category
-/// column and the 1px divider. Pinned explicitly — an unconstrained
-/// ScrollArea inside a Window feeds back on itself and grows forever.
 const PANEL_WIDTH: f32 = MODAL_WIDTH - CATEGORY_WIDTH - 40.0;
-/// Fixed body height so both columns align and the window keeps its size.
 const PANEL_HEIGHT: f32 = 420.0;
 const INPUT_WIDTH: f32 = 300.0;
 
@@ -51,22 +28,15 @@ const CATEGORIES: [SettingsCategory; 7] = [
     SettingsCategory::Advanced,
 ];
 
-/// Render the modal when open; a closed window is a no-op.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.settings_open {
         return;
     }
-    // Snapshot the loaded values once per open: the dirty reference every
-    // footer decision compares against. A fresh open (the draft only exists
-    // while the modal does) also lands back on General.
     if state.ui.settings_draft.is_none() {
         state.ui.settings_draft = Some(state.settings.clone());
         state.ui.settings_category = SettingsCategory::General;
     }
 
-    // Sense the real viewport height from the shell-level clip rect —
-    // `RawInput::screen_rect` is not populated by headless harnesses
-    // (issue #23).
     let view_h = ui.clip_rect().height();
     let panel_h = PANEL_HEIGHT.min((view_h - 170.0).max(240.0));
 
@@ -77,8 +47,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         .default_width(MODAL_WIDTH)
         .resizable(false)
         .show(&ctx, |ui| body(ui, state, panel_h));
-    // Two close paths meet here: the window X / Esc flip `open`, the footer
-    // Cancel cleared `settings_open` from inside the body. Either discards.
     let body_cancelled = !state.ui.settings_open;
     state.ui.settings_open = open && !body_cancelled;
     if !state.ui.settings_open {
@@ -86,11 +54,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-// --- Body ---------------------------------------------------------------------
-
 fn body(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
-    // The spec's 420px body yields to short viewports so the footer stays on
-    // screen instead of being clipped away (issue #23).
     ui.horizontal(|ui| {
         category_list(ui, state, panel_h);
         paint_vertical_line(ui, panel_h);
@@ -99,8 +63,6 @@ fn body(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
     ui.add_space(10.0);
     footer(ui, state);
 }
-
-// --- Left column: category list -------------------------------------------------
 
 fn category_list(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(CATEGORY_WIDTH, panel_h), Sense::hover());
@@ -124,7 +86,6 @@ fn category_list(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
     }
 }
 
-/// One category row. Returns `true` only when an enabled row was clicked.
 fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
     let width = ui.available_width();
     let sense = if enabled {
@@ -168,17 +129,12 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
     response.clicked()
 }
 
-// --- Right pane: setting rows ---------------------------------------------------
-
 fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
     let category = state.ui.settings_category;
     if category == SettingsCategory::Git {
         refresh_version_badge(state);
     }
-    // The badge is tiny; clone it out so the draft can stay mutably
-    // borrowed while the page renders.
     let version_badge = state.ui.git_version_badge.clone();
-    // Fixed-size pane: the ScrollArea scrolls, it never resizes the window.
     let (rect, _) = ui.allocate_exact_size(Vec2::new(PANEL_WIDTH, panel_h), Sense::hover());
     let mut pane = ui.new_child(
         UiBuilder::new()
@@ -186,8 +142,6 @@ fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
             .layout(egui::Layout::top_down(Align::Min)),
     );
     if category == SettingsCategory::ProtectedBranches {
-        // The chips page also edits the new-pattern input on UiState, so it
-        // reaches the draft through `state` instead of a pre-taken `&mut`.
         egui::ScrollArea::vertical()
             .id_salt("settings_protected_branches")
             .max_height(panel_h)
@@ -217,8 +171,6 @@ fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
         });
 }
 
-/// Run the live `git --version` check behind the draft executable (issue
-/// #26) whenever the draft path changed since the last check.
 fn refresh_version_badge(state: &mut AppState) {
     let Some(draft) = state.ui.settings_draft.as_ref() else {
         return;
@@ -242,7 +194,6 @@ fn page_title(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
 }
 
-/// General: commit-surface behavior. Screen 11 keeps this page light.
 fn general_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.checkbox(
         &mut s.restore_workspace,
@@ -250,8 +201,6 @@ fn general_page(ui: &mut Ui, s: &mut VcsSettings) {
     );
 }
 
-/// Git (screen 11): the git executable and remote management. The engine
-/// itself is not a setting (ADR-0030): one composed adapter runs everything.
 fn git_page(ui: &mut Ui, s: &mut VcsSettings, version_badge: Option<&Result<String, String>>) {
     ui.add_space(2.0);
     setting_row(
@@ -287,8 +236,6 @@ fn git_page(ui: &mut Ui, s: &mut VcsSettings, version_badge: Option<&Result<Stri
     remotes.on_disabled_hover_text("The remote manager is not available yet");
 }
 
-/// Update Method: how incoming commits integrate and how a dirty tree is
-/// swept first (screen 11).
 fn update_method_page(ui: &mut Ui, s: &mut VcsSettings) {
     setting_row(
         ui,
@@ -380,7 +327,6 @@ fn update_method_page(ui: &mut Ui, s: &mut VcsSettings) {
     );
 }
 
-/// Multi-Root (issue #26): cross-root policy; per-root overrides land later.
 fn multi_root_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.checkbox(
         &mut s.synchronous_branches,
@@ -388,10 +334,6 @@ fn multi_root_page(ui: &mut Ui, s: &mut VcsSettings) {
     );
 }
 
-/// Protected Branches (screen 11): the patterns that gate cascading push,
-/// delete, and force operations against matching branches, rendered as
-/// removable chips with an add control. Edits land on the draft only; Apply
-/// makes the edited set the one every gate reads.
 fn protected_branches_page(ui: &mut Ui, state: &mut AppState) {
     ui.label(RichText::new("Protected branch patterns").strong());
     ui.label(
@@ -430,8 +372,6 @@ fn protected_branches_page(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// One pattern pill with its remove control (`Remove <pattern>` so the
-/// control is queryable per chip).
 fn pattern_chip(ui: &mut Ui, pattern: &str, draft: &mut VcsSettings) {
     ui.scope(|ui| {
         let frame = egui::Frame::new()
@@ -460,7 +400,6 @@ fn pattern_chip(ui: &mut Ui, pattern: &str, draft: &mut VcsSettings) {
     });
 }
 
-/// Appearance: log presentation (screen 11's date format + gutter markers).
 fn appearance_page(ui: &mut Ui, s: &mut VcsSettings) {
     setting_row(
         ui,
@@ -485,7 +424,6 @@ fn appearance_page(ui: &mut Ui, s: &mut VcsSettings) {
     );
 }
 
-/// Advanced: commit-policy warnings and rarely-touched knobs.
 fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.checkbox(&mut s.warn_crlf, "Warn before committing CRLF");
     ui.checkbox(
@@ -525,9 +463,6 @@ fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
 
     ui.add_space(6.0);
     ui.label(RichText::new("Commit checks").weak());
-    // "Run git commit hooks" is not one of these placeholders: it is a real
-    // control on the commit card's options menu, per commit rather than
-    // IDE-wide.
     let mut off = false;
     let resp = ui.add_enabled(false, egui::Checkbox::new(&mut off, "Sign-off commits"));
     resp.on_disabled_hover_text(tooltip);
@@ -563,8 +498,6 @@ fn date_format_label(f: DateFormat) -> &'static str {
     }
 }
 
-/// Row chrome: bold-ish label with optional description on the left, control
-/// right-aligned (spec §8.8 row anatomy).
 fn setting_row(ui: &mut Ui, label: &str, description: &str, control: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -575,8 +508,6 @@ fn setting_row(ui: &mut Ui, label: &str, description: &str, control: impl FnOnce
     });
 }
 
-/// Single-line input made queryable by an explicit accessible label (the
-/// repo-wide kittest pattern, cf. `widgets::input_frame`).
 fn labeled_text_input(ui: &mut Ui, label: &str, buf: &mut String) -> egui::Response {
     let resp = ui.add(TextEdit::singleline(buf).desired_width(INPUT_WIDTH));
     resp.widget_info(|| WidgetInfo::labeled(WidgetType::TextEdit, true, label));
@@ -589,8 +520,6 @@ fn paint_vertical_line(ui: &mut Ui, height: f32) {
         .rect_filled(rect, CornerRadius::ZERO, Palette::LINE);
 }
 
-// --- Footer ---------------------------------------------------------------------
-
 fn footer(ui: &mut Ui, state: &mut AppState) {
     let dirty = state
         .ui
@@ -598,7 +527,6 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         .as_ref()
         .is_some_and(|d| *d != state.settings);
     widgets::dialog_footer(ui, |ui| {
-        // right-to-left layout: the first button renders rightmost.
         let applied = ui
             .scope(|ui| {
                 if !dirty {
@@ -611,11 +539,8 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
             apply_settings(state);
         }
         if widgets::compact_button(ui, "Cancel").clicked() {
-            // `show` reconciles this with the window X and drops the draft.
             state.ui.settings_open = false;
         }
-        // Screen 11: Restore defaults sits on the footer's left and resets
-        // the *visible category* only — edits elsewhere survive.
         ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
             if widgets::ghost_button(ui, None, "Restore defaults").clicked() {
                 restore_category_defaults(state);
@@ -624,8 +549,6 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Reset the visible category's fields in the draft to `VcsSettings::default`
-/// values (issue #26, screen 11). Never persists by itself; Apply does.
 fn restore_category_defaults(state: &mut AppState) {
     let Some(draft) = state.ui.settings_draft.as_mut() else {
         return;
@@ -661,9 +584,6 @@ fn restore_category_defaults(state: &mut AppState) {
     }
 }
 
-/// Persist the draft into live state + `.turbogit/state.ron`, rebuild the
-/// engine behind the seam (ADR-0001: a changed git binary or backend applies
-/// live), and keep the modal open with a clean draft.
 fn apply_settings(state: &mut AppState) {
     let Some(draft) = state.ui.settings_draft.clone() else {
         return;

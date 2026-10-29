@@ -1,25 +1,3 @@
-//! Issue #23 — Cross-repo conflict propagation (screen 07 "SAME CONFLICT
-//! ELSEWHERE" panel).
-//!
-//! Behavior under test, exercised through the public service seam
-//! `turbogit_services::conflict_propagation`:
-//!
-//! - `find_matches` scans every other registered root's conflicted files and
-//!   returns, per root, the paths whose conflict hunks are byte-identical
-//!   to the source root's hunks (same `(ours, theirs)` pairs, in the same
-//!   order, with the same non-conflict surroundings).
-//! - `apply_to_matches` writes the source's resolution to each matched file
-//!   in every root that has at least one full match, staging the resolved
-//!   content; roots with no matching files are left completely untouched.
-//! - Repos whose conflict hunks differ in any way are not touched, even when
-//!   they share a path name with the source.
-//!
-//! All tests drive a real CLI engine against temporary repositories — same
-//! integration style the rest of `turbogit-services`' cross-repo suites
-//! use (`commit_across`, `cherry_across`). Assertions are on the on-disk
-//! working tree + the index (`git status` / `git diff --cached`), which is
-//! the observable contract a multi-root user cares about.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -30,11 +8,6 @@ use turbogit_services::conflict::{CHOICE_OURS, CHOICE_THEIRS};
 use turbogit_services::conflict_propagation::{apply_to_matches, find_matches};
 use turbogit_services::multi_root::register;
 
-/// Run `git` without asserting success (a merge that conflicts exits non-zero).
-/// Run `git` WITHOUT asserting success, and deliberately NOT
-/// `test_support::git_seed::git` — which asserts it: `seed_conflict` starts a
-/// `git merge` expected to exit non-zero, and that refusal is the conflict the
-/// suite propagates.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .current_dir(repo)
@@ -65,12 +38,9 @@ impl Repo {
     }
 }
 
-/// Snapshot a `Root` from the live engine (so `MultiRootManager` reflects
-/// what the production app would see after `discover_roots` + `register_all`).
 fn snapshot_root(executor: &dyn GitExecutor, path: &Path) -> Root {
     turbogit_services::multi_root::build_root(executor, path).expect("snapshot root")
 }
-/// Build a manager with `paths` registered as fresh roots.
 fn manager_with(executor: &dyn GitExecutor, paths: &[PathBuf]) -> MultiRootManager {
     let mut mgr = MultiRootManager::default();
     for p in paths {
@@ -79,9 +49,6 @@ fn manager_with(executor: &dyn GitExecutor, paths: &[PathBuf]) -> MultiRootManag
     mgr
 }
 
-/// Register a path as a `Root` snapshot without snapshotting through the
-/// engine (used for paths that are not git repositories on purpose, to
-/// exercise per-root failure isolation).
 fn manager_with_ghost(
     real_executor: &dyn GitExecutor,
     real_paths: &[PathBuf],
@@ -110,8 +77,6 @@ fn manager_with_ghost(
     mgr
 }
 
-/// Seed a one-file conflict (`conf.txt`) and leave the merge mid-flight.
-/// `main_content` is what HEAD on `main` writes; `side_content` is what
 /// `side` writes. Seven unchanged lines between the edits keep git from
 /// coalescing into a single conflict region if both branches diverge
 /// identically.
@@ -131,24 +96,14 @@ fn seed_conflict(repo: &Repo, main_content: &str, side_content: &str) {
     git_unchecked(&repo.path, &["merge", "--no-edit", "side"]);
 }
 
-/// The source's resolution for the two-hunk conflict: ours on hunk 1,
-/// theirs on hunk 2. This is the resolution the propagation service must
-/// replay verbatim into every matching target file.
 fn source_resolutions() -> Vec<Option<u8>> {
     vec![Some(CHOICE_OURS), Some(CHOICE_THEIRS)]
 }
 
-/// The composed source content the service must replay into matching
-/// targets. Computed from the same segments+resolutions the UI uses:
-/// `MAIN-*` for hunk 1, `SIDE-*` for hunk 2.
 fn composed_source() -> &'static str {
     "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n"
 }
 
-// -------------------------------------------------------------- tests ----
-
-/// `find_matches` returns the OTHER roots whose conflicted files contain
-/// the source hunk; the source root itself is excluded.
 #[test]
 fn find_matches_lists_other_roots_with_the_identical_hunk() {
     let parent = tempfile::tempdir().unwrap();
@@ -207,9 +162,6 @@ fn find_matches_lists_other_roots_with_the_identical_hunk() {
     );
 }
 
-/// `apply_to_matches` writes the source's composed resolution into every
-/// matched file in every matched root, stages the file, and reports per-root
-/// success — all in one call.
 #[test]
 fn apply_to_matches_resolves_and_stages_every_matched_file() {
     let parent = tempfile::tempdir().unwrap();
@@ -243,7 +195,6 @@ fn apply_to_matches_resolves_and_stages_every_matched_file() {
         &source_resolutions(),
     );
 
-    // peer_match is the only resolved target — peer_miss is untouched.
     assert_eq!(
         outcomes.len(),
         1,
@@ -257,7 +208,6 @@ fn apply_to_matches_resolves_and_stages_every_matched_file() {
         outcomes[0].result,
     );
 
-    // The on-disk file is exactly the source's composed resolution.
     let written = std::fs::read_to_string(peer_match.path.join("conf.txt")).unwrap();
     assert_eq!(
         written,
@@ -265,7 +215,6 @@ fn apply_to_matches_resolves_and_stages_every_matched_file() {
         "peer_match's conf.txt must equal the source's composed resolution",
     );
 
-    // The resolved file is staged (no longer reported as conflicted).
     let status = executor.status(&peer_match.path).unwrap();
     assert!(
         !status.conflicted.contains(&PathBuf::from("conf.txt")),
@@ -273,7 +222,6 @@ fn apply_to_matches_resolves_and_stages_every_matched_file() {
         status.conflicted,
     );
 
-    // peer_miss is untouched: same conflicted path, same on-disk content.
     let written_miss = std::fs::read_to_string(peer_miss.path.join("conf.txt")).unwrap();
     assert!(
         written_miss.contains("<<<<<<<"),
@@ -286,17 +234,12 @@ fn apply_to_matches_resolves_and_stages_every_matched_file() {
     );
 }
 
-/// A root that has one matching file and one non-matching file gets the
-/// matching file resolved while the non-matching file is left exactly as-is
-/// (no partial writes, no stage). This is the "Repos where the conflict
-/// differs in any way are not touched" guarantee at the per-file level.
 #[test]
 fn root_with_one_matching_and_one_different_file_is_only_partially_touched() {
     let parent = tempfile::tempdir().unwrap();
     let src = Repo::init(parent.path(), "src");
     let peer = Repo::init(parent.path(), "peer");
 
-    // Base: both files exist on both branches with no edits.
     let conf_base = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
     let conf2_base = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\niota\nkappa\n";
     for repo in [&src, &peer] {
@@ -349,7 +292,6 @@ fn root_with_one_matching_and_one_different_file_is_only_partially_touched() {
     );
     assert!(outcomes[0].result.is_ok(), "peer resolution must succeed");
 
-    // conf.txt is resolved; conf2.txt (different hunks) is untouched.
     let conf1 = std::fs::read_to_string(peer.path.join("conf.txt")).unwrap();
     assert_eq!(
         conf1,
@@ -362,8 +304,6 @@ fn root_with_one_matching_and_one_different_file_is_only_partially_touched() {
         "conf2.txt must keep its conflict markers — its hunks don't match the source; got:\n{conf2}",
     );
 
-    // The index reflects the partial apply: conf.txt staged, conf2.txt
-    // still conflicted.
     let status = executor.status(&peer.path).unwrap();
     assert!(
         !status.conflicted.contains(&PathBuf::from("conf.txt")),
@@ -375,9 +315,6 @@ fn root_with_one_matching_and_one_different_file_is_only_partially_touched() {
     );
 }
 
-/// When no other root has matching hunks, `apply_to_matches` is a no-op:
-/// it returns zero outcomes and mutates nothing — neither stages nor writes
-/// — anywhere outside the source root.
 #[test]
 fn apply_to_matches_is_a_noop_when_no_other_root_has_matching_hunks() {
     let parent = tempfile::tempdir().unwrap();
@@ -409,7 +346,6 @@ fn apply_to_matches_is_a_noop_when_no_other_root_has_matching_hunks() {
         "no matching hunks anywhere → no propagation; got {outcomes:?}",
     );
 
-    // Source untouched: still conflicted, original markers still present.
     let written_src = std::fs::read_to_string(src.path.join("conf.txt")).unwrap();
     assert!(
         written_src.contains("<<<<<<<"),
@@ -421,7 +357,6 @@ fn apply_to_matches_is_a_noop_when_no_other_root_has_matching_hunks() {
         "source must remain conflicted",
     );
 
-    // The miss root is also untouched.
     let written_miss = std::fs::read_to_string(peer_miss.path.join("conf.txt")).unwrap();
     assert!(
         written_miss.contains("<<<<<<<"),
@@ -429,11 +364,6 @@ fn apply_to_matches_is_a_noop_when_no_other_root_has_matching_hunks() {
     );
 }
 
-/// Per-repo failure is isolated: when one target root's resolution fails,
-/// other targets still succeed and the failure is reported in the per-root
-/// outcome. We simulate the failure by registering a "ghost" root — a path
-/// that exists on disk but was never `git init`-ed — so any git operation
-/// on it surfaces as a real engine error.
 #[test]
 fn per_root_failures_are_isolated_and_reported() {
     let parent = tempfile::tempdir().unwrap();
@@ -478,7 +408,6 @@ fn per_root_failures_are_isolated_and_reported() {
         "ghost root (no git repo) must surface as a failure",
     );
 
-    // ok actually resolved: file contents match the source's resolution.
     let ok_conf = std::fs::read_to_string(ok.path.join("conf.txt")).unwrap();
     assert_eq!(
         ok_conf,
@@ -487,9 +416,6 @@ fn per_root_failures_are_isolated_and_reported() {
     );
 }
 
-/// Sanity: a single-root workspace has nothing to propagate to — the source
-/// is the only root, so `find_matches` is empty and `apply_to_matches` is a
-/// no-op (and the source itself is never touched).
 #[test]
 fn single_root_workspace_has_nothing_to_propagate_to() {
     let parent = tempfile::tempdir().unwrap();

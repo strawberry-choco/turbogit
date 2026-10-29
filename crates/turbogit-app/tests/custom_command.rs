@@ -1,11 +1,3 @@
-//! Issue 13 — custom command across a selection: the app seam.
-//!
-//! Headless tests over real temporary repositories through the production
-//! registration path ([`AppState::for_roots`]): a user-typed git command
-//! runs on every confirmed repo through the same run monitor the built-in
-//! bulk operations use, recent commands are remembered per workspace, and
-//! destructive-looking commands expose the extra-confirmation state.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::git_seed::git;
@@ -13,10 +5,6 @@ use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
 use turbogit_services::bulk_run::RowState;
 
-/// Create an initialized temp repository with one base commit on `main`.
-/// Kept local, not `test_support::git_seed::repo_with_one_commit`: the base
-/// commit is `base.txt`, not `README.md`, and the change list, diff pane and
-/// branch/HEAD rows in this suite name the file they changed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -30,7 +18,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A two-repo project: `alpha` and `ui`.
 fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join(tag);
@@ -41,10 +28,6 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     (tmp, project, alpha, ui)
 }
 
-/// Settings with nothing protected: the fan-out mechanics below predate the
-/// per-root protected-branch refusal, and the shipped default would refuse
-/// every repo they run on (`main`). The refusal itself is asserted with the
-/// default settings in the protected suite at the bottom of this file.
 fn unprotected() -> turbogit_domain::model::VcsSettings {
     turbogit_domain::model::VcsSettings {
         protected_branch_patterns: Vec::new(),
@@ -65,14 +48,6 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
     turbogit_domain::model::RootId(path.to_path_buf().into())
 }
 
-/// Step the event pump until every monitor row is in a terminal state
-/// (Done / Failed / Skipped), the run has settled, or the deadline passes.
-///
-/// The settle is part of the wait, not a courtesy: terminal rows arrive as
-/// progress events, and the pass's completion is a separate event that lands
-/// afterwards — so a wait that reads only the rows can return before the
-/// aggregate toast and the per-root feed entries exist, and a later feed
-/// assertion then races the worker.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -92,22 +67,17 @@ fn wait_for_run_end(state: &mut AppState) {
     }
 }
 
-// -- Custom command across the selection ---------------------------------------
-
 #[test]
 fn a_typed_command_runs_on_every_selected_repo_through_the_monitor() {
     let (_tmp, project, alpha, ui) = project("cc-run");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    // The modal opens from the operations grid's "Custom command…" tile and
-    // the command is typed in; the preflight matrix predicts a full run.
     state.open_bulk_preflight(BulkOp::Custom);
     state.ui.bulk_command = "git branch bulk-marker".to_string();
     let pf = state.bulk_preflight(BulkOp::Custom);
     assert_eq!(pf.will_run(), 2, "an unprotected fleet all runs");
     assert_eq!(pf.total(), 2);
 
-    // Confirming runs the will-run rows through the run monitor.
     let plan = BulkPlan {
         op: BulkOp::Custom,
         roots: pf.rows.iter().map(|r| r.root.clone()).collect(),
@@ -132,7 +102,6 @@ fn a_typed_command_runs_on_every_selected_repo_through_the_monitor() {
         "the monitor shows the typed command, not an op name"
     );
 
-    // The command's effect is real, on every selected repo.
     for repo in [&alpha, &ui] {
         let branches = git(repo, &["branch", "--list", "bulk-marker"]);
         assert!(branches.contains("bulk-marker"), "{repo:?} got the branch");
@@ -174,8 +143,6 @@ fn a_failed_command_surfaces_the_git_stderr_on_the_row() {
     }
 }
 
-// -- Destructive-looking commands ----------------------------------------------
-
 #[test]
 fn destructive_commands_expose_the_extra_confirmation_state() {
     let (_tmp, project, alpha, ui) = project("cc-destructive");
@@ -195,8 +162,6 @@ fn destructive_commands_expose_the_extra_confirmation_state() {
         "reset is destructive-looking and must arm the extra confirmation"
     );
 }
-
-// -- Recent commands ------------------------------------------------------------
 
 #[test]
 fn confirmed_commands_are_remembered_newest_first_without_duplicates() {
@@ -268,15 +233,9 @@ fn the_recent_list_is_capped_and_stays_newest_first() {
     assert!(!recents.iter().any(|c| c == "git cmd-0"), "oldest dropped");
 }
 
-// -- Protected-branch policy ----------------------------------------------------
-
-/// The refusal is per root and about the root: a command typed against a
-/// protected branch is refused whatever it was, its monitor row and feed
-/// entry name the branch (never the command), and nothing runs.
 #[test]
 fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     let (_tmp, project, alpha, ui) = project("cc-protected");
-    // Shipped defaults: `main` is protected, and both repos sit on it.
     let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
     state.ui.repo_selection = [rid(&alpha), rid(&ui)].into_iter().collect();
 
@@ -299,7 +258,6 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     state.run_bulk_confirmed(plan);
     wait_for_run_end(&mut state);
 
-    // The monitor's row labels name the branch, not the command.
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
     assert_eq!(view.rows.len(), 2);
     for row in &view.rows {
@@ -318,7 +276,6 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
         }
     }
 
-    // The same reason is durable in the activity feed, one entry per root.
     let per_root: Vec<&str> = state
         .ui
         .activity
@@ -347,16 +304,9 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     }
 }
 
-/// Retry re-dispatches every Skipped row — forcing the attempt the policy
-/// refused — so for `Custom` the refusal that BEARS the policy is the one on
-/// the step: the matrix's seeding can be skipped past by a plan that names no
-/// roots, and the row must then still be refused where the command would
-/// otherwise reach git. The command here moves HEAD if it runs, so the
-/// refusal is legible as a branch that did not.
 #[test]
 fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
     let (_tmp, project, alpha, _ui) = project("cc-retry-protected");
-    // Shipped defaults: `main` is protected, and `alpha` sits on it.
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     state.ui.repo_selection = [rid(&alpha)].into_iter().collect();
 
@@ -394,9 +344,6 @@ fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
         head_before,
         "the refused command ran nothing on the protected branch"
     );
-    // `Error` and not the seeding's `Warning`: a preflight refusal records
-    // itself per root too, with the same words, so only the kind tells this
-    // entry apart from the one the matrix wrote before anything ran.
     assert!(
         state.ui.activity.entries.iter().any(|e| {
             e.repo.as_deref() == Some("alpha")
@@ -407,9 +354,6 @@ fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
     );
 }
 
-/// The grammar is unrestricted: the policy refuses roots, not commands. A
-/// destructive-looking command still runs — the confirmation gate is unchanged
-/// and this seam dispatches past it exactly as before.
 #[test]
 fn a_destructive_command_still_runs_on_an_unprotected_root() {
     let (_tmp, project, alpha, _ui) = project("cc-grammar");

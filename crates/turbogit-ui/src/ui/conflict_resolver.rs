@@ -1,23 +1,3 @@
-//! Redesigned conflict resolver (issue #22, screen 07).
-//!
-//! Dedicated tool window with three EQUAL panes Local | Result | Incoming,
-//! per-conflict actions (Take ours / Take theirs / Take both · theirs first),
-//! per-conflict Undo, Prev/Next navigation, Auto-advance to next conflict,
-//! "Apply to all N remaining" (which names both its outcomes — the negative
-//! one included), a left list whose rows carry each file's
-//! file-level clash kind (`both modified`, `deleted by them`, … — the seven
-//! vocabulary kinds, a different axis from the per-hunk marker grammar), and
-//! header actions Abort merge / Continue merge.
-//!
-//! The Result pane is a FREE-TEXT editable TextEdit: when the user has
-//! touched it, the typed text IS the resolved content on Apply (matches
-//! screen 07's "Edit manually" button). When untouched, the resolved content
-//! is the auto-composed buffer built from per-conflict choices.
-//!
-//! Conflict segment reading, result composition and the choice ordinals are
-//! `crate::ui::conflicts`' editor core — one implementation shared with the
-//! inline merge editor over the same `conflict_segs` / `conflict_res` state.
-
 use crate::theme::Palette;
 use crate::ui::components::{self, KitButton};
 use crate::ui::conflicts::{
@@ -36,9 +16,6 @@ use turbogit_domain::model::{
 
 use std::path::{Path, PathBuf};
 
-/// Editable Result cell for the ACTIVE conflict. Wires a multiline TextEdit
-/// over `state.ui.conflict_text`; typing flips `conflict_resolver_edited`
-/// so Apply uses the typed text verbatim.
 fn result_text_edit(ui: &mut Ui, state: &mut AppState) {
     let mut text = state.ui.conflict_text.clone();
     let resp = TextEdit::multiline(&mut text)
@@ -52,10 +29,6 @@ fn result_text_edit(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// Tinted side section carrying the conflict glyph + per-conflict action
-/// buttons. The active conflict (per `state.ui.conflict_resolver_active_idx`)
-/// is the one whose buttons render in the footer; others render compact
-/// "Take ours" / "Take theirs" inline buttons.
 fn conflict_block(
     ui: &mut Ui,
     state: &mut AppState,
@@ -68,20 +41,13 @@ fn conflict_block(
     let active = state.ui.conflict_resolver_active_idx == res_i;
     let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
 
-    // A resolved block keeps only the side(s) its resolution kept and drops
-    // the marker strips — the absent side is the resolution's visual marker,
-    // not a word, so a resolved block reads differently at a glance.
     if chosen.is_none() {
-        // Marker strips frame the discrete conflict block. The three literals come
-        // from `turbogit_domain` — the crate that also parses them — so the painter
-        // cannot name a different marker than the parser does.
         conflict_pane::equal_panes(ui, |cols| {
             conflict_pane::marker_strip(&mut cols[0], CONFLICT_MARKER_OURS);
             conflict_pane::marker_strip(&mut cols[1], CONFLICT_MARKER_SEPARATOR);
             conflict_pane::marker_strip(&mut cols[2], CONFLICT_MARKER_THEIRS);
         });
     }
-    // Tinted yours/theirs + editable Result.
     conflict_pane::equal_panes(ui, |cols| {
         if chosen != Some(CHOICE_THEIRS) {
             conflict_pane::side_section(&mut cols[0], ours, Side::Local);
@@ -97,7 +63,6 @@ fn conflict_block(
         }
     });
     if active {
-        // Per-conflict action row (only for the active conflict).
         ui.horizontal(|ui| {
             if ui.button(format!("Take ours {block}")).clicked() {
                 accept_side(state, res_i, CHOICE_OURS);
@@ -112,10 +77,6 @@ fn conflict_block(
             {
                 resolve(state, res_i, CHOICE_BOTH_THEIRS_FIRST);
             }
-            // Undo is enabled whenever the conflict currently carries a
-            // resolution — Undo always takes the conflict back to
-            // unresolved. The undo stack records the prior choice so
-            // future revisions can step through history.
             let can_undo = chosen.is_some();
             if ui
                 .add_enabled(can_undo, egui::Button::new(format!("Undo {block}")))
@@ -125,7 +86,6 @@ fn conflict_block(
             }
         });
     } else {
-        // Compact row for non-active conflicts.
         ui.horizontal(|ui| {
             ui.label(format!("Conflict {block}"));
             if ui.button("Take ours").clicked() {
@@ -142,19 +102,10 @@ fn conflict_block(
     ui.add_space(4.0);
 }
 
-/// Whether the selected file already carries merged changes: any conflict
-/// resolved, or the Result pane free-edited. Per FILE, not per conflict —
-/// matching the reference's "This file already contains merged changes"
-/// (the per-file vs per-conflict trigger is UNVERIFIED against the running
-/// product and assumed per file).
 fn file_has_merged_changes(state: &AppState) -> bool {
     state.ui.conflict_resolver_edited || state.ui.conflict_res.iter().any(|r| r.is_some())
 }
 
-/// One take-ours / take-theirs click (the resolver's Accept Yours / Accept
-/// Theirs). On a file that already carries merged changes this confirms
-/// first — the pending take is only applied by the confirm's dangerous
-/// affirmative (`Discard and Accept`); elsewhere it resolves directly.
 fn accept_side(state: &mut AppState, seg_idx: usize, choice: u8) {
     if file_has_merged_changes(state) {
         state.ui.conflict_overwrite_pending = Some((seg_idx, choice));
@@ -163,9 +114,6 @@ fn accept_side(state: &mut AppState, seg_idx: usize, choice: u8) {
     }
 }
 
-/// Record one block resolution: update the active choice, push the prior
-/// choice onto the undo stack, refresh the composed buffer (unless the
-/// user has free-text edited it), and honor Auto-advance.
 fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
     while state.ui.conflict_resolver_undo.len() <= seg_idx {
         state.ui.conflict_resolver_undo.push(None);
@@ -184,14 +132,11 @@ fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
 }
 
 fn undo_resolution(state: &mut AppState, seg_idx: usize) {
-    // always takes you back to unresolved.
     state.ui.conflict_res[seg_idx] = None;
     if !state.ui.conflict_resolver_edited {
         state.ui.conflict_text = compose(&state.ui.conflict_segs, &state.ui.conflict_res);
     }
 }
-/// Move the active cursor to the next still-unresolved conflict (wrapping
-/// at the end). No-op if every conflict is already resolved.
 fn advance_active(state: &mut AppState) {
     let n = state.ui.conflict_res.len();
     if n == 0 {
@@ -212,7 +157,6 @@ fn advance_active(state: &mut AppState) {
     }
 }
 
-/// Open the redesigned resolver for one conflicted file.
 pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
     let Some(res) = seed_conflict_state(state, root, path) else {
         return;
@@ -223,22 +167,15 @@ pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
     state.ui.conflict_resolver_active_idx = 0;
     state.ui.conflict_resolver_selected = Some(path.to_path_buf());
     state.ui.conflict_overwrite_pending = None;
-    // A bulk verdict belongs to the file it was clicked on; a new file
-    // starts with nothing reported.
     state.ui.conflict_bulk_report = None;
     state.ui.conflict_resolver_open = true;
 }
 
-/// Render the redesigned Resolve Conflicts tool window. No-op when the
-/// resolver is closed or no root has any conflicts.
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     let id = match &state.selected_root {
         Some(id) => id.clone(),
         None => return,
     };
-    // Each conflicted path paired with its file-level clash kind:
-    // `None` when the engine does not classify, and the row then carries no
-    // word rather than a guessed one.
     let conflicted: Vec<(PathBuf, Option<ConflictKind>)> = state
         .multi
         .by_id(&id)
@@ -253,12 +190,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if conflicted.is_empty() && !state.ui.conflict_resolver_open {
         return;
     }
-    // Refresh auto-merged + merge-in-progress on every render. Asked of the
-    // engine, not of `.git/MERGE_HEAD` here: a second reader of git's markers
-    // would be a second answer, and this one decides whether the window stays
-    // open. Cheap enough to ask in the frame because it is a `stat` of the
-    // repository's git directory and never a git process, and it is asked only
-    // once this root has conflicts or the window is already open.
     let root = state.selected_path();
     if let Some(r) = &root {
         if matches!(state.holding_operation(r), Some(OwnedOperation::Merge)) {
@@ -292,11 +223,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     render_overwrite_confirm(ui, state);
 }
 
-/// The `Overwrite Changes` confirm. The affirmative is the
-/// dangerous sentence (`Discard and Accept`) and wears the primary kit fill;
-/// the safe option (`Keep Merged Changes`) does nothing. Naming carries the
-/// safety — the button order is UNVERIFIED against the reference and kept in
-/// dangerous-then-safe reading order.
 fn render_overwrite_confirm(ui: &mut Ui, state: &mut AppState) {
     let Some((seg, choice)) = state.ui.conflict_overwrite_pending else {
         return;
@@ -331,17 +257,9 @@ fn render_overwrite_confirm(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The confirm's safe option. Not a kit variant — the four kit fills have no
-/// `SURFACE_2` idle — so this is an egui button filled with the raised-on-card
-/// token, which aliases `SURFACE_2`: the two confirm options stay visibly
-/// different rects without minting a fifth kit kind.
 fn overwrite_safe_button(ui: &mut Ui, label: &str) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(label)).fill(Palette::RAISED_ON_CARD))
 }
-/// The status word a file-list row carries for its file-level clash kind.
-/// TurboGit's own strings for the seven vocabulary
-/// kinds the reference names — deliberately NOT the editor's per-hunk marker
-/// grammar (`Modified line` / `Conflicting lines`), which is a different axis.
 fn kind_word(kind: ConflictKind) -> &'static str {
     match kind {
         ConflictKind::BothDeleted => "both deleted",
@@ -368,9 +286,6 @@ fn render_file_list(
     for (path, kind) in conflicted {
         let label = path.display().to_string();
         let is_selected = state.ui.conflict_resolver_selected.as_ref() == Some(path);
-        // The kind word rides the row so a merge can be triaged by reading the
-        // list. A row with no classified kind (an engine that does
-        // not report kinds) shows the path alone rather than a guessed word.
         let row = match kind {
             Some(kind) => format!("{label} — {}", kind_word(*kind)),
             None => label,
@@ -397,7 +312,7 @@ fn render_file_list(
     }
 }
 
-/// The bulk control: `Apply to all N remaining` with its scope option — the
+/// The bulk control: `Apply to all N remaining` with its scope option, the
 /// deliberate fold of the reference's `Apply Non-Conflicting Changes` /
 /// `Resolve All Simple Conflicts` pair into one control, the side scope being
 /// an option on it rather than two more buttons. It
@@ -408,7 +323,7 @@ fn render_file_list(
 /// The button stays visible at zero remaining: a click
 /// with nothing left to resolve REPORTS the negative result under the
 /// control instead of staying silent, which a control that vanished could
-/// never do. The scope option — meaningless with nothing remaining — is
+/// never do. The scope option, meaningless with nothing remaining, is
 /// what hides.
 fn render_bulk_control(ui: &mut Ui, state: &mut AppState) {
     let n_remaining = state.ui.conflict_res.iter().filter(|r| r.is_none()).count();
@@ -438,8 +353,6 @@ fn render_bulk_control(ui: &mut Ui, state: &mut AppState) {
     {
         apply_to_all_remaining(state);
     }
-    // The bulk apply's outcome, named: the negative result is
-    // reported, not left silent — the outcome that regresses silently.
     match state.ui.conflict_bulk_report {
         Some(ConflictBulkReport::AllResolved) => {
             ui.label(
@@ -460,7 +373,6 @@ fn render_resolver_body(
     state: &mut AppState,
     conflicted: &[(PathBuf, Option<ConflictKind>)],
 ) {
-    // Header
     let path_disp = state
         .ui
         .conflict_resolver_selected
@@ -514,7 +426,6 @@ fn render_resolver_body(
     });
 
     ui.separator();
-    // Footer
     let total = state.ui.conflict_res.len();
     let active = state.ui.conflict_resolver_active_idx;
     ui.horizontal(|ui| {
@@ -536,11 +447,6 @@ fn render_resolver_body(
             state.ui.conflict_resolver_edited = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // The finish control is WITHHELD while anything is unresolved —
-            // no fill paints for its slot at all, not a tinted one. A
-            // disabled control in this design is withheld, not greyed: Quiet's
-            // disabled fill is TRANSPARENT, so one kit kind at two states
-            // carries both looks without minting a fifth button flavour.
             ui.scope(|ui| {
                 if unresolved > 0 {
                     ui.disable();
@@ -568,14 +474,12 @@ fn render_resolver_body(
 
 fn render_panes(ui: &mut Ui, state: &mut AppState) {
     let segs = state.ui.conflict_segs.clone();
-    // Pane headers.
     conflict_pane::equal_panes(ui, |cols| {
         conflict_pane::pane_header(&mut cols[0], "Local (Yours)", false);
         conflict_pane::pane_header(&mut cols[1], "Result", true);
         conflict_pane::pane_header(&mut cols[2], "Incoming (Theirs)", false);
     });
 
-    // Keyboard navigation: Alt+Up / Alt+Down move the active cursor.
     if ui.input(|i| i.key_pressed(Key::ArrowUp) && i.modifiers == Modifiers::ALT)
         && state.ui.conflict_resolver_active_idx > 0
     {
@@ -604,9 +508,6 @@ fn render_panes(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// "Apply to all N remaining": fills every still-unresolved conflict with
-/// the scoped choice — the active conflict's last-applied choice (ours as a
-/// fallback), or the side the scope option pins.
 fn apply_to_all_remaining(state: &mut AppState) {
     let active = state.ui.conflict_resolver_active_idx;
     let choice = match state.ui.conflict_resolver_scope {
@@ -632,9 +533,6 @@ fn apply_to_all_remaining(state: &mut AppState) {
     if !state.ui.conflict_resolver_edited {
         state.ui.conflict_text = compose(&state.ui.conflict_segs, &state.ui.conflict_res);
     }
-    // Both outcomes are named — including "nothing to do", which
-    // the reference reports rather than leaves silent. One file's bulk fill
-    // resolves all-or-nothing, so no partial outcome exists here to report.
     state.ui.conflict_bulk_report = Some(if filled == 0 {
         ConflictBulkReport::NoneResolved
     } else {
@@ -649,7 +547,7 @@ fn apply_resolution(state: &mut AppState) {
     if let (Some(r), Some(p)) = (r, p) {
         state.dispatch(writes::apply_merge_resolution(&r, &p, &content));
     }
-    // Keep the resolver open while a merge is still pending Continue —
+    // Keep the resolver open while a merge is still pending Continue,
     // the file is staged but the merge commit hasn't been written yet.
     if !state.ui.merge_in_progress {
         state.ui.conflict_resolver_open = false;
@@ -674,9 +572,6 @@ fn held_operation(state: &turbogit_app::state::AppState) -> OwnedOperation {
 fn abort_merge(state: &mut AppState) {
     let owner = held_operation(state);
     if let Some(r) = state.selected_root.clone() {
-        // The named in-flight resolution, shared with the status
-        // bar's item and the palette entry: one verb, one operation, so the
-        // three routes cannot drift into three different dispatch shapes.
         state.dispatch(Operation::Resolve {
             root: r,
             owner,

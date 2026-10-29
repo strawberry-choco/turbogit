@@ -1,14 +1,3 @@
-//! Issue #08 — Multi-repo selection.
-//!
-//! The workspace tree grows tri-state checkboxes (repo rows toggle
-//! independently; a group checkbox selects/clears its descendant repos),
-//! a bottom selection bar (count / quick actions / Clear), and a central
-//! summary surface (aggregate stats + a per-repo table) with a
-//! "Pin as view" affordance whose views restore the selection.
-//!
-//! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
-//! over temporary git repositories and assert only on public surfaces:
-//! painted labels, accessible widget labels, and `AppState` transitions.
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::repo_with_origin;
@@ -19,17 +8,10 @@ use test_support::harness::{
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
-/// Create an initialized temp repository with one base commit on `main`
-/// plus an `origin` remote so upstream reads can be exercised.
-///
-/// Same shape as `git_seed::repo_with_origin`, so that recipe owns it; only the
-/// remote *name* is read, and that is `origin` either way.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     repo_with_origin(parent, name)
 }
 
-/// A two-group project (`frontend`/alpha, `oss`/lib) under
-/// `test_support::scratch_root("msm-<tag>")/wsb`.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = test_support::scratch_root(&format!("msm-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -43,9 +25,6 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, lib)
 }
 
-/// A four-repo project with two repos per folder — `frontend/{alpha, ui}`
-/// and `oss/{cli, lib}` — so both folder checkboxes display in the
-/// recursive tree. Returns the project dir and the repo paths.
 fn four_repo_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
     let base = test_support::scratch_root(&format!("msf-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -61,12 +40,6 @@ fn four_repo_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
     (project, vec![alpha, ui, cli, lib])
 }
 
-/// Assert some painted galley is exactly `text` (counts paint as their own
-/// galleys, so exact matching keeps "2" distinct from "2 selected / 2").
-///
-/// Kept local because it is stricter than the shared paint queries: it asks
-/// whether the string was its OWN galley, and `1 selected / 2` and `2` are
-/// different rows.
 #[track_caller]
 fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     let texts = painted_text(harness);
@@ -77,11 +50,6 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     );
 }
 
-/// A project whose `foo/bar` chain collapses to one promoted repo: `bar` is the
-/// only repo under `foo`, so the sidebar's checkbox reads the repo's own name
-/// while every path-labelled surface reads the chain that collapsed.
-/// `side` keeps the project folder displaying, which is what leaves `foo` as
-/// the topmost collapsing folder (ADR-0018 D3).
 fn promoted_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = test_support::scratch_root(&format!("msp-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -105,10 +73,6 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
-/// Step frames, yielding to the worker thread a quick action dispatches,
-/// until `needle` is painted (the feedback tests' wait pattern). A worker
-/// op needs a few frames to land; settling on stability alone returns
-/// during the async gap before the completion toast appears.
 fn wait_painted(harness: &mut Harness<'_, AppState>, needle: &str) {
     for _ in 0..1000 {
         harness.step();
@@ -120,8 +84,6 @@ fn wait_painted(harness: &mut Harness<'_, AppState>, needle: &str) {
     panic!("`{needle}` was not painted within 1000 frames");
 }
 
-// -- Checkboxes and the selection bar ----------------------------------------
-
 #[test]
 fn checking_a_repo_checkbox_selects_it_and_opens_the_summary() {
     let (project, alpha, lib) = two_repo_project("repo-check");
@@ -132,26 +94,22 @@ fn checking_a_repo_checkbox_selects_it_and_opens_the_summary() {
     h.get_by_label("Select repo alpha").click();
     settle(&mut h);
 
-    // The summary surface replaces the tool window while a selection is live.
     assert_painted(&h, "Multi-repo selection");
     assert_painted(&h, "REPOS");
     assert_painted(&h, "AHEAD");
     assert_painted(&h, "BEHIND");
     assert_painted(&h, "DIRTY FILES");
-    // The per-repo table with the selected repo.
     assert_painted(&h, "REPO");
     assert_painted(&h, "BRANCH");
     assert_painted(&h, "SYNC");
     assert_painted(&h, "DIRTY");
     assert_painted(&h, "LAST COMMIT");
     assert_painted(&h, "alpha");
-    // The bottom selection bar: count, quick actions, Clear.
     assert_galley(&h, "1 selected / 2");
     assert_painted(&h, "Fetch");
     assert_painted(&h, "Pull");
     assert_painted(&h, "Branch…");
     assert_painted(&h, "Clear");
-    // The Pin as view affordance.
     assert_painted(&h, "Pin as view");
 }
 
@@ -166,10 +124,7 @@ fn checking_a_group_selects_every_descendant_without_collapsing() {
     settle(&mut h);
 
     assert_galley(&h, "2 selected / 4");
-    assert_painted(&h, "alpha"); // the select click must not collapse the group
-
-    // The summary matrix's column geometry: every header label over its cell,
-    // and both band heights the painter was handed.
+    assert_painted(&h, "alpha");
     assert_matrix_geometry(
         &h,
         "LAST COMMIT",
@@ -188,7 +143,7 @@ fn checking_a_group_selects_every_descendant_without_collapsing() {
     h.get_by_label("Select group frontend").click();
     settle(&mut h);
     assert_not_painted(&h, "Multi-repo selection");
-    assert_painted(&h, "alpha"); // the clear click must not collapse either
+    assert_painted(&h, "alpha");
 }
 
 #[test]
@@ -210,16 +165,12 @@ fn the_selection_bar_clear_button_empties_the_selection() {
 
 #[test]
 fn clicking_a_summary_row_focuses_the_root_that_row_is_about() {
-    // Four repos, two per folder, so every folder displays and every summary
-    // row keeps its bare name.
     let (project, repos) = four_repo_project("row-click");
     let state = AppState::for_roots(&project, &repos);
     let lib = repos[3].clone();
     let mut h = harness(state);
     settle(&mut h);
 
-    // Registration focuses the first root, so selecting and clicking the
-    // *other* repo's row is a move the frame can show.
     h.get_by_label("Select repo lib").click();
     settle(&mut h);
     assert!(
@@ -243,8 +194,6 @@ fn clicking_a_promoted_summary_row_focuses_the_repo_behind_its_path_label() {
     let mut h = harness(state);
     settle(&mut h);
 
-    // The sidebar's checkbox reads the repo's bare name; the summary row it
-    // opens is labelled by the path the collapsed chain left behind.
     h.get_by_label("Select repo bar").click();
     settle(&mut h);
     assert!(
@@ -261,8 +210,6 @@ fn clicking_a_promoted_summary_row_focuses_the_repo_behind_its_path_label() {
     );
 }
 
-// -- Quick actions ------------------------------------------------------------
-
 #[test]
 fn fetch_and_pull_quick_actions_dispatch_over_the_selection() {
     let (project, repos) = four_repo_project("quick-ops");
@@ -276,9 +223,6 @@ fn fetch_and_pull_quick_actions_dispatch_over_the_selection() {
     settle(&mut h);
 
     h.get_by_label("Fetch selection").click();
-    // A fetch of the whole selection reports what it brought in, exactly as a
-    // single-repo fetch does — it used to paint its own label back and report
-    // nothing (ADR-0020).
     wait_painted(&mut h, "Fetch · nothing changed");
 
     h.get_by_label("Pull selection").click();
@@ -300,8 +244,6 @@ fn the_branch_quick_action_opens_the_new_branch_dialog() {
     assert_painted(&h, "New Branch");
 }
 
-// -- Pin as view --------------------------------------------------------------
-
 #[test]
 fn pin_as_view_saves_the_selection_and_a_pinned_view_restores_it() {
     let (project, repos) = four_repo_project("pin");
@@ -316,15 +258,12 @@ fn pin_as_view_saves_the_selection_and_a_pinned_view_restores_it() {
     h.get_by_label("Pin as view").click();
     settle(&mut h);
 
-    // The pinned view renders as a recallable chip.
     assert_painted(&h, "View 1");
 
-    // Clearing drops the surface…
     h.get_by_label("Clear selection").click();
     settle(&mut h);
     assert_not_painted(&h, "Multi-repo selection");
 
-    // …and recalling the view restores the selection.
     h.get_by_label("Restore view View 1").click();
     settle(&mut h);
     assert_painted(&h, "Multi-repo selection");
@@ -341,6 +280,5 @@ fn the_summary_table_shows_the_last_commit_subject_and_age() {
     h.get_by_label("Select repo alpha").click();
     settle(&mut h);
 
-    // alpha's cached log carries the fixture's base commit.
     assert_painted(&h, "init");
 }

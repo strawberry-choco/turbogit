@@ -1,19 +1,3 @@
-//! A frame's branch-row work is bounded by its viewport, not by the repository's
-//! branch count, and an inline rename survives a scroll.
-//!
-//! These are assertions about the frame's own output: no counter is added to
-//! production code and nothing reads a row model. `rows built` counts the
-//! branch-row nodes in the frame's accessibility tree, which is every row egui
-//! laid out whether or not the clip showed it. `rows shown` counts branch-name
-//! galleys in the display list, which the clip empties. The tree has the answer
-//! to "how much work did this frame do", the display list only to "how much of
-//! it could be seen. That distinction is the one that made the unbounded
-//! frame look healthy in a painted-output check.
-//!
-//! The pair `built <= shown + slack` and `shown` well above zero is what pins
-//! it: the first stops the frame building the whole list, the second stops it
-//! passing by building nothing.
-
 use std::path::{Path, PathBuf};
 
 use egui::accesskit::Role;
@@ -27,25 +11,11 @@ use test_support::harness::{
 use turbogit_app::state::{AppState, Tab};
 
 const LIST_BOX: egui::Vec2 = egui::vec2(1008.0, 768.0);
-/// Rows a frame may build beyond the rows it can show, before the frame is
-/// accused of laying out the whole list. One row above and one below the fold
-/// is the slack a viewport-scoped build needs, and this leaves four.
 const ROW_SLACK: usize = 4;
 
-/// The leaf a painted row shows. Directory grouping strips `feature/` into its
-/// own header, so the galley carries the stem while the accessibility label
-/// carries the full ref name.
 const PAINTED_STEM: &str = "branch-";
 const LABEL_REF: &str = "feature/branch-";
 
-// --- fixture -----------------------------------------------------------------
-
-/// `n` local branches written straight into `.git` as loose refs.
-///
-/// One `git branch` per name is `n` subprocess spawns. The production branch
-/// read is `git branch -a -vv` plus one `for-each-ref`, and both enumerate a
-/// loose ref exactly as they enumerate a reflog-bearing branch, so the
-/// `Vec<Branch>` reaching the tree is what the real read produces.
 fn seed_branches(repo: &Path, n: usize) {
     let sha = git_with_env(repo, &["rev-parse", "HEAD"], &GitEnv::fixture());
     let heads = git_with_env(
@@ -63,8 +33,6 @@ fn seed_branches(repo: &Path, n: usize) {
     }
 }
 
-/// A project dir holding one repo `alpha` on `main` with `n` local branches and
-/// no remote, so Local is the only group with rows in it.
 fn branches_project(n: usize) -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -95,9 +63,6 @@ fn branches_tab(n: usize) -> (Harness<'static, AppState>, TempDir) {
     (harness, repo)
 }
 
-// --- counting one frame's work ------------------------------------------------
-
-/// Branch rows this frame laid out, read off its accessibility tree.
 fn rows_built(harness: &Harness<'_, AppState>) -> usize {
     harness
         .query_all_by_role(Role::Button)
@@ -109,7 +74,6 @@ fn rows_built(harness: &Harness<'_, AppState>) -> usize {
         .count()
 }
 
-/// Branch names this frame could be seen showing.
 fn rows_shown(harness: &Harness<'_, AppState>) -> usize {
     painted_galleys(harness)
         .iter()
@@ -117,7 +81,6 @@ fn rows_shown(harness: &Harness<'_, AppState>) -> usize {
         .count()
 }
 
-/// One wheel tick over a row that is on screen, then one frame.
 fn wheel_frame(harness: &mut Harness<'static, AppState>) {
     let over = first_row(harness).pos;
     harness.hover_at(over);
@@ -130,7 +93,6 @@ fn wheel_frame(harness: &mut Harness<'static, AppState>) {
     harness.step();
 }
 
-/// The topmost branch row the frame can be seen showing, galley and all.
 fn first_row(harness: &Harness<'_, AppState>) -> PaintedGalley {
     painted_galleys(harness)
         .into_iter()
@@ -138,12 +100,9 @@ fn first_row(harness: &Harness<'_, AppState>) -> PaintedGalley {
         .expect("the branches tab paints a branch row")
 }
 
-// --- the bound -----------------------------------------------------------------
-
 #[test]
 fn a_frame_builds_only_the_rows_its_viewport_can_show() {
     let (mut harness, _repo) = branches_tab(400);
-    // Deep into the list, where an unbounded frame builds 400 rows to show ~17.
     for _ in 0..12 {
         wheel_frame(&mut harness);
     }
@@ -177,10 +136,6 @@ fn built_rows_do_not_grow_with_the_branch_count() {
 
 #[test]
 fn a_deep_row_steps_the_same_pitch_as_a_row_at_the_top() {
-    // What a skipped row owes the list is its height plus the flow's spacing, and
-    // the arithmetic shows up as the gap between two rows the frame did build.
-    // Measured against the same list's own pitch at the top, where nothing is
-    // skipped, so the assertion carries no borrowed constant.
     let (mut harness, _repo) = branches_tab(400);
     let pitch = {
         let ys = painted_row_ys(&harness);
@@ -206,7 +161,6 @@ fn a_deep_row_steps_the_same_pitch_as_a_row_at_the_top() {
     }
 }
 
-/// The painted branch rows' `y`, in list order.
 fn painted_row_ys(harness: &Harness<'_, AppState>) -> Vec<f32> {
     let mut ys: Vec<f32> = painted_galleys(harness)
         .into_iter()
@@ -216,8 +170,6 @@ fn painted_row_ys(harness: &Harness<'_, AppState>) -> Vec<f32> {
     ys.sort_by(|a, b| a.total_cmp(b));
     ys
 }
-
-// --- identity ------------------------------------------------------------------
 
 /// A row reached by scrolling still takes a click.
 ///
@@ -239,12 +191,6 @@ fn a_row_reached_by_scrolling_still_takes_its_click() {
     // click issued straight away lands on whatever row has since scrolled under
     // the pointer. Quiet first, then the pointer and the row agree.
     settle_quiet(&mut harness);
-    // Read the name off the node being clicked. Taking it from the display list
-    // and the click from the accessibility tree would pair two orderings that
-    // need not agree, and the test would then be about nothing.
-    // A row well inside the viewport, taken off what was painted rather than off
-    // tree order. The topmost built row only partly clears the clip, and its
-    // centre is where a click is least reliable.
     let mut shown = painted_galleys(&harness)
         .into_iter()
         .filter(|g| g.text.starts_with(PAINTED_STEM))
@@ -292,8 +238,6 @@ fn an_inline_rename_keeps_its_focus_through_a_scroll() {
         "the inline rename editor takes focus the frame it opens"
     );
 
-    // The rows above the editor are now skipped, which is what would renumber
-    // a counter-derived id and reset the caret with it.
     for _ in 0..6 {
         wheel_frame(&mut harness);
     }

@@ -11,7 +11,7 @@
 //! That is why the policy cannot ride on the engine's `-w` family of flags here.
 //! Two of the five values (line split/join, import-block changes) have no git
 //! flag at all, and the in-process producer (`similar`) and the CLI producer do
-//! not agree on git's whitespace flags value for value — so a flag-per-value
+//! not agree on git's whitespace flags value for value, so a flag-per-value
 //! design would answer a different question depending on which producer ran. One
 //! implementation, applied after the patch value settles, is the only shape where
 //! all five values mean the same thing on every path.
@@ -21,26 +21,23 @@ use std::ops::Range;
 use similar::{DiffTag, TextDiff};
 use turbogit_domain::model::{DiffHighlighting, DiffWhitespace};
 
-// --- whitespace --------------------------------------------------------------
-
 /// Prefixes of a line that make it an **import statement**, for
 /// [`DiffWhitespace::IgnoreImportsAndFormatting`]. The reference resolves this in
 /// a Java PSI tree; TurboGit has no parser, so the shape is named from the line
-/// instead — a conservative list of the forms the languages in this app's diff
+/// instead, a conservative list of the forms the languages in this app's diff
 /// actually write imports in, each requiring a space or a quote after the keyword
 /// so an identifier that merely starts with the keyword is not swept in.
 const IMPORT_PREFIXES: [&str; 9] = [
     "use ", "pub use ", "mod ", "import ", "from ", "#include", "#import", "@import", "require(",
 ];
 
-/// Whether the line is an import statement.
 fn is_import_line(line: &str) -> bool {
     let t = line.trim_start();
     IMPORT_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 /// The comparable form of one line under [`DiffWhitespace::IgnoreImportsAndFormatting`]:
-/// whitespace outside a string literal dropped, whitespace inside one kept — the
+/// whitespace outside a string literal dropped, whitespace inside one kept, the
 /// one value in the ladder that has to know what a literal is, because the
 /// reference documents that its whitespace stays significant.
 fn literal_aware_key(line: &str) -> String {
@@ -72,8 +69,6 @@ fn literal_aware_key(line: &str) -> String {
     key
 }
 
-/// The comparable form of one line under `ws`: whitespace folded away per the
-/// policy.
 fn whitespace_key(ws: DiffWhitespace, line: &str) -> String {
     match ws {
         DiffWhitespace::None => line.to_owned(),
@@ -86,7 +81,7 @@ fn whitespace_key(ws: DiffWhitespace, line: &str) -> String {
 }
 
 /// The whole run's comparable form: every line's key concatenated, so a change
-/// that only splits or joins lines — or only adds or removes lines of nothing —
+/// that only splits or joins lines, or only adds or removes lines of nothing,
 /// has the same key on both sides.
 fn run_key(ws: DiffWhitespace, lines: &[&str]) -> String {
     lines
@@ -122,9 +117,6 @@ pub fn considered_equal(ws: DiffWhitespace, dels: &[&str], adds: &[&str]) -> boo
     }
 }
 
-// --- splitting a changed run ---------------------------------------------------
-
-/// One part of a changed run under [`DiffHighlighting::SplitChanges`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Chunk {
     /// A line the change carries along unchanged: the same text sits on both
@@ -139,7 +131,7 @@ pub enum Chunk {
 /// text appears on both sides are carried through, and the remaining lines group
 /// into as few blocks as the two sides' order allows.
 ///
-/// This is the reference's `Split changes` rationale read off the row model — "A
+/// This is the reference's `Split changes` rationale read off the row model. "A
 /// \n B and A X \n B X are treated as two changes instead of one": the pairing is
 /// the same line-by-line alignment the run's own diff would have made had the
 /// unchanged line not been swallowed by the run.
@@ -164,8 +156,6 @@ pub fn split_changes(dels: &[&str], adds: &[&str]) -> Vec<Chunk> {
     }
     chunks
 }
-
-// --- highlighting -------------------------------------------------------------
 
 /// Byte offset of each char boundary, plus the length of the line: a token the
 /// caller names by **char** offsets is then a borrowed slice with no copying, and
@@ -197,7 +187,6 @@ fn words(line: &str) -> Vec<(&str, Range<usize>)> {
     out
 }
 
-/// Character tokens: one slice per char, one char offset per slice.
 fn chars(line: &str) -> Vec<(&str, Range<usize>)> {
     let bounds = char_bounds(line);
     line.char_indices()
@@ -245,9 +234,6 @@ fn runs_over(
             continue;
         };
         let run = first.1.start..last.1.end;
-        // Runs that touch are one run; two changed words with an unchanged
-        // separator between them are two, because a highlight that swallows the
-        // gap is claiming a difference in the gap.
         match runs.last_mut() {
             Some(prev) if run.start <= prev.end => prev.end = prev.end.max(run.end),
             _ => runs.push(run),
@@ -260,9 +246,6 @@ fn runs_over(
 mod tests {
     use super::*;
 
-    /// The five whitespace values must be distinguishable, or the policy has one
-    /// value and five names. Each case is hidden by one value and shown by the
-    /// one below it.
     #[test]
     fn whitespace_ladder_is_five_distinct_values() {
         use DiffWhitespace as W;
@@ -274,7 +257,6 @@ mod tests {
         let literal_space = (&["let s = \"a b\";"][..], &["let s = \"a  b\";"][..]);
 
         let shows = |ws: W, dels: &[&str], adds: &[&str]| !considered_equal(ws, dels, adds);
-        // None: every difference is a difference.
         for case in [
             &trailing,
             &internal,
@@ -285,16 +267,12 @@ mod tests {
         ] {
             assert!(shows(W::None, case.0, case.1), "None shows {case:?}");
         }
-        // Trim: trailing goes, internal stays.
         assert!(!shows(W::TrimWhitespace, trailing.0, trailing.1));
         assert!(shows(W::TrimWhitespace, internal.0, internal.1));
         assert!(shows(W::TrimWhitespace, added_blank.0, added_blank.1));
-        // Ignore whitespaces: internal goes too, but a line of nothing added
-        // is still a change of line count.
         assert!(!shows(W::IgnoreWhitespace, internal.0, internal.1));
         assert!(shows(W::IgnoreWhitespace, added_blank.0, added_blank.1));
         assert!(shows(W::IgnoreWhitespace, joined.0, joined.1));
-        // …and empty lines plus split/join go with the next value up.
         assert!(!shows(
             W::IgnoreWhitespaceAndEmptyLines,
             added_blank.0,
@@ -306,8 +284,6 @@ mod tests {
             import_swap.0,
             import_swap.1
         ));
-        // …and imports with the top value, whose literal rule keeps a space
-        // inside a string significant even though it drops the rest.
         assert!(!shows(
             W::IgnoreImportsAndFormatting,
             import_swap.0,
@@ -318,7 +294,6 @@ mod tests {
             literal_space.0,
             literal_space.1
         ));
-        // The value below does drop that same literal whitespace.
         assert!(!shows(
             W::IgnoreWhitespaceAndEmptyLines,
             literal_space.0,
@@ -326,8 +301,6 @@ mod tests {
         ));
     }
 
-    /// A line whose content, not merely its imports, changed stays a difference
-    /// at the top of the ladder.
     #[test]
     fn import_rule_is_confined_to_import_lines() {
         assert!(
@@ -340,7 +313,6 @@ mod tests {
         );
     }
 
-    /// `Split changes` partitions a run by the lines it carries along.
     #[test]
     fn split_changes_partitions_a_run_into_smaller_changes() {
         let dels = &["alpha", "beta"];
@@ -350,21 +322,16 @@ mod tests {
             vec![Chunk::Carried(0, 0), Chunk::Block(vec![(Some(1), Some(1))])],
             "the carried line stops being part of the change"
         );
-        // A run with nothing carried stays one block, paired positionally.
         assert_eq!(
             split_changes(&["a", "b"], &["c"]),
             vec![Chunk::Block(vec![(Some(0), Some(0)), (Some(1), None)])]
         );
-        // An insertion at the end of a run is its own block.
         assert_eq!(
             split_changes(&["keep"], &["keep", "new"]),
             vec![Chunk::Carried(0, 0), Chunk::Block(vec![(None, Some(1))])]
         );
     }
 
-    /// The run-count relationship the viewer's highlighting is judged by: None
-    /// paints no run, Words one per changed word group, Characters per changed
-    /// character group — and Words never cuts inside a word.
     #[test]
     fn highlighting_granularity_runs_by_count_and_extent() {
         use DiffHighlighting as H;
@@ -385,8 +352,6 @@ mod tests {
             vec!["ALPHA".to_owned(), "GAMMA".to_owned()],
             "the runs land on the changed words themselves"
         );
-        // Characters cuts a word open when only parts of its letters changed, so
-        // the same change becomes more runs than words can name.
         let (inner_old, inner_new) = ("alpha BeTa gamMA", "Alpha beta GAMMA");
         let words_inner = highlight_runs(H::Words, inner_old, inner_new);
         let chars_inner = highlight_runs(H::Characters, inner_old, inner_new);
@@ -396,16 +361,12 @@ mod tests {
             "character granularity is finer than word granularity: {chars_inner:?} vs \
              {words_inner:?}"
         );
-        // An appended suffix is one whole word for Words but one character for
-        // Characters: the width of the run is the difference.
         let w = highlight_runs(H::Words, "alpha", "alpha2");
         let c = highlight_runs(H::Characters, "alpha", "alpha2");
         assert_eq!(w, vec![0..6], "a changed word is replaced whole: {w:?}");
         assert_eq!(c, vec![5..6], "only the added character changed: {c:?}");
     }
 
-    /// A pure insertion has nothing on the old side, and a pure deletion nothing
-    /// on the new side — neither is a run, and neither panics.
     #[test]
     fn one_sided_rows_have_runs_only_on_the_side_that_has_text() {
         use DiffHighlighting as H;

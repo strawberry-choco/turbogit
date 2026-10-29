@@ -1,4 +1,4 @@
-# Harvest report — 2026-10-04
+# Harvest report2026-10-04
 
 - Rebased: version:  1.1.19
 - surfaces: 11

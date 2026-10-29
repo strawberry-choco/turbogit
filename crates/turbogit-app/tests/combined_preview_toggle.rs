@@ -1,27 +1,3 @@
-//! The combined preview's row and hunk clicks, graded against real git.
-//!
-//! Every fixture is a temporary repository driven by the CLI executor through
-//! the real [`AppState`], per `AGENTS.md`: rows taken from the display model the
-//! pinned keyed read answers with, the click routed through
-//! [`granular::dispatch`]/[`granular::toggle_row`] and settled by the production
-//! `OpCompleted` → refresh → drain path, and every verdict read back out of
-//! `git diff --cached`, `git diff`, `git status --porcelain` and `git show :path`
-//! rather than out of an internal return.
-//!
-//! Two shapes of answer show up throughout, and they are the ticket:
-//!
-//! - A **stage** composes the single located ordinal of the `local` section.
-//!   Measured over nine hunk shapes, every single forward-apply ordinal git
-//!   accepts, because `filter_lines` never removes a line from the pre-image a
-//!   forward apply matches. Staging is therefore row-granular.
-//! - An **unstage** composes the clicked line's change unit of the `staged`
-//!   section, and `filter_lines`' reverse branch keeps every other staged change
-//!   of the hunk as post-image context so it stays staged. git will not take half
-//!   of a replacement pair (a lone `+` reverse-deletes instead of restoring, a
-//!   lone `-` leaves both texts), so the unit is a `-`/`+` pair, or a same-kind
-//!   run, and never reaches a neighbouring change. Unstaging is therefore
-//!   row-granular too, at the unit granularity git actually requires.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,14 +10,10 @@ use turbogit_app::staged_lines;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, DiffPolicies, RootId};
 
-// ---------------------------------------------------------------- helpers --
-
 fn root_id(repo: &Path) -> RootId {
     RootId(repo.to_path_buf().into())
 }
 
-/// One fixture change: each test registers one root, so a clicked row's change
-/// belongs to the repository that fixture created.
 fn change(repo: &Path, rel: &str) -> ChangeRef {
     ChangeRef::new(root_id(repo), rel)
 }
@@ -50,9 +22,6 @@ fn app_state(project: &Path, repo: &Path) -> AppState {
     AppState::for_roots(project, std::slice::from_ref(&repo.to_path_buf()))
 }
 
-/// Fill `repo`'s hunk statistics the way the app fills them on ask. This is the
-/// only warm-up a granular op needs: composition reads the root caches and never
-/// the displayed value.
 fn stats<'a>(state: &'a mut AppState, repo: &Path) -> &'a RootHunkStats {
     let root = root_id(repo);
     state.ensure_hunk_stats(&root);
@@ -62,14 +31,6 @@ fn stats<'a>(state: &'a mut AppState, repo: &Path) -> &'a RootHunkStats {
         .expect("the root's entry fills on ask")
 }
 
-/// The pinned working-tree read's answer for one file: the rows the pane paints,
-/// with the gutters it paints them with.
-///
-/// It also fills the root's hunk statistics first, which is what the commit
-/// window does on the frame that renders a preview
-/// (`commit_window.rs`, `state.ensure_hunk_stats`), because a granular op
-/// composes from those retained sections. The cold-cache case is pinned
-/// separately, in `granular_ops.rs`.
 fn combined_value(state: &mut AppState, repo: &Path, rel: &str) -> Arc<DiffValue> {
     state.ensure_hunk_stats(&root_id(repo));
     let target = DiffTarget::working_tree(
@@ -105,8 +66,6 @@ fn geometry(model: &DiffModel) -> Vec<(RowKind, String, usize, usize)> {
         .collect()
 }
 
-/// A row outlives the model it came from only by value, and `Row` is not
-/// `Clone`: this is the copy a test makes so it can hold one across a refresh.
 fn held(row: &Row) -> Row {
     Row {
         kind: row.kind,
@@ -120,7 +79,6 @@ fn held(row: &Row) -> Row {
     }
 }
 
-/// The one changed row of `kind` whose text is `text`.
 fn only_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
     let found: Vec<&Row> = rows(model)
         .into_iter()
@@ -135,8 +93,6 @@ fn only_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
     found[0]
 }
 
-/// The first changed row of `kind` whose text is `text`, for the fixtures where
-/// two rows legitimately carry identical text.
 fn first_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
     rows(model)
         .into_iter()
@@ -144,10 +100,6 @@ fn first_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
         .unwrap_or_else(|| panic!("no {kind:?} row named {text:?} in {:?}", geometry(model)))
 }
 
-/// How many body lines of `body` are the signed `text`, exactly.
-///
-/// Exact rather than a prefix match, because a fixture holding both `+ECHO` and
-/// `+ECHO2` must not read as two `+ECHO`.
 fn body_line(body: &str, sign: char, text: &str) -> usize {
     body.lines()
         .filter(|l| l.starts_with(sign) && l.get(1..).is_some_and(|rest| rest == text))
@@ -170,13 +122,10 @@ fn porcelain(repo: &Path, rel: &str) -> String {
         .unwrap_or_else(|| panic!("{rel} absent from status:\n{all}"))
 }
 
-/// The index's own bytes for `rel`, which is what a "returns to what it was"
-/// assertion is really about.
 fn index_bytes(repo: &Path, rel: &str) -> String {
     git(repo, &["show", &format!(":{rel}")])
 }
 
-/// 20 lines, `alpha` to `tango`.
 const BASE: &str = concat!(
     "alpha\n",
     "bravo\n",
@@ -200,15 +149,6 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-// ------------------------------------------------------------------ tests --
-
-/// Three changes, all staged, one line unstaged from the combined view, graded
-/// against `git diff --cached`. The click reverse-applies the retained `staged`
-/// section, whose post-image is the index. Composing the same click from the
-/// displayed patch instead hands git a new side the index never held, because
-/// that post-image is the worktree, and a reverse apply matches new sides
-/// against the index: `error: patch failed`, and the index unmoved. The other
-/// two staged changes stay in their own hunks.
 #[test]
 fn unstaging_one_staged_line_from_the_combined_view_reaches_git() {
     let project = tempfile::tempdir().unwrap();
@@ -259,18 +199,11 @@ fn unstaging_one_staged_line_from_the_combined_view_reaches_git() {
     assert_eq!(porcelain(&repo, "f.txt"), "MM", "partly staged, partly not");
 }
 
-/// Row-level unstage inside one hunk: a staged modification and a staged addition
-/// share a hunk, and clicking the modification's row leaves the addition staged.
-/// The unselected addition survives the reverse apply as a post-image context
-/// line, so it stays in the index while only the clicked pair reverses. A
-/// composer without the reverse branch cannot express this shape at all.
 #[test]
 fn unstaging_one_staged_row_of_a_hunk_leaves_the_other_staged_change_staged() {
     let project = tempfile::tempdir().unwrap();
     let repo = repo_with_one_commit(project.path(), "mixed-row");
     commit(&repo, "f.txt", BASE, "f base");
-    // A modification (`charlie` to `CHARLIE`) and an addition (`dupadd`) close
-    // enough that git prints them in one hunk, both staged.
     let both = BASE
         .replace("charlie\n", "CHARLIE\n")
         .replace("delta\n", "delta\ndupadd\n");
@@ -309,9 +242,6 @@ fn unstaging_one_staged_row_of_a_hunk_leaves_the_other_staged_change_staged() {
     );
 }
 
-/// Two staged modifications in different hunks: clicking one reverses it and the
-/// other stays staged, so an unstage no longer drags the whole file's changes with
-/// it. Each is its own replacement pair, addressed independently.
 #[test]
 fn two_staged_modifications_unstage_the_clicked_one_only() {
     let project = tempfile::tempdir().unwrap();
@@ -348,10 +278,6 @@ fn two_staged_modifications_unstage_the_clicked_one_only() {
     );
 }
 
-/// The property that makes immediate clicking survivable, pinned rather than
-/// asserted in prose: the displayed patch bytes do not move while the oracle's
-/// answer for that row flips. Rows cannot shift, disappear or renumber under the
-/// only action the pane offers.
 #[test]
 fn the_displayed_bytes_do_not_move_while_the_answer_for_that_row_flips() {
     let project = tempfile::tempdir().unwrap();
@@ -401,8 +327,6 @@ fn the_displayed_bytes_do_not_move_while_the_answer_for_that_row_flips() {
     );
 }
 
-/// Direction both ways on the same row: one click stages, the next unstages, and
-/// the index is left holding exactly the bytes it started with.
 #[test]
 fn a_row_toggled_both_ways_returns_the_index_to_its_original_bytes() {
     let project = tempfile::tempdir().unwrap();
@@ -437,11 +361,6 @@ fn a_row_toggled_both_ways_returns_the_index_to_its_original_bytes() {
     assert_eq!(porcelain(&repo, "f.txt"), " M", "only the worktree differs");
 }
 
-/// A mixed hunk through the gutter pair. `+` stages the hunk's unstaged rows out
-/// of the `local` section and `−` takes the whole hunk back out of the `staged`
-/// one. The gutter verb is a whole-hunk button, so it composes
-/// `HunkSelection::Whole` for the covered hunk, which reverse-applies HEAD's
-/// content for that hunk and takes every staged row of it with it.
 #[test]
 fn a_mixed_hunk_through_the_gutter_plus_then_minus_moves_whole_and_back() {
     let project = tempfile::tempdir().unwrap();
@@ -509,10 +428,6 @@ fn a_mixed_hunk_through_the_gutter_plus_then_minus_moves_whole_and_back() {
     );
 }
 
-/// Translation under a preceding **staged** insertion: the row's HEAD gutter is
-/// not its index gutter, and the click has to hop through the staged sets before
-/// it addresses the `local` section. An unstaged insertion above a line would not
-/// shift this relation at all.
 #[test]
 fn a_row_click_below_a_staged_insertion_stages_the_line_the_reader_clicked() {
     let project = tempfile::tempdir().unwrap();
@@ -525,7 +440,6 @@ fn a_row_click_below_a_staged_insertion_stages_the_line_the_reader_clicked() {
 
     let mut state = app_state(project.path(), &repo);
     let value = combined_value(&mut state, &repo, "f.txt");
-    // HEAD 19 `sierra` is index 20: the staged insertion sits above it.
     let row = held(only_row(&value.model, RowKind::Del, "sierra"));
     assert_eq!(row.old_no, 19, "the pane's gutter is a HEAD number");
     assert_eq!(
@@ -549,8 +463,6 @@ fn a_row_click_below_a_staged_insertion_stages_the_line_the_reader_clicked() {
     );
 }
 
-/// The same question with the shift the other way: a staged deletion above the
-/// row makes its HEAD gutter larger than its index gutter.
 #[test]
 fn a_row_click_below_a_staged_deletion_stages_the_line_the_reader_clicked() {
     let project = tempfile::tempdir().unwrap();
@@ -582,13 +494,6 @@ fn a_row_click_below_a_staged_deletion_stages_the_line_the_reader_clicked() {
     );
 }
 
-/// Two identical adjacent lines, clicked one at a time: each copy stages alone,
-/// because a forward apply accepts every single ordinal and pairing is positional
-/// rather than by content. Unstaging is per-row for the same reason: `filter_lines`'
-/// reverse branch keeps the other staged copies as post-image context, and a
-/// same-kind run is not a replacement pair, so git accepts reversing one `+dup`
-/// and leaves the other staged. Widening this to the located hunk would cost
-/// exactly that per-row control.
 #[test]
 fn two_identical_adjacent_additions_stage_and_unstage_apart() {
     let project = tempfile::tempdir().unwrap();
@@ -637,7 +542,6 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
         2,
         "neither copy left the view"
     );
-    // Unstage one copy: it alone reverses out of the index, the other stays staged.
     let row = held(first_row(&value.model, RowKind::Add, "dup"));
     granular::toggle_row(&mut state, &change, &row);
     state.drain_events();
@@ -665,14 +569,6 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
     );
 }
 
-/// A repository nobody has committed in offers no rows to click, and that is the
-/// decision rather than an omission. The preview is the `HEAD` comparison, the
-/// engine refuses that read where no first commit exists, so the pane's answer is
-/// the refusal sentence. A click needs a located ordinal out of a displayed row,
-/// so with no rows there is no operation and the index does not move. The suite
-/// keeps this fixture because the alternative, answering with a synthesized empty
-/// baseline, would give this test two rows to click and a stage the user never
-/// asked for.
 #[test]
 fn a_repository_with_no_commits_offers_no_rows_to_click() {
     let project = tempfile::tempdir().unwrap();
@@ -717,7 +613,6 @@ fn a_repository_with_no_commits_offers_no_rows_to_click() {
         "the pane's failed verdict is the sentence the engine produces"
     );
 
-    // Nothing reached the index, because nothing was clickable.
     assert_eq!(
         git(&work, &["ls-files"]).trim(),
         "f.txt",
@@ -730,13 +625,6 @@ fn a_repository_with_no_commits_offers_no_rows_to_click() {
     );
 }
 
-/// A staged creation is the one shape that still reverse-applies whole, and this
-/// is where that click is proved. The fixture that carried it used to be a
-/// repository with no commits, which no longer has a read to click, and the shape
-/// is the same either way: a file git has never had a version of has an empty old
-/// side, so `git apply --cached --reverse` refuses half of it with
-/// `error: new file <path> depends on old contents` and one row click takes the
-/// whole file out of the index.
 #[test]
 fn unstaging_one_row_of_a_staged_creation_takes_the_whole_file_out() {
     let project = tempfile::tempdir().unwrap();
@@ -769,9 +657,6 @@ fn unstaging_one_row_of_a_staged_creation_takes_the_whole_file_out() {
     );
 }
 
-/// A line staged and then edited again: the row shows the worktree's text, which
-/// the index does not hold, so ticket 03's rule answers it unstaged and the click
-/// stages it. It does not vanish and it does not answer a third state.
 #[test]
 fn a_row_staged_then_edited_again_flips_to_unstaged_and_stays_in_the_view() {
     let project = tempfile::tempdir().unwrap();
@@ -815,13 +700,6 @@ fn a_row_staged_then_edited_again_flips_to_unstaged_and_stays_in_the_view() {
     );
 }
 
-/// The `MM` meaning, pinned as a decision with the reason. Staging one half of a
-/// replacement pair stages that half alone: the index ends up holding HEAD's line
-/// and the replacement together, and git reports `MM`. This is the meaning that
-/// ships because the pane promises one row, one line, and `MM` is git's honest
-/// report of an index that differs from HEAD while the worktree differs from the
-/// index. Quietly taking the pair's other half along would make a row click do
-/// something the reader did not ask for.
 #[test]
 fn staging_one_half_of_a_replacement_pair_leaves_the_file_mm() {
     let project = tempfile::tempdir().unwrap();
@@ -853,9 +731,6 @@ fn staging_one_half_of_a_replacement_pair_leaves_the_file_mm() {
     assert_eq!(porcelain(&repo, "f.txt"), "MM", "the meaning that ships");
 }
 
-/// Conflicted files keep their controls visible and inert, because the oracle has
-/// no answer for any row of an unmerged path. That is derived from git's own
-/// `diff --cc` flag rather than special-cased at the click.
 #[test]
 fn a_row_click_on_a_conflicted_path_does_nothing_at_all() {
     let project = tempfile::tempdir().unwrap();

@@ -1,19 +1,3 @@
-//! Removing a row from the global recents store (the Welcome row's trash
-//! control).
-//!
-//! [`AppState::remove_recent`] is the one place a recents row leaves the list.
-//! Three things have to happen together and are easy to separate by accident:
-//! the row leaves the in-memory list the Welcome page paints, it leaves the
-//! **file** (the list is rebuilt from disk at every launch, so an in-memory-only
-//! removal comes straight back), and the row's cached branch indicator leaves
-//! the in-memory cache too — otherwise every row a user ever removes stays
-//! cached for the rest of the session.
-//!
-//! It is also deliberately non-destructive: the project on disk is untouched,
-//! which is what lets the control be a single click with nothing to undo.
-//!
-//! Asserts only on the public surface: `AppState` fields and the recents file.
-
 use std::path::{Path, PathBuf};
 use turbogit_app::recents::{RecentKind, RecentProject, Recents, load, recents_file, record, save};
 use turbogit_app::state::{AppState, ToastKind};
@@ -31,8 +15,6 @@ fn recent(path: &Path, kind: RecentKind, repo_count: Option<usize>) -> RecentPro
     }
 }
 
-/// A temp config dir preloaded with `projects`, plus the bare-launch state that
-/// loads it — the exact production wiring the Welcome page sees.
 fn state_with(projects: Vec<RecentProject>) -> (tempfile::TempDir, AppState) {
     let config = tempfile::tempdir().expect("temp config dir");
     save(config.path(), &Recents { projects }).expect("seed recents");
@@ -40,8 +22,6 @@ fn state_with(projects: Vec<RecentProject>) -> (tempfile::TempDir, AppState) {
     (config, state)
 }
 
-/// Two listed projects: a single repo and a workspace root, so "only the named
-/// row went" is a claim about kinds too, not just about names.
 fn two_rows(alpha: &Path, ws: &Path) -> Vec<RecentProject> {
     vec![
         recent(alpha, RecentKind::Project, None),
@@ -58,8 +38,6 @@ fn paths(state: &AppState) -> Vec<PathBuf> {
         .collect()
 }
 
-// --- the removal itself --------------------------------------------------------
-
 #[test]
 fn removing_a_row_drops_it_from_memory_and_from_the_file() {
     let scratch = tempfile::tempdir().unwrap();
@@ -73,14 +51,11 @@ fn removing_a_row_drops_it_from_memory_and_from_the_file() {
         "a listed row reports as removed"
     );
 
-    // The list the Welcome page paints.
     assert_eq!(
         paths(&state),
         vec![ws.clone()],
         "the removed row leaves the in-memory list and its neighbour stays"
     );
-    // The file the next launch reads. Without this the row returns on restart,
-    // which is the failure an in-memory assertion cannot see.
     assert_eq!(
         load(config.path())
             .projects
@@ -119,7 +94,6 @@ fn removing_a_row_evicts_its_cached_branch_indicator() {
     let ws = scratch.path().join("ws");
     let (_config, mut state) = state_with(two_rows(&alpha, &ws));
 
-    // Both rows have been rendered at least once, so both hold a cached branch.
     state.ui.welcome_branch_cache.insert(
         alpha.clone(),
         (Some("main".into()), std::time::Instant::now()),
@@ -155,8 +129,6 @@ fn removing_a_row_leaves_the_project_on_disk() {
         alpha.is_dir(),
         "removal forgets the path only — the directory is not touched"
     );
-    // And the row comes back the ordinary way: opening the project re-records
-    // it as the newest entry, which is why the control needs no undo.
     state.open_project(&alpha);
     assert_eq!(
         paths(&state),
@@ -164,8 +136,6 @@ fn removing_a_row_leaves_the_project_on_disk() {
         "reopening a removed project records it again, newest-first"
     );
 }
-
-// --- the paths that must do nothing -------------------------------------------
 
 #[test]
 fn removing_an_unlisted_path_changes_nothing() {
@@ -210,10 +180,6 @@ fn removing_a_row_reports_which_project_it_dropped() {
     );
 }
 
-/// A removal must never be a control that silently does nothing when the store
-/// cannot be written: the screen's own list is the source of truth for what the
-/// user sees, so the row goes from it regardless, and the best-effort write
-/// fails the way every other recents write does.
 #[test]
 fn removal_drops_the_in_memory_row_even_when_the_store_cannot_be_written() {
     let scratch = tempfile::tempdir().unwrap();
@@ -231,9 +197,6 @@ fn removal_drops_the_in_memory_row_even_when_the_store_cannot_be_written() {
     let mut state = AppState::launch_in(None, Some(config.path().to_path_buf()));
     assert_eq!(paths(&state).len(), 2);
 
-    // A regular file where the config dir's parent should be: `create_dir_all`
-    // fails with ENOTDIR on every platform, so `save` cannot succeed. (A
-    // read-only directory would need POSIX modes to say the same thing.)
     let blocked = scratch.path().join("blocked");
     std::fs::write(&blocked, "x").expect("write blocking file");
     state.recents_config_dir = Some(blocked);
@@ -249,9 +212,6 @@ fn removal_drops_the_in_memory_row_even_when_the_store_cannot_be_written() {
     );
 }
 
-/// The recorded-open path and the removal path must agree: a project opened
-/// after an earlier removal is listed again (the cap still applies), so the two
-/// directions cannot drift into separate stores.
 #[test]
 fn a_recorded_open_re_appears_after_a_removal() {
     let config = tempfile::tempdir().expect("temp config dir");
@@ -279,8 +239,6 @@ fn a_recorded_open_re_appears_after_a_removal() {
     );
 }
 
-/// A store seeded only by the recording path still loads: the remove control
-/// must not depend on how a row got into the list.
 #[test]
 fn a_row_recorded_through_the_open_path_can_be_removed() {
     let config = tempfile::tempdir().expect("temp config dir");

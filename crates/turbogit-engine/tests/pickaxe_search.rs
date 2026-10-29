@@ -1,20 +1,8 @@
-//! Issue 17 — Log UX upgrades, engine seam: `LogOpts::pickaxe` drives
-//! `git log -S` so commit search can cover code changes — a commit matches
-//! when the occurrence count of the string in the tracked content changed
-//! there, even if its message, hash, and author do not mention it.
-
 use test_support::git_seed::git;
 use turbogit_domain::model::LogOpts;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
-
-// The old runner's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env was redundant: the two
-// `git config` lines below set the same `t <t@t>`, so dropping it leaves the
-// commit objects identical.
-//
-// The fixture stays local, not a `git_seed` recipe: it needs two commits on two
-// DIFFERENT paths so exactly one changes the occurrence count of "granular".
 
 #[test]
 fn pickaxe_scopes_the_log_to_commits_changing_the_string() {
@@ -39,11 +27,9 @@ fn pickaxe_scopes_the_log_to_commits_changing_the_string() {
         settings: VcsSettings::default(),
     };
 
-    // Unscoped: both commits.
     let all = exec.log(&repo, &LogOpts::default()).expect("unscoped log");
     assert_eq!(all.len(), 2);
 
-    // Pickaxe "granular": only the commit whose content changed the count.
     let hits = exec
         .log(
             &repo,

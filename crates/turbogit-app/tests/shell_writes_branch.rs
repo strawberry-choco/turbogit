@@ -1,13 +1,3 @@
-//! The branch pane's checkout writes are named entries, and each one still runs
-//! the git the closure ran.
-//!
-//! These drive [`turbogit_app::shell_writes::branch`] through the Headless
-//! harness and assert **what the repository becomes** — HEAD on the branch, the
-//! new local branch tracking `origin/<name>`, HEAD detached at the tag's sha, the
-//! restored branch back at its tip — plus the label each operation carries. The
-//! labels are what the user reads in the toast, so they are a user-facing fact
-//! rather than a shape.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{commit, git, repo_with_origin};
@@ -19,8 +9,6 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
     git(dir, args).trim().to_string()
 }
 
-/// One repo with an `origin`, a published `main`, a pushed-then-deleted `feat`
-/// (the remote branch row), and a `v1` tag.
 fn repo(project: &Path) -> PathBuf {
     let work = repo_with_origin(project, "work");
     git(&work, &["branch", "feat", "main"]);
@@ -30,8 +18,6 @@ fn repo(project: &Path) -> PathBuf {
     work
 }
 
-/// The headless state over `work`, whose parent project directory holds the bare
-/// `origin` the harness walks.
 fn state_for(work: &Path) -> AppState {
     let roots = [work.to_path_buf()];
     AppState::for_roots(work.parent().unwrap(), &roots)

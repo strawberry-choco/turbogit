@@ -1,12 +1,3 @@
-//! Issue 11 — cascade create & checkout branch: the UI seam.
-//!
-//! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
-//! over temporary git repositories and assert on public surfaces: painted
-//! labels, accessible widget labels, and `AppState` transitions. The
-//! cascade modal (screen 02) takes a branch name with the type/owner/value
-//! pattern hint, predicts per-repo outcomes in the matrix, and only runs on
-//! explicit confirmation — Esc cancels before anything executes.
-
 use egui::Key;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
@@ -19,11 +10,6 @@ use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
 
-/// Create an initialized temp repository with one base commit on `main`
-/// plus an `origin` remote so upstream reads can be exercised.
-/// Kept local, not `test_support::git_seed::repo_with_origin`: the base commit is
-/// `base.txt`, not `README.md`, and this suite's change lists and diff panes name
-/// the file they changed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -46,9 +32,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A project with both repos under one group so a single group click
-/// selects the fleet. `ui` starts with a dirty tracked file so skip
-/// classification has something to bite on.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = test_support::scratch_root(&format!("cascade-branch-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -61,12 +44,6 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, ui)
 }
 
-/// Headless harness driving the full app UI (mirrors `bulk_operations`).
-///
-/// Unstyled: no `configure_style` and no `install_fonts`, because this suite
-/// asserts on the cascade modal's painted prediction rows and the shared preamble
-/// would lay them out in the embedded JetBrains Mono stack. `max_steps` is 1024
-/// rather than kittest's default of 4, which `Harness::run` PANICS past.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
@@ -89,30 +66,23 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
     let mut h = harness(state);
     settle(&mut h);
 
-    // Selecting the group surfaces the operations grid; the cascade op is
-    // wired and opens its modal.
     h.get_by_label("Select group frontend").click();
     settle(&mut h);
     h.get_by_label("Create & checkout branch").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::CreateBranch));
 
-    // The pattern hint and the apply-broadly policy control are painted.
     assert_painted(&h, "Pattern: type / owner / value");
     assert_painted(&h, "Existing matches are checked out");
     assert_painted(&h, "Apply broadly");
 
-    // The caption is painted; the input carries the accessible label.
     assert_painted(&h, "Branch name");
 
-    // With no branch name typed, confirming is inert — nothing dispatches.
     h.get_by_label("Run on 1 of 2").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_none(), "no run without a name");
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::CreateBranch));
 
-    // Typing the name fills the matrix: per-repo predicted outcomes under
-    // the TARGET column.
     h.get_by_label("Branch name input").focus();
     h.get_by_label("Branch name input").type_text("feature/x");
     settle(&mut h);
@@ -120,8 +90,6 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
     assert_painted(&h, "Create from HEAD, checkout");
     assert_painted(&h, "Skipped (dirty worktree)");
 
-    // The matrix's column geometry: every header label over its cell, and both
-    // band heights the painter was handed.
     assert_matrix_geometry(
         &h,
         "TARGET",
@@ -137,13 +105,11 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
         30.0,
     );
 
-    // Confirming closes the modal and opens the run monitor.
     h.get_by_label("Run on 1 of 2").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_op, None);
     assert!(h.state().ui.bulk_run.is_some(), "the monitor opened");
 
-    // Every selected repo reaches a terminal state: alpha Done, ui skipped.
     wait_for(&mut h, |s| {
         s.ui.bulk_run.as_ref().is_some_and(|v| {
             v.rows.len() == 2
@@ -157,7 +123,6 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
     assert_eq!(by_name("alpha").state, RowState::Done);
     assert!(matches!(by_name("ui").state, RowState::Skipped { .. }));
 
-    // alpha actually landed on the new branch; ui is untouched.
     let on_branch = git(&alpha, &["branch", "--show-current"]);
     assert_eq!(on_branch.trim(), "feature/x");
     let ui_branch = git(&ui, &["branch", "--show-current"]);
@@ -182,7 +147,6 @@ fn esc_cancels_the_cascade_before_anything_runs() {
     h.key_press(Key::Escape);
     settle(&mut h);
 
-    // The modal closed without dispatching a run, and no repo moved.
     assert_eq!(h.state().ui.bulk_op, None);
     assert!(h.state().ui.bulk_run.is_none(), "no run was started");
     assert_eq!(git(&alpha, &["branch", "--show-current"]).trim(), "main");

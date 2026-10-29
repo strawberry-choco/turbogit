@@ -1,18 +1,3 @@
-//! Targeted history verbs: [`history_editor::drop_commit`] and
-//! [`history_editor::reword_commit`].
-//!
-//! One seam — the services function over a real temporary repository, with git
-//! on `PATH` — because that is the seam where a history rewrite is either true
-//! or a lie. Every assertion reads the repository back afterwards: which
-//! subjects exist, what a path contains, whether the backup ref is there. None
-//! asserts on the plan that was built to get there, even though building
-//! exactly one action on exactly one row is the whole design, because that is
-//! the implementation's business and not the developer's.
-//!
-//! Both verbs go through the plan the app's interactive-rebase editor already
-//! executes (ADR-0025). That shared path is the point: a second rewrite
-//! machinery would be the thing this change exists to prevent.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -21,9 +6,6 @@ use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::history_editor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Subject lines, newest first — the log a developer would read.
 fn subjects(dir: &Path) -> Vec<String> {
     git(dir, &["log", "--format=%s"])
         .lines()
@@ -41,7 +23,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Commit `text` touching `name`, returning the new HEAD.
 fn commit(dir: &Path, name: &str, text: &str) -> String {
     std::fs::write(dir.join(name), format!("{text}\n")).expect("writing work file");
     git(dir, &["add", "."]);
@@ -49,8 +30,6 @@ fn commit(dir: &Path, name: &str, text: &str) -> String {
     rev(dir, "HEAD")
 }
 
-/// A repo on `main` with one base commit, then a `feature` branch carrying
-/// three: the middle one is the subject both verbs act on.
 fn three_deep(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -65,10 +44,6 @@ fn three_deep(dir: &Path) -> PathBuf {
     repo
 }
 
-// ------------------------------------------------------------- drop commit --
-
-/// Dropping the middle commit removes exactly it: the work built on top is
-/// replayed, not discarded, and the commit below never moved.
 #[test]
 fn dropping_a_commit_removes_that_one_and_keeps_its_descendants() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -104,8 +79,6 @@ fn dropping_a_commit_removes_that_one_and_keeps_its_descendants() {
     );
 }
 
-/// The rewrite is recoverable: the backup ref exists before anything moves, so
-/// the existing recovery path returns the branch to the pre-drop state.
 #[test]
 fn a_drop_leaves_a_backup_the_recovery_path_can_restore() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -136,11 +109,6 @@ fn a_drop_leaves_a_backup_the_recovery_path_can_restore() {
     );
 }
 
-/// The rewrite is recoverable for a reword too, and this is the verb where it
-/// matters most: a message the developer regrets is a mistake one command
-/// rewrites, and one they cannot get back. Same path as the drop — the backup ref
-/// is written before the replay — and the recovery path puts the original message
-/// back.
 #[test]
 fn a_reword_leaves_a_backup_the_recovery_path_can_restore() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -176,7 +144,6 @@ fn a_reword_leaves_a_backup_the_recovery_path_can_restore() {
     );
 }
 
-/// A protected branch refuses before git is touched at all.
 #[test]
 fn a_drop_refuses_a_protected_branch_before_anything_runs() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -200,10 +167,6 @@ fn a_drop_refuses_a_protected_branch_before_anything_runs() {
     );
 }
 
-// ------------------------------------------------------------ reword commit --
-
-/// Rewording changes the message and nothing else: the same content, the same
-/// descendants, a different hash.
 #[test]
 fn rewording_a_commit_changes_its_message_and_not_its_work() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -245,8 +208,6 @@ fn rewording_a_commit_changes_its_message_and_not_its_work() {
     );
 }
 
-/// A protected branch refuses a reword too — it is the same rewrite, so it is
-/// the same guard.
 #[test]
 fn a_reword_refuses_a_protected_branch_before_anything_runs() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -274,13 +235,6 @@ fn a_reword_refuses_a_protected_branch_before_anything_runs() {
     );
 }
 
-// ------------------------------------------------------- one shared path ----
-
-/// Both verbs are one plan with one row set, so the interactive editor's own
-/// machinery — its result preview and its cautions — answers for a targeted
-/// rewrite exactly as it does for a hand-edited one. A reword counts as
-/// surviving verbatim, and the preview cannot show the replacement text because
-/// git's todo has nowhere to put it (ADR-0025).
 #[test]
 fn a_targeted_plan_spans_first_parent_to_tip_and_sets_one_row() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -324,9 +278,6 @@ fn a_targeted_plan_spans_first_parent_to_tip_and_sets_one_row() {
     );
 }
 
-/// A reword counts as surviving verbatim in the preview, and the preview cannot
-/// show the replacement text — the todo format has nowhere to put it, so the
-/// message is confirmed in its own editor before the plan is ever built.
 #[test]
 fn a_reword_survives_the_preview_without_showing_its_new_text() {
     let plan = vec![
@@ -354,10 +305,6 @@ fn a_reword_survives_the_preview_without_showing_its_new_text() {
     );
 }
 
-// ---------------------------------------------------- post-hoc undo (09) --
-
-/// `true` when `r` does not resolve — the OPPOSITE contract from [`rev`], the
-/// way the UI suite's `git_absent` reads an expected-absent ref.
 fn ref_absent(dir: &Path, r: &str) -> bool {
     !std::process::Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", r])
@@ -368,10 +315,6 @@ fn ref_absent(dir: &Path, r: &str) -> bool {
         .success()
 }
 
-/// The post-hoc undo restores from the backup ref rather than reconstructing
-/// anything: the branch returns to the exact pre-rewrite tip, the regretted
-/// message is gone, and the spent backup is discarded so the next rewrite
-/// starts from a clean net.
 #[test]
 fn undoing_a_reword_restores_the_pre_rewrite_history_from_the_backup() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -388,8 +331,6 @@ fn undoing_a_reword_restores_the_pre_rewrite_history_from_the_backup() {
     )
     .expect("the targeted reword runs");
 
-    // The undo is armed with the tip the rewrite finished on — the fact the
-    // guard compares against when it runs.
     let after_reword = rev(&repo, "HEAD");
     history_editor::undo_last_rewrite(&engine(), &repo, &after_reword)
         .expect("the undo runs while the repository stands where the rewrite left it");
@@ -405,10 +346,6 @@ fn undoing_a_reword_restores_the_pre_rewrite_history_from_the_backup() {
     );
 }
 
-/// The guard is the substance: undo validity is checked AT UNDO TIME, not
-/// assumed at rewrite time. A repository that has moved since the rewrite —
-/// here, a second operation committed on top — refuses the undo and restores
-/// nothing, because resetting to the backup would destroy the newer work.
 #[test]
 fn an_undo_refuses_when_the_repository_has_moved_since_the_rewrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -425,8 +362,6 @@ fn an_undo_refuses_when_the_repository_has_moved_since_the_rewrite() {
     )
     .expect("the targeted reword runs");
 
-    // A second operation lands after the rewrite: HEAD is no longer where the
-    // rewrite left it, so the tip recorded then no longer names the branch tip.
     let after_reword = rev(&repo, "HEAD");
     commit(&repo, "d.txt", "feature-4");
 

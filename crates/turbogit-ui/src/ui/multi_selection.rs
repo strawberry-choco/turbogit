@@ -1,82 +1,39 @@
-//! Multi-repo selection (issue #08, screen 04): tri-state checkbox
-//! selection over the workspace tree plus the selection summary.
-//!
-//! Pure presentation logic (sidebar / smart_groups precedent): the
-//! checked set is plain data — a `HashSet<RootId>` living in
-//! [`turbogit_app::state::UiState`] — and every rule here takes the tree
-//! plus that set, so the app crate never names UI types and this module
-//! never owns state. The selection rules themselves live in
-//! [`super::tree_selection`] over the recursive project tree
-//! (sidebar-project-tree issue 02); this module owns the summary row
-//! types and the rendering half ([`super::sidebar`] paints the checkboxes
-//! and the bottom selection bar, [`super::shell`] the central summary
-//! surface).
-//!
-//! One repository-verdict re-derivation lives here and is deliberately left
-//! un-migrated: the table's DIRTY column asks whether a count is non-zero
-//! rather than asking for a repository's state, so it keeps its own `> 0` and
-//! carries the reason at the line. That is a measured consequence of what the
-//! column holds, not an oversight.
-
-/// The three visual states of a group's checkbox, computed from its
-/// descendant repos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
-    /// No descendant repo is checked.
     Unchecked,
-    /// Some — but not all — descendant repos are checked.
     Partial,
-    /// Every descendant repo is checked.
     Checked,
 }
 
-// --- Selection summary (issue #08, screen 04) --------------------------------
-
-/// A selected repo's last commit: the subject line and a compact relative
-/// age ("14m", "3h", "2d").
 #[derive(Debug, Clone)]
 pub struct LastCommit {
     pub subject: String,
     pub age: String,
 }
 
-/// One row of the selection summary's per-repo table.
 #[derive(Debug, Clone)]
 pub struct SelectionRow {
-    /// The repository root this row belongs to, carried by the row so a click
-    /// aimed at it needs no second walk of the project tree to recover.
     pub id: RootId,
     pub name: String,
     pub branch: Option<String>,
-    /// Outgoing commits vs upstream (the ↑ column).
     pub ahead: usize,
-    /// Incoming commits vs upstream (the ↓ column).
     pub behind: usize,
     /// Modified + unversioned paths.
     pub dirty: usize,
-    /// `None` when the root's log is not cached yet — the table shows a
+    /// `None` when the root's log is not cached yet, the table shows a
     /// dash and the caller fetches the log lazily.
     pub last_commit: Option<LastCommit>,
 }
 
-/// The aggregate stats header plus per-repo table of the selection surface.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionSummary {
-    /// Selected repo count (the "REPOS" stat).
     pub repos: usize,
-    /// Total outgoing commits across the selection ("AHEAD").
     pub ahead: usize,
-    /// Total incoming commits across the selection ("BEHIND").
     pub behind: usize,
-    /// Total dirty (modified + unversioned) files across the selection
-    /// ("DIRTY FILES").
     pub dirty_files: usize,
-    /// One row per selected repo, in tree order.
     pub rows: Vec<SelectionRow>,
 }
 
-/// Compact relative age (screen 04's "14m" / "1h" / "3h" style) from a
-/// delta in seconds.
 pub fn age_label(delta_secs: i64) -> String {
     if delta_secs < 60 {
         "<1m".to_string()
@@ -88,8 +45,6 @@ pub fn age_label(delta_secs: i64) -> String {
         format!("{}d", delta_secs / 86_400)
     }
 }
-
-// --- Rendering ----------------------------------------------------------------
 
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Sense, Ui, UiBuilder,
@@ -107,14 +62,11 @@ use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{DisplayName, RootId};
 
-/// The selection summary's table columns: the per-repo table's offsets, from
-/// the surface's left content edge, matching screen 04's column rhythm.
 const COL_BRANCH: f32 = 220.0;
 const COL_SYNC: f32 = 380.0;
 const COL_DIRTY: f32 = 470.0;
 const COL_COMMIT: f32 = 545.0;
 
-/// The per-repo table as one column table read by both its header and its rows.
 const SUMMARY_COLUMNS: [widgets::PaneColumn; 5] = [
     widgets::PaneColumn::start("REPO", 0.0),
     widgets::PaneColumn::start("BRANCH", COL_BRANCH),
@@ -123,19 +75,10 @@ const SUMMARY_COLUMNS: [widgets::PaneColumn; 5] = [
     widgets::PaneColumn::start("LAST COMMIT", COL_COMMIT),
 ];
 
-/// The summary table's header band, in the same one size.
 const HEADER_H: f32 = 24.0;
 
-/// One repo row of the selection summary. Taller than the 24/26 px ramp
-/// because the row is single-line but carries a state dot and two count
-/// cells that need breathing room; it is this surface's own row, so it stays
-/// here (conformance issue 09).
 const ROW_H: f32 = 34.0;
 
-/// The central "Multi-repo selection" surface (screen 04): a header with
-/// the Pin-as-view affordance, the aggregate stats row, and the per-repo
-/// table. The shell routes here instead of the active tool window while
-/// the selection is non-empty.
 pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
@@ -155,9 +98,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             .layout(Layout::top_down(Align::Min)),
     );
 
-    // Header: title + breadcrumb on the left, "Pin as view" on the right.
-    // The same placeholder the shell's workspace header passes, to the same
-    // owner: two call sites that read alike because they say alike.
     let project = state.project_dir.display_name_or("<workspace>");
     let header_h = 32.0;
     let header = Rect::from_min_size(
@@ -213,9 +153,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
 
     body.add_space(10.0);
 
-    // Lazy log fill: selected roots whose log is not cached fetch through
-    // the same worker path the Log tab uses (the table shows a dash until
-    // the cache fills).
     let tree = project_tree::build_tree(&state.project_dir, &state.multi.roots, &|id| {
         state.caches.ahead_behind(id)
     });
@@ -242,7 +179,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         now,
     );
 
-    // Aggregate stats row (screen 04): four label-over-number columns.
     let stats = [
         ("REPOS", summary.repos.to_string(), Palette::INK),
         ("AHEAD", summary.ahead.to_string(), Palette::STATE_SUCCESS),
@@ -285,10 +221,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
 
     body.add_space(12.0);
 
-    // Per-repo table: header row, then one row per selected repo. The header's
-    // structural underline is painted from the band the matrix painter returns,
-    // after the rows — it sits inside the header band, and the first row starts
-    // a spacing below it.
     let width = body.available_width();
     let header_rect = super::column_table::matrix_table(
         &mut body,
@@ -301,8 +233,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             ui.allocate_exact_size(Vec2::new(r.width(), ROW_H), Sense::hover());
             let response = ui.interact(r, ui.auto_id_with(("sel_row", &row.name)), Sense::click());
             if response.clicked() {
-                // The row carries the root it is about, so a click needs no
-                // walk of the tree matching on the label it painted.
                 state.selected_root = Some(row.id.clone());
             }
             response.widget_info(|| {
@@ -322,12 +252,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
                 format!("↑{} ↓{}", row.ahead, row.behind),
                 Palette::INK_2,
             );
-            // Deliberately **not** the owner's `RepoState::is_dirty`: a column
-            // of numbers asks whether the number is non-zero; it is not asking
-            // for a repository's state. The owner's rule reads a whole status,
-            // and routing a count through it would mean either a count-shaped
-            // second entry on the owner — a rule with no single shape — or
-            // widening its signature to accept either.
             let dirty_color = if row.dirty > 0 {
                 Palette::STATE_WARNING
             } else {
@@ -344,10 +268,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             }
         },
     );
-    // The column-header's underline, through the shared edge rule. **This is a
-    // half-pixel change from the copy it replaces:** a 1px stroke centred on an
-    // integer coordinate straddles two device pixel rows and each gets half
-    // coverage, so the rule read measurably dimmer than every other hairline.
     widgets::edge_rule(
         body.painter(),
         header_rect,
@@ -355,9 +275,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         Palette::RULE_STRUCTURAL,
     );
 
-    // Operations grid (issue 09, screen 04): the fleet sync operations.
-    // Choosing any of them opens the preflight matrix modal first —
-    // nothing runs straight from the grid.
     body.add_space(20.0);
     let ops_width = body.available_width();
     let title_rect = Rect::from_min_size(body.cursor().left_top(), Vec2::new(ops_width, 18.0));
@@ -397,12 +314,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         Palette::INK_3,
     );
 
-    // Two rows of four grid cells, per the mockup. The four fleet sync
-    // operations, the cascade branch op (issue 11), and the custom command
-    // (issue 13) are wired; the remaining mockup actions (tag release,
-    // cherry-pick across) belong to their own issues and render as inert
-    // controls — scope gaps are recorded, never hidden (CONTEXT.md "Inert
-    // control").
     const OP_COLS: usize = 4;
     let cell_gap = 12.0;
     let cell_w = (ops_width - cell_gap * (OP_COLS - 1) as f32) / OP_COLS as f32;
@@ -412,16 +323,9 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             Some(BulkOp::FetchAll),
             Some(BulkOp::PullAll),
             Some(BulkOp::PushAll),
-            // The flagship cascade op (issue 11): create & checkout branch.
             Some(BulkOp::CreateBranch),
         ],
-        [
-            Some(BulkOp::StashAll),
-            None,
-            None,
-            // The user-typed fleet command (issue 13).
-            Some(BulkOp::Custom),
-        ],
+        [Some(BulkOp::StashAll), None, None, Some(BulkOp::Custom)],
     ];
     let inert_labels = [
         [None, None, None, None],
@@ -467,9 +371,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         }
     }
 
-    // Recent bulk operations (issue 12, screen 04): one row per completed
-    // run — time, op, repo count, outcome summary — with per-row Details
-    // drill-down and Rollback where reversible.
     body.add_space(20.0);
     let hist_width = body.available_width();
     let header_rect = Rect::from_min_size(body.cursor().left_top(), Vec2::new(hist_width, 18.0));
@@ -541,7 +442,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         );
         cell(400.0, rec.summary(), Palette::INK_2, false);
 
-        // Details / Rollback on the right, per the mockup.
         let actions = Rect::from_min_size(
             Pos2::new(row_rect.right() - 180.0, row_rect.top()),
             Vec2::new(180.0, 26.0),
@@ -572,7 +472,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             };
         }
 
-        // Details drill-down: one outcome row per repo.
         if state.ui.bulk_history_open == Some(rec.id) {
             for repo in &rec.repos {
                 let detail_rect =

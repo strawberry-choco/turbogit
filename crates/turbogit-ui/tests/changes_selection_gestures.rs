@@ -1,21 +1,3 @@
-//! Local Changes: the modifier gestures over a file row's body.
-//!
-//! A row-body click is the browse gesture, and the keys held at the click pick
-//! which selection rule runs: plain replaces the set with one row, Command/Ctrl
-//! toggles one row in or out, Shift+Click replaces the set with the contiguous
-//! painted range from the anchor. The rule itself is the pure reducer in
-//! `turbogit_ui::ui::changes_selection`. This suite drives the real
-//! `turbogit_ui::ui::render()` through `egui_kittest` over temporary repositories
-//! and asserts what the surface ends up holding, because a gesture needs two
-//! things the reducer cannot own: the modifier read off egui's input, and the
-//! paint order a range spans.
-//!
-//! Covers: a plain click clearing a held multi-selection; Command/Ctrl adding and
-//! removing one row; a range over rows below and above the anchor; a range across
-//! two repository groups; and the one row that must never join the set, the
-//! Merge-conflicts row, since `ui.selected` is what Discard Changes, Shelve and
-//! Create Patch act on and none of them guards an unmerged path.
-
 use std::path::{Path, PathBuf};
 
 use egui_kittest::Harness;
@@ -24,8 +6,6 @@ use test_support::git_seed::{repo_with_conflict, repo_with_one_commit};
 use test_support::harness::{click_with_modifiers, shell_harness_over_unstyled};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, RootId};
-
-// ---------------------------------------------------------------- helpers --
 
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
@@ -36,26 +16,20 @@ fn app_state(roots: &[PathBuf]) -> AppState {
     AppState::for_roots(&dir, roots)
 }
 
-/// The commit window's own harness shape: unstyled, 1280 by 800, and a
-/// `max_steps` budget high enough for the async diff read a row click starts.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
 }
 
-/// The previewed change of these single-root fixtures: the row's repo-relative
-/// path, tied to the one repository the fixture registered.
 fn change(repo: &Path, rel: &str) -> ChangeRef {
     ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
 }
 
-/// `name`'s untracked file in `repo`, so it lands in the flat list.
 fn add_worktree_file(repo: &Path, name: &str) {
     std::fs::write(repo.join(name), format!("work in {name}\n")).unwrap();
 }
 
-/// The selected keys, sorted by path, so a failure reads as a list.
 fn selected_names(h: &Harness<'_, AppState>) -> Vec<String> {
     let mut out: Vec<String> = h
         .state()
@@ -68,7 +42,6 @@ fn selected_names(h: &Harness<'_, AppState>) -> Vec<String> {
     out
 }
 
-/// A plain row-body click.
 #[track_caller]
 fn click_row(h: &mut Harness<'_, AppState>, label: &str) {
     h.get_by_label(label).click();
@@ -201,8 +174,6 @@ fn a_shift_range_crosses_two_repository_groups() {
     add_worktree_file(&lib, "b1.txt");
 
     let mut h = harness(app_state(&[alpha.clone(), lib.clone()]));
-    // Only the focused repo's group is open at rest, so the other's rows have to
-    // be painted before a range can reach them.
     click_row(&mut h, "Expand all groups");
     click_row(&mut h, "a2.txt");
     shift_click(&mut h, "b1.txt");
@@ -221,10 +192,6 @@ fn a_shift_range_crosses_two_repository_groups() {
     );
 }
 
-/// **The destructive-path guard.** `ui.selected` is handed to `git checkout --
-/// <paths>` by Discard and to a whole-tree `git stash push` by Shelve, and
-/// neither refuses an unmerged path, so a conflicted row that joined a range
-/// would be a command git rejects on the developer's own work.
 #[test]
 fn a_shift_range_that_spans_the_conflicts_group_leaves_the_conflicted_path_out() {
     let parent = tempfile::tempdir().unwrap();
@@ -236,8 +203,6 @@ fn a_shift_range_that_spans_the_conflicts_group_leaves_the_conflicted_path_out()
     let mut h = harness(app_state(&[solo.clone(), other.clone()]));
     click_row(&mut h, "Expand all groups");
 
-    // The conflicts row is the first painted row of the focused repo, so a range
-    // from it reaches every file row below it.
     click_row(&mut h, "C conf.txt");
     assert!(
         h.state().ui.selected.is_empty(),

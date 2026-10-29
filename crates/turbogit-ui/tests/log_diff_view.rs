@@ -1,7 +1,3 @@
-//! The Log view's diff verbs: the changed-files pane's row click selects a
-//! file and the pane's `Open diff` footer link opens that file at that
-//! commit; the `View in Diff` escape names a whole commit.
-
 use std::path::{Path, PathBuf};
 
 use egui_kittest::{Harness, kittest::Queryable};
@@ -15,19 +11,12 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{configure_style, install_fonts};
 
-// --- fixture -------------------------------------------------------------------
-
 struct Seed {
     _tmp: TempDir,
     project: PathBuf,
-    /// HEAD~2 — added a second line to `tracked.txt`, so its diff is one
-    /// addition and nothing else.
     c2: String,
 }
 
-/// The line only the newest commit's version of the file has. No other widget
-/// in the window can paint it, unlike the commit messages, which the graph row
-/// and the details pane both paint.
 const ADDED_LINE: &str = "zz-added-by-second-commit";
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
@@ -35,8 +24,6 @@ fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_owned()
 }
 
-/// One root `alpha`: c1 creates tracked.txt, c2 appends one line to it, c3 is a
-/// docs-only commit.
 fn seeded_project() -> Seed {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
@@ -94,7 +81,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
                 install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            state.drain_events(); // production parity with app.rs
+            state.drain_events();
             turbogit_ui::ui::render(ui, state);
         },
         state,
@@ -111,9 +98,6 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// Select the commit row and its changed-file entry, then open the file's
-/// diff through the pane's `Open diff` footer link — the one verb that opens
-/// a file diff.
 fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     let row_label = format!("{} message of the second commit", short(&seed.c2));
     harness.get_by_label(&row_label).click();
@@ -124,8 +108,6 @@ fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     settle_reads(harness);
 }
 
-/// **The footer's `Open diff` shows the selected file's diff at that
-/// commit.**
 #[test]
 fn the_open_diff_footer_link_paints_the_selected_file_s_diff() {
     let seed = seeded_project();
@@ -136,12 +118,6 @@ fn the_open_diff_footer_link_paints_the_selected_file_s_diff() {
     assert_painted(&harness, ADDED_LINE);
 }
 
-/// **A diff opened from the Log view is history, not the worktree: it offers
-/// no staging.**
-///
-/// The granular verbs compose against the index, and a commit-to-commit pair
-/// has no index on either side — so the surface paints read-only: no hunk
-/// staging pair, and no row that claims a staged-ness it cannot honour.
 #[test]
 fn a_diff_opened_from_the_log_offers_no_staging() {
     let seed = seeded_project();
@@ -163,7 +139,6 @@ fn a_diff_opened_from_the_log_offers_no_staging() {
     );
 }
 
-/// **Closing the diff window closes the window.**
 #[test]
 fn closing_the_diff_window_closes_the_window() {
     let seed = seeded_project();
@@ -177,12 +152,6 @@ fn closing_the_diff_window_closes_the_window() {
     assert_not_painted(&harness, ADDED_LINE);
 }
 
-/// **A root commit's changed file diffs the commit against the empty tree,
-/// not the working tree.**
-///
-/// The worktree is dirtied after the commit on purpose: a comparison that
-/// fell back to plain `git diff` would paint the dirty line as part of the
-/// commit's change.
 #[test]
 fn a_root_commit_file_opened_through_the_footer_paints_the_commit_s_own_diff() {
     let tmp = tempfile::tempdir().expect("tempdir");

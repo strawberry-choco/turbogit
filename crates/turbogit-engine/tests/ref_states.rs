@@ -1,16 +1,7 @@
-//! Issue 17 — Log UX upgrades, engine seam: ref decorations carry state —
-//! a remote-tracking ref reports `Gone` when its upstream branch was
-//! deleted on the remote, and tags report pushed vs local-only.
-
 use test_support::git_seed::git;
 use turbogit_domain::model::{GitRefKind, RefState, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
-
-// The fixtures stay inline and local, deliberately NOT `git_seed` recipes: they need
-// a tag pushed to a bare origin plus a SECOND tag that never left the machine, and
-// — in the first case — a `git update-ref -d` INSIDE the bare remote so the local
-// tracking ref survives to be marked `Gone`.
 
 #[test]
 fn decorations_report_remote_gone_and_tag_push_state() {
@@ -44,10 +35,6 @@ fn decorations_report_remote_gone_and_tag_push_state() {
     git(&repo, &["push", "-q", "-u", "origin", "main"]);
     git(&repo, &["push", "-q", "origin", "v1.0"]);
 
-    // A second tag that never left the machine, and an upstream deletion
-    // the local clone has not pruned yet. The deletion happens *inside*
-    // the bare remote (`git push :main` would prune the local
-    // remote-tracking ref too, leaving nothing to mark gone).
     git(&repo, &["tag", "v2.0"]);
     git(&origin, &["update-ref", "-d", "refs/heads/main"]);
 
@@ -79,7 +66,6 @@ fn decorations_report_remote_gone_and_tag_push_state() {
         .expect("v2.0 decoration");
     assert_eq!(v2.2, RefState::LocalOnly);
 
-    // The local branch itself carries no special state.
     let main = flat
         .iter()
         .find(|(k, n, _)| *k == GitRefKind::Branch && n == "main")
@@ -87,11 +73,6 @@ fn decorations_report_remote_gone_and_tag_push_state() {
     assert_eq!(main.2, RefState::Default);
 }
 
-/// A remote that cannot be reached must leave refs unmarked (the
-/// `all_ok = false` path), never mistagging a pushed tag as local-only or a
-/// live ref as gone — and nothing may hang on the failure (the D3 bounded
-/// options keep offline `ls-remote` from sitting on a credential prompt or a
-/// slow stream).
 #[test]
 fn unreachable_remote_leaves_refs_unmarked_and_returns_promptly() {
     let tmp = tempfile::tempdir().unwrap();
@@ -104,8 +85,6 @@ fn unreachable_remote_leaves_refs_unmarked_and_returns_promptly() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "c1"]);
     git(&repo, &["tag", "v1.0"]);
-    // Port 1 refuses TCP connections immediately — the bounded ls-remote
-    // fails fast instead of hanging on a slow stream.
     git(
         &repo,
         &["remote", "add", "origin", "http://127.0.0.1:1/unreachable"],
@@ -117,8 +96,6 @@ fn unreachable_remote_leaves_refs_unmarked_and_returns_promptly() {
     };
     let deco = exec.ref_decorations(&repo).expect("decorations");
 
-    // The tag is listed (from the local for-each-ref) but carries no sync
-    // state: the offline remote must not flip it to LocalOnly.
     let mut seen_tag = None;
     for (_, refs) in &deco {
         if let Some(r) = refs.iter().find(|r| r.kind == GitRefKind::Tag) {

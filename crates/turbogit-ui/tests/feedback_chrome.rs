@@ -1,18 +1,3 @@
-//! Issue #22 — Feedback chrome: toasts, confirm prompts, VCS popup, palette.
-//!
-//! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
-//! driving [`turbogit_ui::ui::render`] over a **real temp git repository**.
-//! Asserts only on public surfaces: painted shapes (text galleys, filled
-//! rects, stroked paths) and public `AppState` transitions.
-//! Covered (spec §7.1/§10, R4.x, ADR-0011):
-//! - each toast kind paints its semantic STATE_* token as accent bar + icon
-//! - Dismiss clears the toast
-//! - confirm cycle still executes (OK) and cancels (Cancel) destructive ops
-//! - VCS operations popup renders popup chrome with its EXACT action set
-//! - command palette retains every prior entry and gains Go to Log /
-//!   Open Welcome, each verified reachable (Toggle Toolbar was removed
-//!   in issue #03 when the toolbar itself was retired)
-
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
@@ -28,8 +13,6 @@ use turbogit_app::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::popups::Action;
 
-// --- git fixture ---------------------------------------------------------------
-
 // `repo_project` below writes no `user.*` into its repository, so the pinned
 // identity is the only one the fixture's commits carry, and the confirm-dialog
 // rows carry the author line: every call is pinned per call through the fixture
@@ -41,8 +24,6 @@ fn commit_readme(repo: &Path) {
     git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
-/// A project dir holding one real repo `alpha` on `main` with local branches
-/// `feature-a` and `feature-b` (disposable subjects for the confirm cycle).
 fn repo_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -58,16 +39,10 @@ fn repo_project() -> (TempDir, PathBuf) {
     (tmp, project)
 }
 
-// --- harness ---------------------------------------------------------------------
-
-/// Harness over a real repo-backed project, at the 1024x768 box, from the
-/// shared shell launcher. The old local copy drained events *before* the token
-/// install, which cannot matter: `drain_events` paints nothing.
 fn feedback_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
-/// Step frames until `pred` holds on public state (async op completion).
 fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&AppState) -> bool) {
     for _ in 0..600 {
         if pred(harness.state()) {
@@ -86,9 +61,6 @@ fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&Ap
     );
 }
 
-// --- shape inspection -------------------------------------------------------------
-
-/// The solid color of a path stroke (icon strokes), if it paints anything.
 fn solid_path_stroke(stroke: &egui::epaint::PathStroke) -> Option<Color32> {
     match stroke.color {
         ColorMode::Solid(c) if c != Color32::TRANSPARENT => Some(c),
@@ -96,13 +68,10 @@ fn solid_path_stroke(stroke: &egui::epaint::PathStroke) -> Option<Color32> {
     }
 }
 
-/// The solid color of a plain rect stroke (window frames), if any.
 fn solid_rect_stroke(stroke: &egui::Stroke) -> Option<Color32> {
     (stroke.color != Color32::TRANSPARENT).then_some(stroke.color)
 }
 
-/// Colors of stroked path primitives (what icon rendering emits) whose
-/// geometry passes within `radius` of `near`.
 fn stroked_colors_near(harness: &Harness<'_, AppState>, near: Pos2, radius: f32) -> Vec<Color32> {
     harness
         .output()
@@ -147,9 +116,6 @@ fn popup_chrome(harness: &Harness<'_, AppState>, what: &str) -> (Rect, usize) {
     panic!("{what} must render with popup chrome (SURFACE fill + LINE border)")
 }
 
-/// Every text galley painted after `after_idx` whose origin lies inside
-/// `rect` — the popup's own content, excluding overlapping shell text below
-/// it in paint order.
 fn texts_inside_after(
     harness: &Harness<'_, AppState>,
     rect: Rect,
@@ -168,8 +134,6 @@ fn texts_inside_after(
         })
         .collect()
 }
-
-// --- Cycle 1: toasts paint their semantic kind ------------------------------------
 
 const KIND_CASES: [(ToastKind, &str, Color32); 4] = [
     (
@@ -198,7 +162,7 @@ fn each_toast_kind_paints_its_semantic_color_and_icon() {
                 kind,
                 message: msg.into(),
             });
-            st.ui.toast_shown_at = None; // fresh auto-dismiss window per case
+            st.ui.toast_shown_at = None;
         }
         settle_quiet(&mut harness);
 
@@ -206,7 +170,6 @@ fn each_toast_kind_paints_its_semantic_color_and_icon() {
         let origin =
             galley_origin(&harness, msg).unwrap_or_else(|| panic!("{kind:?} message not painted"));
 
-        // Accent bar: the exact STATE_* token filled next to the message.
         let near_origin = Rect::from_center_size(origin, Vec2::new(140.0, 48.0));
         assert!(
             filled_rects(&harness)
@@ -215,7 +178,6 @@ fn each_toast_kind_paints_its_semantic_color_and_icon() {
             "{kind:?} toast must paint its {color:?} accent bar"
         );
 
-        // Matching icon: vector strokes tinted with the same token.
         assert!(
             stroked_colors_near(&harness, origin, 56.0).contains(&color),
             "{kind:?} toast must paint an icon stroked in {color:?}"
@@ -244,8 +206,6 @@ fn dismiss_clears_the_toast() {
     assert_not_painted(&harness, "dismissable op");
 }
 
-// --- Cycle 2: confirm cycle still executes / cancels -------------------------------
-
 #[test]
 fn confirm_ok_executes_the_destructive_action() {
     let (_project, dir) = repo_project();
@@ -255,7 +215,6 @@ fn confirm_ok_executes_the_destructive_action() {
     });
     settle_quiet(&mut harness);
 
-    // Dialog chrome: header title + body copy + footer actions all painted.
     assert_painted(&harness, "Confirm");
     assert_painted(
         &harness,
@@ -296,8 +255,6 @@ fn confirm_cancel_keeps_everything_intact() {
     assert!(kept, "Cancel must leave the branch untouched");
 }
 
-// --- Cycle 3: VCS operations popup keeps its EXACT action set ----------------------
-
 #[test]
 fn vcs_popup_renders_popup_chrome_with_exact_action_set() {
     let (_project, dir) = repo_project();
@@ -308,12 +265,6 @@ fn vcs_popup_renders_popup_chrome_with_exact_action_set() {
     assert_painted(&harness, "VCS Operations");
     let (chrome, chrome_idx) = popup_chrome(&harness, "VCS Operations popup");
 
-    // The action set inside the popup is exactly Action::all() — nothing
-    // dropped, nothing added (the palette's extra shell actions live there) —
-    // with ONE exception that is a rule rather than an omission: the direct push
-    // verb is withheld, not disabled, when the workspace cannot name one
-    // unambiguous push. The expected set therefore consults the same predicate
-    // the popup paints from, so "dropped" still fails and "gated" does not.
     let mut inside = texts_inside_after(&harness, chrome, chrome_idx);
     inside.sort();
     inside.dedup();
@@ -331,7 +282,6 @@ fn vcs_popup_renders_popup_chrome_with_exact_action_set() {
         "VCS Operations popup must contain exactly its documented action set"
     );
 }
-// --- Cycle 4: command palette retains prior entries + gains two new ones ---
 
 #[test]
 fn palette_retains_every_prior_entry_plus_two_new_ones() {
@@ -341,7 +291,6 @@ fn palette_retains_every_prior_entry_plus_two_new_ones() {
     settle_quiet(&mut harness);
 
     assert_painted(&harness, "Find Action");
-    // Every pre-existing entry survives (ADR-0011: nothing dropped)…
     for label in Action::all().iter().map(|a| a.label()) {
         assert_painted(&harness, label);
     }
@@ -350,8 +299,6 @@ fn palette_retains_every_prior_entry_plus_two_new_ones() {
     }
 }
 
-/// Open the palette filtered to `query`, click `label`, and require that the
-/// entry was really reachable through search + click.
 fn run_palette_entry(harness: &mut Harness<'_, AppState>, query: &str, label: &str) {
     {
         let st = harness.state_mut();

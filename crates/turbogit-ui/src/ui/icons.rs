@@ -1,25 +1,15 @@
-//! Lucide icon primitives (issue #7, spec §5).
-//!
-//! Every icon is embedded as Lucide SVG path data (24×24 viewBox, 2px
-//! strokes) and rendered as stroked egui primitives scaled by `size / 24`
-//! (spec §5.1/§5.3). Lookup is by name ([`Icon::from_name`]); unknown names
-//! log at debug level and paint nothing — never panic.
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use egui::epaint::PathShape;
 use egui::{Color32, Pos2, Rect, Response, Shape, Stroke, Ui, UiBuilder, Vec2};
 
-/// Typed handle to one of the embedded Lucide icons (spec §5.2).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Icon {
     name: &'static str,
 }
 
 impl Icon {
-    // --- GENERATED icon constants (spec §5.2) ---
-
     pub const ALERT_CIRCLE: Self = Self {
         name: "alert-circle",
     };
@@ -109,7 +99,6 @@ impl Icon {
     pub const UPLOAD: Self = Self { name: "upload" };
     pub const X: Self = Self { name: "x" };
 
-    /// All embedded icons, in spec §5.2 order.
     pub const ALL: &'static [Self] = &[
         Self::ALERT_CIRCLE,
         Self::ALERT_TRIANGLE,
@@ -170,14 +159,11 @@ impl Icon {
         Self::UPLOAD,
         Self::X,
     ];
-    // --- END GENERATED CONSTANTS ---
 
-    /// The Lucide name (`"check"`), i.e. the lookup key.
     pub const fn name(self) -> &'static str {
         self.name
     }
 
-    /// Lookup by Lucide name; `None` when not in the embedded set.
     pub fn from_name(name: &str) -> Option<Self> {
         ICON_PATHS
             .iter()
@@ -249,15 +235,10 @@ static ICON_PATHS: &[(&str, &[&str])] = &[
     ("upload", &["M12 3v12", "m17 8-5-5-5 5", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"]),
     ("x", &["M18 6 6 18", "m6 6 12 12"]),
 ];
-/// Paint `name` at the cursor, scaled to `size × size`, stroked with `color`.
-///
-/// Unknown names paint nothing (and log at debug) — never panic (§5.3).
 pub fn icon(ui: &mut Ui, name: Icon, size: f32, color: Color32) {
     let _ = icon_response(ui, name, size, color);
 }
 
-/// Paint `name` in a square slot centered at `center` without disturbing the
-/// caller's layout. The returned response exposes the exact square slot.
 pub fn centered_icon(ui: &mut Ui, name: Icon, center: Pos2, size: f32, color: Color32) -> Response {
     let mut child =
         ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
@@ -276,20 +257,12 @@ pub fn icon_by_name(ui: &mut Ui, name: &str, size: f32, color: Color32) {
     paint_at(ui.painter(), rect.min, size, name, color);
 }
 
-/// Paint an icon's strokes with `origin` at its top-left, scaled to
-/// `size × size` and stroked `color`, through `painter`.
-///
-/// Painter-only: registers no widget (unlike [`icon`]), so it is safe to
-/// draw inside a painter-based row without stealing its clicks.
-/// Unknown names paint nothing (and log at debug) — never panic (§5.3).
 pub fn paint_icon(painter: &egui::Painter, origin: Pos2, size: f32, name: Icon, color: Color32) {
     paint_at(painter, origin, size, name.name(), color);
 }
 
-/// Paint an icon's strokes into `rect`'s top-left at `size`, stroked `color`.
 fn paint_at(painter: &egui::Painter, origin: Pos2, size: f32, name: &str, color: Color32) {
     let Some(subpaths) = geometry(name) else {
-        // Spec §5.3: missing icons render nothing and never panic.
         log::debug!(target: "turbogit::icons", "unknown icon name `{name}`");
         return;
     };
@@ -309,12 +282,8 @@ fn paint_at(painter: &egui::Painter, origin: Pos2, size: f32, name: &str, color:
     }
 }
 
-// --- Geometry: embedded path data → flattened polylines ---
-
-/// Flattened geometry: one polyline (+ closed flag) per SVG subpath.
 type Subpaths = Vec<(Vec<Pos2>, bool)>;
 
-/// Parsed polylines per icon, computed once on first use.
 fn geometry(name: &str) -> Option<&'static Subpaths> {
     static CACHE: OnceLock<HashMap<&'static str, Subpaths>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| {
@@ -334,8 +303,6 @@ fn parse_all(ds: &[&str]) -> Subpaths {
     out
 }
 
-// --- Minimal SVG path-data parser (linear commands) ---
-
 enum Tok {
     Cmd(u8),
     Num(f32),
@@ -354,10 +321,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scan one token without consuming it.
-    ///
-    /// `next` only ever advances `pos`, so saving/restoring it is a valid
-    /// way to look ahead.
     fn peek(&mut self) -> Option<Tok> {
         let save = self.pos;
         let tok = self.next();
@@ -374,7 +337,7 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
             return Some(Tok::Cmd(c));
         }
-        // Number: [-+]?digits[.digits][eE[-+]digits] — '-' starts a new number.
+        // Number: [-+]?digits[.digits][eE[-+]digits], '-' starts a new number.
         let start = self.pos;
         if c == b'-' || c == b'+' {
             self.pos += 1;
@@ -392,7 +355,7 @@ impl<'a> Lexer<'a> {
             }
         }
         if !seen_digit {
-            return None; // malformed; stop parsing this path
+            return None;
         }
         if matches!(self.bytes.get(self.pos), Some(b'e') | Some(b'E')) {
             let save = self.pos;
@@ -440,20 +403,17 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// Parse one `d` string into open/closed polylines. Malformed input stops
-/// parsing early but never panics; whatever was parsed so far still renders.
 fn parse_d(d: &str, out: &mut Subpaths) {
     let mut lx = Lexer::new(d);
     let mut cur = Pos2::ZERO;
     let mut start = Pos2::ZERO;
     let mut pts: Vec<Pos2> = Vec::new();
     let mut last_cmd = b'\0';
-    // Control points of the previous curve, for S/T smooth reflection.
     let mut last_ctrl = Pos2::ZERO;
     let mut last_quad_ctrl = Pos2::ZERO;
 
     loop {
-        // A command letter — or a bare number, which repeats the previous
+        // A command letter, or a bare number, which repeats the previous
         // command (implicit repetition: M→L, m→l).
         let cmd = match lx.peek() {
             Some(Tok::Cmd(c)) => {
@@ -461,7 +421,7 @@ fn parse_d(d: &str, out: &mut Subpaths) {
                 c
             }
             Some(Tok::Num(_)) => match last_cmd {
-                0 => break, // number before any command
+                0 => break,
                 b'M' => b'L',
                 b'm' => b'l',
                 c => c,
@@ -472,11 +432,10 @@ fn parse_d(d: &str, out: &mut Subpaths) {
             () => {
                 match lx.number() {
                     Some(v) => v,
-                    None => break, // truncated input
+                    None => break,
                 }
             };
         }
-        // Ensure the subpath has an anchor point before adding segments.
         macro_rules! anchored {
             () => {
                 if pts.is_empty() {
@@ -527,7 +486,6 @@ fn parse_d(d: &str, out: &mut Subpaths) {
                     let (x2, y2, x, y) = (coord!(), coord!(), coord!(), coord!());
                     let rel = cmd == b's';
                     let off = |a: f32, b: f32| if rel { a + b } else { b };
-                    // First control reflects the previous curve's second control.
                     let p1 = if matches!(last_cmd, b'C' | b'S' | b'c' | b's') {
                         pos2(2.0 * cur.x - last_ctrl.x, 2.0 * cur.y - last_ctrl.y)
                     } else {
@@ -561,7 +519,6 @@ fn parse_d(d: &str, out: &mut Subpaths) {
                     } else {
                         pos2(x, y)
                     };
-                    // Control reflects the previous quadratic's control.
                     let ctrl = if matches!(last_cmd, b'Q' | b'T' | b'q' | b't') {
                         pos2(
                             2.0 * cur.x - last_quad_ctrl.x,
@@ -582,7 +539,7 @@ fn parse_d(d: &str, out: &mut Subpaths) {
                 let ry = coord!();
                 let rot = coord!();
                 let (Some(large_arc), Some(sweep)) = (lx.flag(), lx.flag()) else {
-                    break; // malformed flags
+                    break;
                 };
                 let (x, y) = (coord!(), coord!());
                 let to = if cmd == b'A' {
@@ -601,14 +558,13 @@ fn parse_d(d: &str, out: &mut Subpaths) {
                 }
                 cur = start;
             }
-            _ => break, // unknown command: keep what parsed so far
+            _ => break,
         }
         last_cmd = cmd;
     }
     flush(&mut pts, out);
 }
 
-/// Sample a cubic Bézier into `pts` (start point already present).
 fn sample_cubic(pts: &mut Vec<Pos2>, p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2) {
     const N: usize = 12;
     for i in 1..=N {
@@ -621,7 +577,6 @@ fn sample_cubic(pts: &mut Vec<Pos2>, p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2) {
     }
 }
 
-/// Sample a quadratic Bézier into `pts` (start point already present).
 fn sample_quad(pts: &mut Vec<Pos2>, p0: Pos2, p1: Pos2, p2: Pos2) {
     const N: usize = 8;
     for i in 1..=N {
@@ -649,19 +604,19 @@ fn push_arc(
 ) {
     let (rx, ry) = (rx_in.abs(), ry_in.abs());
     if rx <= f32::EPSILON || ry <= f32::EPSILON || from.distance(to) < f32::EPSILON {
-        pts.push(to); // degenerate arc renders as a line
+        pts.push(to);
         return;
     }
     let phi = phi_deg.to_radians();
     let (sin_phi, cos_phi) = phi.sin_cos();
 
-    // F.6.5.1 — endpoint delta in the rotated frame.
+    // F.6.5.1, endpoint delta in the rotated frame.
     let dx2 = (from.x - to.x) / 2.0;
     let dy2 = (from.y - to.y) / 2.0;
     let x1p = cos_phi * dx2 + sin_phi * dy2;
     let y1p = -sin_phi * dx2 + cos_phi * dy2;
 
-    // F.6.5.2 — scale radii up when the arc is out of range.
+    // F.6.5.2, scale radii up when the arc is out of range.
     let lambda = x1p * x1p / (rx * rx) + y1p * y1p / (ry * ry);
     let (rx, ry) = if lambda > 1.0 {
         (rx * lambda.sqrt(), ry * lambda.sqrt())
@@ -669,7 +624,7 @@ fn push_arc(
         (rx, ry)
     };
 
-    // F.6.5.3 — center.
+    // F.6.5.3, center.
     let sign = if large_arc != sweep { 1.0 } else { -1.0 };
     let numer = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
     let denom = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
@@ -679,7 +634,7 @@ fn push_arc(
     let cx = cos_phi * cxp - sin_phi * cyp + (from.x + to.x) / 2.0;
     let cy = sin_phi * cxp + cos_phi * cyp + (from.y + to.y) / 2.0;
 
-    // F.6.5.4 — start angle and sweep extent.
+    // F.6.5.4, start angle and sweep extent.
     fn angle(ux: f32, uy: f32, vx: f32, vy: f32) -> f32 {
         let dot = ux * vx + uy * vy;
         let len = (ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt();
@@ -699,7 +654,6 @@ fn push_arc(
         delta += std::f32::consts::TAU;
     }
 
-    // Sample; ~16 segments per full turn is plenty at icon sizes.
     let n = ((delta.abs() / (std::f32::consts::FRAC_PI_8)).ceil() as usize).max(1);
     for i in 1..=n {
         let theta = theta1 + delta * (i as f32 / n as f32);

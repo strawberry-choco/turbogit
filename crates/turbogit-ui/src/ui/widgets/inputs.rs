@@ -1,5 +1,3 @@
-//! Shared text and search input controls.
-
 use egui::{
     CornerRadius, Frame, Margin, Response, Stroke, StrokeKind, TextEdit, Ui, WidgetInfo, WidgetType,
 };
@@ -7,22 +5,17 @@ use egui::{
 use crate::theme::{CONTROL_RADIUS, Palette};
 use crate::ui::icons::{self, Icon};
 
-/// Icon size used by search inputs and contained feedback.
 pub(super) const INPUT_ICON_SIZE: f32 = 14.0;
 
-// --- Inputs ------------------------------------------------------------------
-
-/// Single-line text input: SURFACE_3 fill, LINE border, BRAND focus ring.
 pub fn text_input(ui: &mut Ui, placeholder: &str, buf: &mut String) -> Response {
     input_frame(ui, placeholder, buf, false)
 }
 
-/// Search input: like [`text_input`] plus a leading magnifier icon.
 pub fn search_input(ui: &mut Ui, placeholder: &str, buf: &mut String) -> Response {
     input_frame(ui, placeholder, buf, true)
 }
 
-/// Whether `haystack` contains `query`, case-insensitively — the one match
+/// Whether `haystack` contains `query`, case-insensitively, the one match
 /// rule behind every filter paired with [`search_input`].
 ///
 /// The query is **already normalised** by the caller, and how far is a per-surface
@@ -39,7 +32,6 @@ fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bo
     } else {
         0.0
     };
-    // Frame margins (8×2) + stroke (1×2) leave the rest for the edit.
     let edit_w = (avail_w - 16.0 - 2.0 - icon_area).max(40.0);
 
     let frame = Frame::new()

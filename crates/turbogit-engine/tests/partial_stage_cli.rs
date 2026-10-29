@@ -1,12 +1,3 @@
-//! Partial staging engine lane (spec R2) — real-CLI integration tests.
-//!
-//! Drives [`turbogit_engine::cli::CliExecutor`] against temporary git
-//! repositories and asserts end-state index/worktree state through git
-//! itself (`git diff --cached`, `git diff`, `git status --porcelain`) —
-//! never through internal representations. Covers the spec's real-CLI
-//! layer: stage one hunk of two, reverse-unstage a hunk, intent-to-add
-//! partial staging of an untracked file.
-
 use std::path::PathBuf;
 use tempfile::TempDir;
 use test_support::git_seed::git;
@@ -14,27 +5,15 @@ use turbogit_domain::model::{Patch, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::{ApplyDirection, GitExecutor};
 
-/// A patch value, read from git's syntax — which is what the hand-written
-/// fixtures below are written in.
 fn value(text: &str) -> Patch {
     turbogit_engine_api::patch::parse_patch(text)
 }
 
-// ---------------------------------------------------------------- helpers --
-//
-// `temp_repo` stays local and keeps a real difference: its `git init` passes NO `-b`,
-// so the default branch is whatever the machine's `init.defaultBranch` says. Its
-// assertions read `status --porcelain` and `diff`, not a branch name, so nothing
-// would notice if that changed. It also returns a `Repo` that owns the `TempDir`.
-
 struct Repo {
     path: PathBuf,
-    /// Keeps the temp directory alive for the duration of the test.
     _dir: TempDir,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly.
 fn temp_repo(name: &str) -> Repo {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(name);
@@ -54,9 +33,6 @@ fn executor() -> CliExecutor {
     }
 }
 
-/// 20-line base file. Edits to `bravo` (line 2) and `quebec` (line 17) are
-/// separated by well over twice the default diff context, so git reports
-/// them as two independent hunks.
 const BASE: &str = concat!(
     "alpha\n",
     "bravo\n",
@@ -80,8 +56,6 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-/// Hand-written patch covering only the first hunk (the `bravo` edit),
-/// preserving git's original hunk-header shape (ADR-0013).
 const HUNK_ONE_PATCH: &str = concat!(
     "diff --git a/words.txt b/words.txt\n",
     "--- a/words.txt\n",
@@ -94,8 +68,6 @@ const HUNK_ONE_PATCH: &str = concat!(
     " delta\n",
     " echo\n",
 );
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn stage_one_hunk_of_two() {
@@ -143,12 +115,10 @@ fn reverse_unstage_a_hunk() {
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "words"]);
-    // Stage the whole-file change (both hunks)...
     let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
     std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
     git(&repo.path, &["add", "words.txt"]);
 
-    // ...then unstage only the first hunk by reverse-applying its patch.
     let ex = executor();
     ex.apply_patch_to_index(&repo.path, &value(HUNK_ONE_PATCH), ApplyDirection::Reverse)
         .unwrap();
@@ -183,7 +153,6 @@ fn reverse_unstage_a_hunk() {
 #[test]
 fn intent_to_add_partial_staging_of_untracked_file() {
     let repo = temp_repo("intent-to-add-partial");
-    // Untracked file with six lines; only the first three will be staged.
     std::fs::write(
         repo.path.join("new.txt"),
         "one\ntwo\nthree\nfour\nfive\nsix\n",

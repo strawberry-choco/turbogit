@@ -1,26 +1,16 @@
-//! Working-tree change orchestration for TurboGit.
-//!
-//! This module orchestrates stage/commit/discard flows over working-tree
-//! [`Change`]s on top of [`GitExecutor`].
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
 
-/// Default changelist holding tracked local changes.
 pub const DEFAULT_CHANGELIST: &str = "Local Changes";
 
-/// Changelist holding newly-unversioned files.
 pub const UNVERSIONED_CHANGELIST: &str = "Unversioned Files";
 
-/// Collect the paths of the supplied changes.
 fn paths_of(changes: &[Change]) -> Vec<PathBuf> {
     changes.iter().map(|c| c.path.clone()).collect()
 }
 
-/// Stage whole files (`vcs.add`) — the plain route, with no diff cache in the
-/// middle, so a staging click always reaches the index.
 pub fn stage_paths(vcs: &dyn GitExecutor, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
     if paths.is_empty() {
         return Ok(());
@@ -28,7 +18,6 @@ pub fn stage_paths(vcs: &dyn GitExecutor, root: &Path, paths: &[PathBuf]) -> TgR
     vcs.add(root, paths)
 }
 
-/// Un-stage whole files (`vcs.unstage`), the mirror of [`stage_paths`].
 pub fn unstage_paths(vcs: &dyn GitExecutor, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
     if paths.is_empty() {
         return Ok(());
@@ -36,14 +25,6 @@ pub fn unstage_paths(vcs: &dyn GitExecutor, root: &Path, paths: &[PathBuf]) -> T
     vcs.unstage(root, paths)
 }
 
-/// Commit the index and nothing else.
-///
-/// One call, one meaning: what the developer staged is what lands. The stage-
-/// then-commit arm this replaced swept in every tracked change whenever the
-/// window's own selection was empty, and the partial-staging partition existed
-/// only to protect a granular selection — which is already in the index, and is
-/// therefore this function's only input now. `no_verify` skips the repo's
-/// commit hooks for this one commit (`git commit --no-verify`).
 pub fn commit_index(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -54,7 +35,6 @@ pub fn commit_index(
     vcs.commit_index(root, message, amend, no_verify)
 }
 
-/// Discard working-tree edits for the selected changes via `vcs.restore`.
 pub fn discard_changes(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -> TgResult<()> {
     let paths = paths_of(changes);
     if paths.is_empty() {
@@ -124,7 +104,6 @@ mod tests {
         let paths = [PathBuf::from("src/app.rs")];
 
         stage_paths(&engine, &root, &paths).unwrap();
-        // Empty inputs are a no-op rather than an empty `git add`.
         stage_paths(&engine, &root, &[]).unwrap();
 
         assert_eq!(

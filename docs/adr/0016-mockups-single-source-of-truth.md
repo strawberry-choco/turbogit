@@ -3,22 +3,22 @@
 The UI redesign spec was translated from HTML mockups, but translation drift is
 inevitable. We decided that where spec and mockup disagree, the mockup wins, and
 where the spec claims a behavior that the mockup does not depict, the mockup's
-depiction is the scope — no invented behavior. The spec is updated to match in
+depiction is the scope, no invented behavior. The spec is updated to match in
 the same change; silent divergence is forbidden.
 
-**Correction — what is actually in this repository.** Neither artifact named
+**Correction, what is actually in this repository.** Neither artifact named
 when this was written is in the tree: `docs/ui-redesign-spec.md` does not exist,
 no product spec in `docs/` describes any visual language, and the HTML mockups
-were never committed. What stands as the approved visuals
-today is the capture set in `crates/turbogit-ui/tests/snapshots/`
-(`01-welcome.png` … `10-submodules.png`, eleven PNGs over ten pages — Git Log
+were never committed. The approved visuals today are the capture set in
+`crates/turbogit-ui/tests/snapshots/`
+(`01-welcome.png` … `10-submodules.png`, eleven PNGs over ten pages. Git Log
 is captured twice), which
 `crates/turbogit-ui/tests/acceptance_matrix.rs` renders
 and compares against. Read the precedence rule above as *code follows those
 captures*, with the same ban on silent divergence. Where a capture and the code
 disagree, the capture wins.
 
-**Amendment (2026-09-28, `ADR-0027`) — the five target frames are the approved
+**Amendment (2026-09-28, `ADR-0027`), the five target frames are the approved
 visuals for their five screens.** A second artifact now exists, and it outranks
 the captures for a bounded set of screens. Local Changes (`3:1`), Git Log
 (`3:333`), Branches (`3:664`), Worktrees (`3:995`) and Submodules (`3:1326`) are
@@ -54,8 +54,8 @@ correction paragraph went stale the first time:
     from the Branches *pane* the frame `3:664` depicts.
   - `02-commit` is the partial case. The Local Changes frame `3:1` depicts the commit
     tool window's changes card, so that capture is a regenerated artefact for that
-    region; for the parts of the window the frame does not draw — the message well
-    above all — the capture is still the reference, and the frame is silent.
+    region; for the parts of the window the frame does not draw, the message well
+    above all, the capture is still the reference, and the frame is silent.
 - **Two of the five frames carry the least human intent.** Worktrees and Submodules
   were drawn *from* the current code (`ui/worktrees.rs`, `ui/submodules.rs`) rather
   than screenshotted, because those two views had no designed state before. For those
@@ -76,7 +76,7 @@ the design was drawn and validated at, and the cost of larger PNGs in the reposi
 is accepted. The regeneration happens **once, at the end of the migration**: rendering
 mid-sweep produces baselines that mix old and new chrome, which is worse than no
 baseline at all. At the time, `UPDATE_SNAPSHOTS` was set to the force form in
-that suite, so an ordinary `cargo test` run rewrote every golden — a run that is
+that suite, so an ordinary `cargo test` run rewrote every golden, a run that is
 not the regeneration left the working tree dirty, and the committed captures were
 restored from git in that case. **That harness no longer works that way**: a plain
 run compares against the committed PNG and writes nothing, and the force form is

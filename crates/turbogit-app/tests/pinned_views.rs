@@ -1,8 +1,3 @@
-//! Issue #08 — "Pin as view": the current multi-repo selection saves as a
-//! named view in `.turbogit/ui.ron` next to the other UI-only state and
-//! restores — filtered to the roots still registered — on recall or
-//! relaunch.
-
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::git;
@@ -107,8 +102,6 @@ fn pinning_the_selection_saves_a_named_view_and_persists() {
         ["config", "user.name", "T"].as_slice(),
         ["commit", "-q", "--allow-empty", "-m", "init"].as_slice(),
     ] {
-        // An EMPTY commit with no file in it is a shape no `git_seed` recipe
-        // produces, and this suite only needs a root to select.
         let _ = git(&repo_dir, args);
     }
 
@@ -122,7 +115,6 @@ fn pinning_the_selection_saves_a_named_view_and_persists() {
     assert_eq!(state.ui.pinned_views[0].name, "View 1");
     assert_eq!(state.ui.pinned_views[0].repos, vec![repo_dir.clone()]);
 
-    // The view reaches disk through the same persist path as the rules.
     let loaded = load_ui_state(base.path());
     assert_eq!(loaded.pinned_views, state.ui.pinned_views);
 }

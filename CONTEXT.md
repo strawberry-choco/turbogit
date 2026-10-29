@@ -1,7 +1,7 @@
 # TurboGit
 
-A desktop Git client that presents a multi-root project — several Git
-repositories operated on as one coherent unit — with IntelliJ-style workflows.
+A desktop Git client that presents a multi-root project, several Git
+repositories operated on as one coherent unit, with IntelliJ-style workflows.
 The UI vocabulary applies IntelliJ-style IDE conventions to Git concepts. This
 is the glossary for the language used across code, UI, and docs.
 
@@ -60,7 +60,7 @@ _Avoid_: discovery service, scan helper, VCS manager
 The in-memory cache layer keyed by repository root: commit logs, ref
 decorations, changed-file lists, path-scoped logs, ahead/behind counts, and the
 per-root diff facts (hunk spans and per-line staged-ness).
-Invalidated as one unit through one interface — per root or all roots — never
+Invalidated as one unit through one interface, per root or all roots, never
 poked field-by-field by callers.
 _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
 
@@ -68,7 +68,7 @@ _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
 The one interface by which a surface reaches a cached Git value: a target goes in,
 a verdict and the value come back, and asking the question is also what starts
 getting the answer when it isn't there. Which file a diff covers, which line a
-blame covers, which side of a pane is wanted — those are keys, and keys belong to
+blame covers, which side of a pane is wanted, those are keys, and keys belong to
 the read, never to a caller. A Granular op reads through it without asking it to
 fetch anything.
 _Avoid_: ensure / ensure_diff / ensure_blame (the three calls it replaced), cache
@@ -92,7 +92,7 @@ _Avoid_: generation counter, cache version
 
 **Git engine**:
 The module that talks to git. Its interface is `GitExecutor`, and it answers with
-domain values — a push plan, a file's conflict versions, a patch — rather than
+domain values, a push plan, a file's conflict versions, a patch, rather than
 git's own text for callers to substring. Production runs the CLI adapter, or the
 composed adapter that answers some reads in-process and delegates the rest to it;
 those two differ only in how much is in-process, and neither is a libgit2-only
@@ -105,7 +105,7 @@ _Avoid_: VCS manager, executor wrapper, git backend
 **Operation**:
 The unit the Shell dispatches: one value carrying what to run, its display
 label, the roots its results affect, whether it changes a repository root's
-worktree set, and — for the operations that have one — its identity, which is
+worktree set, and, for the operations that have one, its identity, which is
 what settlement matches on. Named variants carry plain data; `Custom` carries a
 one-shot closure for work whose label nothing inspects. Retrying is a property of
 that variant set rather than a method on the type: a caller that wants a second
@@ -119,7 +119,7 @@ _Avoid_: task, job, request, command (the palette already owns "command"), git c
 Where an Operation decides whether its work runs on a worker thread or on the
 calling thread: `Spawned` under the Shell, `Inline` under the Headless harness.
 Both modes post their results into the same channel, so settlement is the same
-event pump either way. Internal to the app layer — a caller selects a mode by
+event pump either way. Internal to the app layer, a caller selects a mode by
 choosing a constructor, never by naming the seam, and presentation code does
 not learn it exists.
 _Avoid_: async mode, sync flag, executor strategy, thread pool
@@ -127,12 +127,12 @@ _Avoid_: async mode, sync flag, executor strategy, thread pool
 **Headless harness**:
 The deterministic way headless tests construct the app: an `AppState` over
 explicitly given repository roots, registered synchronously through the
-production registration path, with no background threads — completed
+production registration path, with no background threads, completed
 operations refresh root status synchronously. Built via `AppState::for_roots`.
 _Avoid_: test fixture, mock app, fake state
 
 **Shell**:
-The always-present frame of the main window — workspace sidebar, tab strip,
+The always-present frame of the main window, workspace sidebar, tab strip,
 status bar. Everything else renders inside it, the activity log panel at the
 bottom of the central body; nothing sits above the content, so the central body
 starts at the top window edge.
@@ -210,7 +210,7 @@ The organization that ships: the Commit tool window's one tree lists every
 changed path of a repository root in a single run sorted by path, with a
 "Merge conflicts" group of its own. Files are not sorted into STAGED and
 UNSTAGED, and untracked files are rows of the same list rather than a section
-of their own — where a file sits in the list says what it is, not what the
+of their own, where a file sits in the list says what it is, not what the
 index holds. Repository roots stay separate labelled sections, because that
 answers the other question: which repository a file belongs to.
 _Avoid_: staging area mode, index view, git staging
@@ -247,7 +247,7 @@ plain click rather than selecting nothing.
 _Avoid_: selection origin, drag handle
 
 **Outgoing commits**:
-The commits a root is ahead of its upstream — what the Push dialog lists per
+The commits a root is ahead of its upstream, what the Push dialog lists per
 root before pushing.
 _Avoid_: unpushed commits, pending commits
 
@@ -280,14 +280,14 @@ to individual lines within it.
 _Avoid_: chunk
 
 **Partial staging**:
-Staging or unstaging a subset of a file's changes — by hunk or by line —
+Staging or unstaging a subset of a file's changes, by hunk or by line,
 instead of whole files. Covers both directions (stage and unstage);
 discard remains a whole-file operation. Not available on conflicted files,
 which resolve through the conflict modal.
 _Avoid_: interactive add, chunk staging
 
 **Granular op**:
-One Operation of partial staging — a single stage or unstage of one hunk or
+One Operation of partial staging, a single stage or unstage of one hunk or
 line selection on one file. A kind of Operation rather than a parallel concept:
 it is dispatched through the same seam and settles through the same pump, and
 it is `Custom` rather than a named variant precisely because nothing selects
@@ -323,8 +323,8 @@ side-by-side for the same diff whenever pairs exist.
 _Avoid_: row model, diff line (a display row may pair two)
 
 **Loaded window**:
-The prefix of a listing the app currently holds for one root — its newest
-commits, oldest last — whether that listing is the root's whole log, one
+The prefix of a listing the app currently holds for one root, its newest
+commits, oldest last, whether that listing is the root's whole log, one
 file's history, one ref's history, or a pickaxe search. It is the unit a Batch
 is added to, what "N shown" counts, and what a scope change replaces wholesale.
 A fresh operation or a filter that moves the listing resets it to one Batch;
@@ -333,7 +333,7 @@ reads from cache rather than re-fetching.
 _Avoid_: page (that is a Batch), history, log
 
 **Batch**:
-One fetched slice of a listing — the unit a Loaded window grows by, and the
+One fetched slice of a listing, the unit a Loaded window grows by, and the
 only thing the app ever asks git for. A cold read asks for one batch; a later
 one asks for the batch after it, one row longer, so the row the window already
 holds comes back as the boundary checksum. A batch that comes back short says
@@ -343,7 +343,7 @@ synonyms, so a fetched slice is a batch.
 _Avoid_: page (reserved), chunk, slice
 
 **Lane**:
-The graph column a commit's node is drawn in — the numbered column of the
+The graph column a commit's node is drawn in, the numbered column of the
 commit graph, assigned by a walk over the whole Loaded window rather than over
 the rows on screen, so a commit's lane does not change as it scrolls past. Its
 colour is a property of the window, not of the current filter.
@@ -372,20 +372,20 @@ _Avoid_: picture compare, photo diff
 
 **Binary change**:
 A diff of a file whose content is not text on at least one side. Shown as a
-one-line description — kind of change plus byte sizes before/after — never as
+one-line description, kind of change plus byte sizes before/after, never as
 line content, and never a target of partial staging.
 _Avoid_: binary file diff, non-text diff
 
 **Rename header**:
 The diff-view line naming a detected rename ("Renamed from X · N% similar")
 shown above the renamed file's content diff, paired with an arrow annotation
-on its changed-file list entry. Metadata only — never staged text. Detection
+on its changed-file list entry. Metadata only, never staged text. Detection
 follows git's own defaults, unpinned by TurboGit.
 _Avoid_: move marker, path change
 
 **Drop commit**:
 Removing one commit from the current branch's history by replaying its
-descendants without it — the same meaning a dropped line carries in a rebase
+descendants without it, the same meaning a dropped line carries in a rebase
 plan. Only commits reachable from the current branch can be dropped; a merge
 commit and a root commit never can. It does not remove the descendants, and it
 is not a ref deletion.
@@ -402,11 +402,11 @@ _Avoid_: rename commit, edit commit message, amend
 A repository root checked out at a commit rather than a branch. It has no
 current branch, so branch-scoped actions state why they are blocked and history
 edits are unavailable. Reached by checking out a commit or a tag.
-_Avoid_: detached (as an action name — checking out a commit is the verb), no
+_Avoid_: detached (as an action name, checking out a commit is the verb), no
 branch
 
 **Conventional commit**:
-A commit whose subject is `type(scope)!: subject` — a type verb, an optional scope, and
+A commit whose subject is `type(scope)!: subject`, a type verb, an optional scope, and
 a subject line. The structure is the contract, not the vocabulary: types and scopes are
 conventions, not an enforced list, and multi-scopes are legal. `!` after the type or
 scope, or a `BREAKING CHANGE:` footer, marks a breaking change. Every commit reachable
@@ -416,6 +416,6 @@ _Avoid_: semantic commit, free-form subject, `issue-N:` prefix subjects
 **Release notes**:
 The per-release text generated from the conventional commits since the previous
 release: breaking changes first, then features, then fixes, everything else folded
-into a miscellaneous section. Published on the release and nowhere else — no committed
+into a miscellaneous section. Published on the release and nowhere else, no committed
 mirror of it exists.
 _Avoid_: changelog, CHANGELOG.md, release body

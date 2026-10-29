@@ -1,22 +1,3 @@
-//! deepen-git-engine issues 09 and 12 — one patch value, and the text it came
-//! from.
-//!
-//! The **Git engine** answers a diff as the thing the app means: files,
-//! **Hunks**, line spans, rename and **Binary change** metadata. This suite is
-//! the contract on both halves of that exchange:
-//!
-//! - *nothing is lost* — every shape in the corpus below re-renders as the git
-//!   text it was read from, byte for byte, so a caller that still needs bytes
-//!   (`git apply`, the viewer's header labels) gets what git wrote;
-//! - *the value is the interface* — the shapes are read as fields, and the four
-//!   cases a text format can only imply (a **quoted path**, a missing final
-//!   newline, a mode-only change, a rename with no content change) are each
-//!   settled by a named test.
-//!
-//! The corpus is hand-written; the last test runs the same claim against real
-//! `git diff` output, which is what proves the reader agrees with git rather
-//! than with itself.
-
 use turbogit_domain::model::{Patch, PatchLineKind};
 use turbogit_engine_api::patch::parse_patch;
 
@@ -37,7 +18,6 @@ const EDIT: &str = concat!(
     " three\n",
 );
 
-/// A hunk header carrying git's funcname heading, and a count-free span.
 const HEADING: &str = concat!(
     "diff --git a/lib.rs b/lib.rs\n",
     "index aaa..bbb 100644\n",
@@ -116,7 +96,7 @@ const NO_NEWLINE: &str = concat!(
     "\\ No newline at end of file\n",
 );
 
-/// git quotes a path holding a control character — but **not** one holding a
+/// git quotes a path holding a control character, but **not** one holding a
 /// plain space, which is why `SPACED_RENAME` below is the other case to handle.
 const QUOTED_RENAME: &str = concat!(
     "diff --git \"a/we\\ttabbed.txt\" \"b/we\\ttabbed.txt\"\n",
@@ -128,9 +108,6 @@ const QUOTED_RENAME: &str = concat!(
     "+y\n",
 );
 
-/// A space is not a reason to quote: git writes the pair verbatim and the
-/// splitter must still find the boundary. Only one of the four older splitters
-/// handled the quoted form; three handled this one by accident.
 const SPACED_RENAME: &str = concat!(
     "diff --git a/keep me.txt b/kept me.txt\n",
     "index aaa..bbb 100644\n",
@@ -156,7 +133,6 @@ const TWO_FILES: &str = concat!(
     "+2!\n",
 );
 
-/// Every shape the parity corpus covers.
 const CORPUS: &[(&str, &str)] = &[
     ("edit", EDIT),
     ("hunk heading", HEADING),
@@ -173,9 +149,6 @@ const CORPUS: &[(&str, &str)] = &[
     ("empty diff", ""),
 ];
 
-/// The claim that replaced the row-stream comparison: the value holds
-/// everything git's text said, because writing it back yields that text again
-/// — not a rendering that happens to paint the same rows.
 #[test]
 fn every_shape_re_renders_as_the_git_text_it_was_read_from() {
     for (label, text) in CORPUS {
@@ -197,10 +170,6 @@ fn parsing_a_value_twice_is_stable() {
     }
 }
 
-// --- what the value says that the text format cannot --------------------------
-
-/// A **quoted path** is git's escape hatch for a name it cannot write plainly.
-/// The value resolves it once, so no caller ever tests a leading `"`.
 #[test]
 fn a_quoted_path_is_one_name_with_the_quoting_resolved() {
     let patch = parse_patch(QUOTED_RENAME);
@@ -210,7 +179,6 @@ fn a_quoted_path_is_one_name_with_the_quoting_resolved() {
         "git's C-style quoting is resolved here, once"
     );
     assert_eq!(file.new_path, "we\ttabbed.txt");
-    // …and every other place the name appears, including the source pair.
     assert_eq!(
         file.headers
             .iter()
@@ -223,8 +191,6 @@ fn a_quoted_path_is_one_name_with_the_quoting_resolved() {
     );
 }
 
-/// A **missing final newline** is a property of one line, not a line of the
-/// patch.
 #[test]
 fn a_missing_final_newline_belongs_to_the_line_it_qualifies() {
     let patch = parse_patch(NO_NEWLINE);
@@ -247,8 +213,6 @@ fn a_missing_final_newline_belongs_to_the_line_it_qualifies() {
     );
 }
 
-/// A **mode-only change** is not "a file with no hunks" — the view and the
-/// staging verbs ask different questions about the two.
 #[test]
 fn a_mode_only_change_is_its_own_case_rather_than_an_empty_hunk_list() {
     let patch = parse_patch(MODE_ONLY);
@@ -264,8 +228,6 @@ fn a_mode_only_change_is_its_own_case_rather_than_an_empty_hunk_list() {
     );
 }
 
-/// A **rename with no content change** is a whole answer of its own, which the
-/// text format can only imply by the absence of hunks.
 #[test]
 fn a_rename_without_a_content_change_names_both_paths() {
     let patch = parse_patch(PURE_RENAME);
@@ -291,11 +253,6 @@ fn a_binary_change_is_a_file_with_metadata_and_no_hunks() {
     assert_eq!(file.new_path, "logo.png");
 }
 
-/// git's **combined** view of a conflicted path is a different shape of answer:
-/// one name instead of a pair, and one range per parent instead of one old side.
-/// The value reads it as a two-sided section — which is what the diff pane
-/// paints, and staging refuses a conflicted file anyway — so the case has to
-/// keep the section, both sides of the body, and the fact it was combined.
 #[test]
 fn a_combined_section_keeps_one_path_the_body_and_its_kind() {
     let patch = parse_patch(concat!(
@@ -328,8 +285,6 @@ fn a_combined_section_keeps_one_path_the_body_and_its_kind() {
         (1, 1, 1, 5),
         "the first parent's range and the new side's"
     );
-    // The two-column prefixes are content now, so the conflict markers the pane
-    // shows are still there: `++x` read as an added line whose text is `+x`.
     assert_eq!(hunk.lines[0].kind, PatchLineKind::Added);
     assert_eq!(hunk.lines[0].text, "+<<<<<<< HEAD");
     assert_eq!(hunk.lines[1].kind, PatchLineKind::Context);
@@ -366,8 +321,6 @@ fn an_empty_diff_is_a_value_not_a_missing_one() {
     assert_eq!(patch.hunk_count(), 0);
     assert_eq!(patch.to_string(), "");
 }
-
-// --- spans, lines and paths as fields ----------------------------------------
 
 #[test]
 fn a_hunk_carries_its_span_on_each_side_and_the_heading_git_appended() {
@@ -410,10 +363,6 @@ fn paths_are_two_plain_repository_relative_names_never_split_from_a_header() {
     );
 }
 
-/// The boundary the value has to respect: `ADR-0014`'s **Display row** pairs a
-/// deletion with an addition for side-by-side rendering. That pairing is a
-/// presentation fact, so the value stays unified-diff shaped and no viewer-facing
-/// row lives here.
 #[test]
 fn the_value_stays_unified_diff_shaped_not_display_shaped() {
     let patch: Patch = parse_patch(EDIT);
@@ -426,10 +375,6 @@ fn the_value_stays_unified_diff_shaped_not_display_shaped() {
     assert_eq!(hunk.lines[2].kind, PatchLineKind::Added);
 }
 
-// --- the fixtures are not the only thing this is true of ----------------------
-
-/// Real `git diff` output, not a hand-written fixture: the corpus proves the
-/// reader agreeable with itself, this proves it agrees with git.
 #[test]
 fn git_s_own_output_round_trips_through_the_value() {
     use std::path::Path;
@@ -443,9 +388,6 @@ fn git_s_own_output_round_trips_through_the_value() {
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     run(&repo, &["init", "-q", "-b", "main"]);
-    // Repo-local identity, because `git_seed::git` cannot express per-call env;
-    // author and committer are the same person here, so two `user.*` config calls
-    // reproduce the previous `GIT_AUTHOR_*`/`GIT_COMMITTER_*` injection exactly.
     run(&repo, &["config", "user.name", "t"]);
     run(&repo, &["config", "user.email", "t@t"]);
     std::fs::write(repo.join("notes.txt"), "one\ntwo\n").unwrap();
@@ -469,8 +411,6 @@ fn git_s_own_output_round_trips_through_the_value() {
     }
     run(&repo, &["add", "-A"]);
 
-    // Everything is staged by the fixture, so the answer under test is the
-    // HEAD-to-index comparison.
     let text = run(&repo, &["diff", "--cached", "--no-color"]);
     assert!(
         text.contains("diff --git"),
@@ -486,7 +426,6 @@ fn git_s_own_output_round_trips_through_the_value() {
             .map(|f| (&f.new_path, f.binary(), f.renamed(), f.mode_only()))
             .collect::<Vec<_>>()
     );
-    // Compared line by line so a drift names the line that drifted.
     let rendered = value.to_string();
     assert_eq!(
         rendered.lines().collect::<Vec<_>>(),
@@ -494,7 +433,6 @@ fn git_s_own_output_round_trips_through_the_value() {
         "git's own text round-tripped through the value lost a line"
     );
 
-    // And the producer the app reads goes through the same path.
     let exec = CliExecutor {
         settings: VcsSettings::default(),
     };

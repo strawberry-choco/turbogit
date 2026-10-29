@@ -1,8 +1,3 @@
-//! Issue 28 — the merge dialog's new option passes through to the CLI
-//! adapter: `MergeOpts::verify_signatures` maps to `git merge
-//! --verify-signatures`, which refuses to merge incoming commits that carry
-//! no GPG signature.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -10,12 +5,6 @@ use turbogit_domain::model::{MergeOpts, VcsSettings};
 use turbogit_engine::GitExecutor as _;
 use turbogit_engine::cli::CliExecutor;
 
-// `unsigned_fixture` stays local, not a `git_seed` recipe: the closest one
-// (`repo_with_feature_branch`) would add a bare `origin` and an upstream to a
-// fixture whose whole premise is that the incoming commits are plain unsigned
-// local commits.
-
-/// Append `text` to `<dir>/file.txt`, stage, commit.
 fn commit(dir: &Path, text: &str) {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -30,8 +19,6 @@ fn commit(dir: &Path, text: &str) {
     git(dir, &["commit", "-q", "-m", text]);
 }
 
-/// Repo on `main` with a `feature` branch strictly ahead (unsigned commits —
-/// the fixture configures no signing).
 fn unsigned_fixture() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -66,7 +53,6 @@ fn verify_signatures_refuses_unsigned_incoming_commits() {
         err.to_string().to_lowercase().contains("signature"),
         "expected a signature refusal, got: {err}"
     );
-    // The refusal left the branch untouched.
     assert_eq!(
         git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
         "main"

@@ -1,7 +1,3 @@
-//! The changes list aggregates every registered root into one list, so a row can
-//! belong to a repository other than the focused one. These pin what the preview
-//! pane answers for such a row.
-
 use std::path::{Path, PathBuf};
 
 use egui::Vec2;
@@ -29,8 +25,6 @@ fn commit_file(repo: &Path, name: &str, content: &str) {
     git(repo, &["commit", "-m", "seed"]);
 }
 
-/// Two roots — `alpha` registered first, so it is the focused one — both holding
-/// a modified `shared.txt`, and `beta` holding a path `alpha` never heard of.
 fn workspace(tmp: &Path) -> (PathBuf, PathBuf) {
     let alpha = init_repo("alpha", tmp);
     let beta = init_repo("beta", tmp);
@@ -45,21 +39,14 @@ fn workspace(tmp: &Path) -> (PathBuf, PathBuf) {
 
 fn shell(project_dir: &Path, roots: &[PathBuf]) -> Harness<'static, AppState> {
     let state = AppState::for_roots(project_dir, roots);
-    // 1008, not 1024: kittest's outer panel carries the shell's old 8px
-    // inset, so 1024 would now flip the workspace sidebar on and shift every
-    // row index this suite clicks.
     shell_harness_over(state, Vec2::new(1008.0, 900.0))
 }
 
-/// Expand a root's collapsed group so its rows become clickable. Only the
-/// focused root's group opens itself.
 fn expand_group(h: &mut Harness<AppState>, root: &str) {
     h.get_by_label(&format!("Toggle {root}")).click();
     settle(h);
 }
 
-/// Click the `n`th row body whose label is exactly `name`. Groups paint in
-/// registration order, so the second `shared.txt` is the second root's.
 fn click_row(h: &mut Harness<AppState>, name: &str, n: usize) {
     let matching: Vec<usize> = h
         .get_all_by_role(egui::accesskit::Role::Button)

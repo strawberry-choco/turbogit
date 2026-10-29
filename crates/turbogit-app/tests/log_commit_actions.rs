@@ -1,26 +1,13 @@
-//! Issue 15 — Log commit actions, app seam: revert through the confirmation
-//! gate (`PendingConfirm::RevertCommit` → `run_confirmed`) and cherry-pick
-//! onto a chosen branch (`AppState::cherry_pick_to`), both dispatched through
-//! the production dispatch worker path with events pumped back in.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{commit, git};
 use turbogit_app::state::{AppState, PendingConfirm};
 
-// `seeded_project` stays local: `main` with two commits, a `work` branch off the
-// tip and a `feature` branch off the FIRST commit, with both SHAs handed back —
-// a topology no `git_seed` recipe is, and one that needs no upstream.
-
-/// `commit_file` is `git_seed::commit` plus the new HEAD's SHA.
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     commit(dir, name, body, msg);
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// A project root with one repo checked out on `work` (non-protected) with
-/// two commits, plus a `feature` branch off the first commit carrying one
-/// extra commit. Returns (project, repo, work c2, feature commit).
 fn seeded_project() -> (tempfile::TempDir, PathBuf, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
@@ -64,7 +51,6 @@ fn revert_through_the_confirm_gate_creates_and_commits_the_revert() {
         !project.join("alpha").join("b.txt").exists(),
         "the reverted change must be undone in the tree"
     );
-    // The success toast names the op (demo: feedback for the revert).
     assert!(
         state.ui.toast.is_some(),
         "a completed revert surfaces feedback through the toast"
@@ -76,8 +62,6 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
     let (_tmp, project, _c2, fc) = seeded_project();
     let repo = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
-    // The default patterns protect main/master; this test exercises the
-    // happy path (protection itself is pinned at the service seam).
     state.settings.protected_branch_patterns.clear();
     let root_id = state.multi.roots[0].id.clone();
 
@@ -93,13 +77,11 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
         state.last_error
     );
 
-    // The commit landed on main exactly once…
     let count = git(&repo, &["rev-list", "--count", "main"])
         .trim()
         .parse::<usize>()
         .unwrap();
     assert_eq!(count, 3, "main must gain exactly one cherry-picked commit");
-    // …and the original checkout was restored (the root snapshot refreshed).
     let snapshot = state.multi.by_id(&root_id).unwrap();
     assert_eq!(
         snapshot.current_branch.as_deref(),
@@ -108,11 +90,6 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
     );
 }
 
-/// A gate is the first line, not the only one: the history can move between
-/// painting the menu and taking the item, and a stale surface can still reach
-/// the verb. So the refusal names the service's OWN reason — the one piece of
-/// information `Option` used to throw away — rather than a paraphrase that is
-/// true of every refusal and helpful for none of them.
 #[test]
 fn a_refused_drop_preflight_repeats_the_reason_the_service_gave() {
     let (_tmp, project, _c2, _fc) = seeded_project();
@@ -122,8 +99,6 @@ fn a_refused_drop_preflight_repeats_the_reason_the_service_gave() {
     let first = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]);
     let first = first.trim().to_string();
 
-    // Reached the way a stale surface reaches it, or a history that moved under
-    // the menu: straight at the app seam, with the commit the service refuses.
     state.open_rewrite_preflight(&root, &first, turbogit_app::state::HistoryVerb::Drop);
 
     assert_eq!(
@@ -155,12 +130,6 @@ fn a_refused_drop_preflight_repeats_the_reason_the_service_gave() {
     );
 }
 
-/// An editor seeded with nothing would hand the developer an empty field and
-/// invite them to type a message for a commit they may no longer have — so a
-/// commit the cache does not hold is refused, by name, and no dialog opens.
-///
-/// The same stale surface that can outrun the plan can outrun the log: this is
-/// the app seam's version of the refusal the menu's own gates normally prevent.
 #[test]
 fn a_reword_editor_that_cannot_be_seeded_is_refused_and_states_why() {
     let (_tmp, project, _c2, _fc) = seeded_project();
@@ -168,8 +137,6 @@ fn a_reword_editor_that_cannot_be_seeded_is_refused_and_states_why() {
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
     let root = state.multi.roots[0].id.clone();
 
-    // Never logged: the cache holds nothing for this root, so there is no
-    // message to seed an editor from.
     state.open_reword_editor(&root, "0123456789abcdef0123456789abcdef01234567");
 
     assert_eq!(state.ui.dialog, None, "no editor opens with nothing in it");

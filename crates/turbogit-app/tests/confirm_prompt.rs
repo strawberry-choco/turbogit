@@ -1,16 +1,3 @@
-//! The confirmation module's description side: what a pending verb asks, as
-//! plain data with no egui types in it.
-//!
-//! The window that paints a question is pinned by the `turbogit-ui` kittest
-//! suites, which drive the real renderer and stay unmodified across the move.
-//! What they cannot reach is the description the renderer is handed, so this
-//! suite holds the two facts about it that are strings the user reads: how many
-//! files a discard names before it summarises the rest, and what a branch
-//! delete offers as the way to look at what it is about to lose.
-//!
-//! The effect side of the same module is in `confirm_effects.rs`: what a
-//! control does, over a real repository.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,7 +5,6 @@ use turbogit_app::confirm::{ConfirmAction, Prompt, prompt};
 use turbogit_app::state::{AppState, PendingConfirm, UnmergedCommit, UnmergedCommits};
 use turbogit_domain::model::{Change, ChangeStatus, RootId};
 
-/// `n` modified files, named so the truncation is readable in an assertion.
 fn modified(n: usize) -> Vec<Change> {
     (0..n)
         .map(|i| Change {
@@ -32,17 +18,12 @@ fn modified(n: usize) -> Vec<Change> {
         .collect()
 }
 
-/// The app state the description is read from. No repository is involved: both
-/// questions below are asked before anything runs, and the disclosures they
-/// carry come from the UI state the verb was armed with.
 fn bare_state() -> (tempfile::TempDir, AppState) {
     let tmp = tempfile::tempdir().unwrap();
     let state = AppState::for_roots(tmp.path(), &[]);
     (tmp, state)
 }
 
-/// Every line the window would paint, top to bottom, flattened out of the rows
-/// it paints them in.
 fn lines(prompt: &Prompt) -> Vec<String> {
     prompt
         .rows
@@ -52,11 +33,6 @@ fn lines(prompt: &Prompt) -> Vec<String> {
         .collect()
 }
 
-/// The discard question names how many files are about to go, lists the first
-/// eight so the reader can recognise the blast radius, and summarises the rest
-/// — the count is in the header, so the paths past the eighth are counted, not
-/// listed. The eight is a contract, not a layout: a wider dialog would paint
-/// more names and stop reading like the same question.
 #[test]
 fn the_discard_question_names_the_count_the_first_eight_paths_and_the_remainder() {
     let (_tmp, state) = bare_state();
@@ -86,9 +62,6 @@ fn the_discard_question_names_the_count_the_first_eight_paths_and_the_remainder(
     );
 }
 
-/// A branch delete that would lose commits carries the count as a **link** —
-/// the way to look at them — and the link is named the same way the viewer
-/// names it, so a number cannot disagree with itself.
 #[test]
 fn a_branch_delete_carries_the_unmerged_link_to_what_it_would_lose() {
     let (_tmp, mut state) = bare_state();

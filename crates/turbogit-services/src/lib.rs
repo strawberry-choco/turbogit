@@ -1,13 +1,3 @@
-//! Pure domain/application services: every operation in the engine vocabulary
-//! expressed in terms of the [`turbogit_engine_api::GitExecutor`] port and
-//! the value types in `turbogit-domain`. No egui, no I/O outside the engine
-//! seam — the stateful granular staging protocol is the one exception and
-//! stays in the composition root until issue 08.
-//!
-//! Library-migration plan Phase L1 (CLI parity) and Phase L3 (the two-way
-//! merge rewriter) live here; the parity contracts are the root `tests/`
-//! suites `diff_parity.rs`, `patch_value.rs` and `port_discipline.rs`.
-
 pub mod branch_service;
 pub mod bulk_ops;
 pub mod bulk_run;

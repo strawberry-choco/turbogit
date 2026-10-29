@@ -12,7 +12,7 @@ reachable, and it has to actually reword.
 A `RebasePlanEntry` grows an optional message. A targeted reword builds a plan
 over the target commit's first parent, sets `Reword` on that entry with the new
 message, and executes it through the existing
-`history_editor::execute_with_backup` — the same machinery a targeted drop uses,
+`history_editor::execute_with_backup`, the same machinery a targeted drop uses,
 one call apart. In the CLI adapter the message is written to a temp file and
 `GIT_EDITOR` is set to `cp <file>`, mirroring the `GIT_SEQUENCE_EDITOR=cp <todo>`
 trick already used a few lines above it. One reworded commit per execution; the
@@ -34,7 +34,7 @@ commit menu.
   is a rebase todo, not a message store.
 - `plan_preview` counts a reword as surviving verbatim and cannot show the
   replacement text. The log's reword preflight shows the affected commit set
-  and the cautions, not the new message — the message is confirmed in its own
+  and the cautions, not the new message, the message is confirmed in its own
   editor before the plan is built.
 - The message is carried on the plan, so it is visible to every adapter, but
   only the CLI adapter supplies it to git. The other three
@@ -52,4 +52,4 @@ commit menu.
   worse than no action at all.
 - **Landing Reword as an inert menu item this round.** Rejected: it would ship
   the new menu with a dead verb in it, and `Inert control` is for controls with
-  no behaviour in v1 — not for one that is a single engine change away.
+  no behaviour in v1, not for one that is a single engine change away.

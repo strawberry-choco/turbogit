@@ -19,14 +19,14 @@ dispatched by one function (`apply_branch_action`) in
 the only trigger. The hover `Checkout` button, the per-row `⋯` overflow, and
 the 280px right-hand detail panel are deleted.
 
-The union is the ten items of the plan's order table — `Checkout`, `New branch
+The union is the ten items of the plan's order table. `Checkout`, `New branch
 from`, `Checkout and pull`, then `Merge into «current»`, `Rebase onto
 «current»`, `Compare with «current»`, then `Pull`, `Push`, then `Rename
 branch`, `Delete branch`. Six menu items plus six panel items minus the two
 they shared is ten, not the twelve the plan's prose said; the order table and
 the gate table in it both list ten rows, and the count was the prose's error.
 
-The panel enforced three of its gates by *omission* — it hid `Merge`, `Rebase`,
+The panel enforced three of its gates by *omission*, it hid `Merge`, `Rebase`,
 `Compare` and `Delete` for rows they could not apply to. The menu's own
 convention is the opposite: a blocked item stays rendered and states its
 reason on hover. Those four became disabled items with reasons ("this is the
@@ -42,7 +42,7 @@ the six tickets and their per-ticket evidence.
 ## Consequences
 
 - The menu is reachable only by a gesture with no on-screen affordance. That is
-  the point of the decision — one trigger, one list — but it means a person who
+  the point of the decision, one trigger, one list, but it means a person who
   never right-clicks sees no branch actions at all.
 - The detail panel's informational content went with it: the relationship line
   ("2 ahead · 1 behind · tracks origin/main") and the latest-commit block are
@@ -79,7 +79,7 @@ reader meeting both should not have to work out which one binds.
   to drift, which is the exact failure `branch_menu.rs` was extracted to
   prevent.
 - **One shared action enum painted by two components.** Rejected for the same
-  reason — the duplication was never the enum, it was the second painter and
+  reason, the duplication was never the enum, it was the second painter and
   its second copy of the gates.
 - **Keeping the panel and adding its four actions to the menu.** Rejected: the
   panel would then be a read-only side of information the row already states,

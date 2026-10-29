@@ -1,4 +1,4 @@
-# Landscape Map & Positioning — Diff Tools
+# Landscape map & positioning. Diff tools
 
 > Cohort map for every in-scope tool, frozen here for the rest of this research;
 > `feature-matrix.csv` scores 23 of the 29 per capability (Visual Studio, Xcode, Eclipse,
@@ -6,7 +6,7 @@
 > pages + 2026 roundups (gitsquid, scmgalaxy, bestpage, cnblogs). Hands-on not performed
 > in-sandbox; see `storm-session.md` environment note.
 
-## Cohort 1 — IDEs
+## Cohort 1. IDEs
 | Tool | License | Platforms | Price (2026) | Target user | Git-engine model |
 | --- | --- | --- | --- | --- | --- |
 | VS Code | MIT (OSS core) | Win/Mac/Linux | Free | General devs | git CLI + built-in SCM |
@@ -21,7 +21,7 @@
 highlight). They are not dedicated diff tools but set the bar for syntax/word highlighting
 and now AI-assisted conflict resolution (VS Code 1.105, Sept 2025).
 
-## Cohort 2 — Modal / Terminal Editors
+## Cohort 2. Modal / terminal editors
 | Tool | License | Platforms | Price | Target user | Git-engine model |
 | --- | --- | --- | --- | --- | --- |
 | Neovim (+ diffview.nvim, neogit) | Apache-2.0 | Win/Mac/Linux | Free | Power users | git CLI |
@@ -33,7 +33,7 @@ and now AI-assisted conflict resolution (VS Code 1.105, Sept 2025).
 implementation of *discoverable* partial staging; Neovim+diffview is the fastest
 terminal side-by-side. Accessibility is weak (terminal).
 
-## Cohort 3 — Standalone Git GUIs
+## Cohort 3. Standalone Git GUIs
 | Tool | License | Platforms | Price (2026) | Target user | Git-engine model |
 | --- | --- | --- | --- | --- | --- |
 | GitKraken | Proprietary | Win/Mac/Linux | Free / $5+/mo | Teams/visual | Built-in (git) |
@@ -49,10 +49,10 @@ terminal side-by-side. Accessibility is weak (terminal).
 
 **Positioning.** The commercial heart of the market. Fork/Sublime Merge/Tower win on
 native feel + speed + conflict wizards; GitHub Desktop on simplicity; lazygit/tig on
-terminal flow. Linux is absent from Fork/Tower/GitHub Desktop (Windows/macOS only) — a
+terminal flow. Linux is absent from Fork/Tower/GitHub Desktop (Windows/macOS only), a
 gap SmartGit/Sublime Merge/GitKraken fill.
 
-## Cohort 4 — Diff Specialists
+## Cohort 4. Diff specialists
 | Tool | License | Platforms | Price | Target user | Git-engine model |
 | --- | --- | --- | --- | --- | --- |
 | difftastic | MIT (OSS) | Win/Mac/Linux | Free | Semantic-diff fans | Standalone (+ git difftool) |
@@ -71,12 +71,12 @@ git-delta are the open semantic/word-level reference points.
 
 ---
 
-## Cross-Cutting Observations
+## Cross-cutting observations
 - **Linux parity gap.** Fork, Tower, GitHub Desktop, Kaleidoscope, GitUp are Windows/macOS-
-  only. TurboGit (Rust/egui) gets 3-OS parity for free — a positioning advantage.
+  only. TurboGit (Rust/egui) gets 3-OS parity for free, a positioning advantage.
 - **Structural diff is specialist-only.** No mainstream GUI ships AST diffing as default;
   difftastic/git-delta are CLI add-ons. Big whitespace for TurboGit.
 - **AI conflict resolution is the new frontier.** VS Code 1.105 (Sept 2025) added
   agentic merge-conflict resolution; incumbents have not broadly followed yet.
 - **Safety/polish is the paid wedge.** Undo (Tower), conflict wizards (GitKraken/Tower),
-  AI assist — not the diff view itself — justify paid tiers.
+  AI assist, not the diff view itself, justify paid tiers.

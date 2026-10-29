@@ -1,8 +1,3 @@
-//! Issue 31 — `tag_create` through the engine seam with the full `TagSpec`:
-//! any commit as the target, annotated tags with a tagger identity, and GPG
-//! signing. Headless integration tests over real git repositories (tempdir +
-//! system `git`); the created tag objects are read back with git plumbing.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -16,12 +11,6 @@ fn exec() -> CliExecutor {
     }
 }
 
-// `repo_two_commits` stays local, not a `git_seed` recipe: it is `main` plus
-// exactly two commits appending a line each to the SAME `file.txt`, and the
-// recipes commit to distinct paths. Identity stays repo-local (`Test` /
-// `test@example.com`) because one test asserts the tagger is exactly that pair.
-
-/// Append a line to `file.txt`, stage, commit; returns the new HEAD SHA.
 fn commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -37,7 +26,6 @@ fn commit(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repo on `main` with two commits; returns `(guard, repo, [c1, c2])`.
 fn repo_two_commits() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -57,7 +45,6 @@ fn spec(name: &str) -> TagSpec {
     }
 }
 
-/// The raw tag object (`git cat-file tag <name>`) — annotated tags only.
 fn tag_object(repo: &Path, name: &str) -> String {
     git(repo, &["cat-file", "tag", name])
 }
@@ -120,9 +107,6 @@ fn lightweight_tag_defaults_to_head() {
 #[test]
 fn a_signed_tag_carries_a_signature_block() {
     let (_tmp, repo, _commits) = repo_two_commits();
-    // A stub gpg program: git requires the `SIG_CREATED` status line on
-    // stderr, then appends the program's stdout to the tag object — enough
-    // to assert the `-s` flag reached git without provisioning a keychain.
     let stub = _tmp.path().join("fake-gpg.sh");
     std::fs::write(
         &stub,

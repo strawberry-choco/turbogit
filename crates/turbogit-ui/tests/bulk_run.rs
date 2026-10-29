@@ -1,11 +1,3 @@
-//! Issue 10 — cascade run monitor: the UI seam.
-//!
-//! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
-//! over temporary git repositories and assert on public surfaces: painted
-//! labels, accessible widget labels, and `AppState` transitions. The
-//! monitor (screen 03) renders live per-repo states under an overall
-//! progress header with Stop remaining / Retry skipped / Resolve actions.
-
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,10 +8,6 @@ use test_support::harness::{
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git` without asserting success.
-///
-/// Deliberately NOT `test_support::git_seed::git`, which asserts: the one call
-/// that needs this is `git merge other`, whose failure IS the conflicted fixture.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -27,14 +15,6 @@ fn git_unchecked(repo: &Path, args: &[&str]) {
         .output();
 }
 
-/// Create an initialized temp repository with one base commit on `main`
-/// plus an `origin` remote so upstream reads can be exercised.
-///
-/// Kept local, NOT `git_seed::repo_with_origin`: the bare is named
-/// `<name>.origin` (two tests then break that URL), and the seeded file is
-/// `base.txt` — the conflict resolver asserts the row paints "Merge: base.txt",
-/// and `two_repo_project` dirties it to give the skipped row its precondition.
-/// `repo_with_one_commit` seeds `README.md`, which would make both untracked.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -57,9 +37,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A project with both repos under one group so a single group click
-/// selects the fleet. `ui` starts with a dirty tracked file so skip
-/// classification has something to bite on.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = test_support::scratch_root(&format!("bulk-run-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -72,18 +49,10 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, ui)
 }
 
-/// Headless harness driving the full app UI (mirrors `bulk_operations`).
-///
-/// Unstyled: no `configure_style` and no `install_fonts`, because this suite
-/// asserts on the painted cascade-monitor labels and the shared preamble would
-/// lay them out in the embedded JetBrains Mono stack. `max_steps` is 1024 rather
-/// than kittest's default of 4 — the run budget a cascade drives is the one thing
-/// the shared helper leaves out.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
-/// Step until the named repo's row is terminal (Done / Failed / Skipped).
 fn wait_row_terminal(h: &mut Harness<'_, AppState>, name: &str) {
     wait_for(h, |s| {
         s.ui.bulk_run.as_ref().is_some_and(|v| {
@@ -116,8 +85,6 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     let mut h = harness(state);
     settle(&mut h);
 
-    // A single registered repo collapses its folder away, so the fleet is
-    // selected through the repo's own checkbox.
     h.get_by_label("Select repo alpha").click();
     settle(&mut h);
     h.get_by_label("Pull all").click();
@@ -125,8 +92,6 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     h.get_by_label("Run on 1 of 1").click();
     settle(&mut h);
 
-    // The monitor replaced the preflight modal: per-repo rows under the
-    // progress header with the live footer actions.
     wait_row_terminal(&mut h, "alpha");
     settle(&mut h);
     assert_painted(&h, "alpha");
@@ -134,7 +99,6 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     assert_painted(&h, "1 done");
     assert_painted(&h, "Stop remaining");
 
-    // Close dismisses the monitor.
     h.get_by_label("Close").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_none());
@@ -144,7 +108,6 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
 #[test]
 fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     let (project, alpha, _ui) = two_repo_project("resolve");
-    // Break alpha's remote so its fetch fails deterministically.
     git_ok(
         &alpha,
         &["remote", "set-url", "origin", "/nonexistent/broken"],
@@ -178,8 +141,6 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     h.get_by_label("Resolve alpha").click();
     settle(&mut h);
 
-    // Resolve navigates: the repo becomes the selected root and the
-    // monitor closes.
     assert_eq!(h.state().selected_root, Some(alpha_id(&alpha)));
     assert!(h.state().ui.bulk_run.is_none());
     assert_not_painted(&h, "Stop remaining");
@@ -188,7 +149,6 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
 #[test]
 fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     let (project, alpha, _ui) = two_repo_project("resolver-link");
-    // Seed an in-progress merge conflict on alpha's tracked file.
     git_ok(&alpha, &["checkout", "-q", "-b", "other"]);
     std::fs::write(alpha.join("base.txt"), "theirs\n").unwrap();
     git_ok(&alpha, &["commit", "-qam", "theirs"]);
@@ -196,7 +156,6 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     std::fs::write(alpha.join("base.txt"), "ours\n").unwrap();
     git_ok(&alpha, &["commit", "-qam", "ours"]);
     git_unchecked(&alpha, &["merge", "other"]);
-    // Break the remote so the fetch fails and the row exposes Resolve.
     git_ok(
         &alpha,
         &["remote", "set-url", "origin", "/nonexistent/broken"],
@@ -217,7 +176,6 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     h.get_by_label("Resolve alpha").click();
     settle(&mut h);
 
-    // The deep link jumps past repo selection straight into the resolver.
     assert_eq!(h.state().selected_root, Some(alpha_id(&alpha)));
     assert!(h.state().ui.conflict_open.is_some(), "resolver opened");
     assert_painted(&h, "Merge: base.txt");
@@ -232,7 +190,6 @@ fn retry_skipped_redispatches_the_skipped_repo_from_the_monitor() {
 
     h.get_by_label("Select group frontend").click();
     settle(&mut h);
-    // Stash all runs on the dirty repo and skips the clean one.
     h.get_by_label("Stash all").click();
     settle(&mut h);
     h.get_by_label("Run on 1 of 2").click();

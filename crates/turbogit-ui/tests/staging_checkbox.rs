@@ -1,19 +1,3 @@
-//! Local Changes: the per-file checkbox as a direct control over git's index.
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over
-//! temporary repositories, clicking the checkbox and the row body through the
-//! accessibility tree, and reading every answer back out of **git itself** —
-//! `git status --porcelain`, `git diff --cached --name-only`, `git log` —
-//! rather than out of any of the window's own state. What the checkbox paints
-//! is read off the painted frame.
-//!
-//! Covers: the three checkbox states and the whole-file operation behind each;
-//! un-staging a newly added file back to untracked; un-staging in a repository
-//! with no commits; ignored files absent from the flat list; the badge letter
-//! and colour per status; a new-and-modified file reading `M`; conflicted rows
-//! carrying no checkbox and keeping the name column; the selection surviving a
-//! commit and being pruned on refresh; and `Space` on the focused row.
-
 use std::path::{Path, PathBuf};
 
 use egui_kittest::Harness;
@@ -26,8 +10,6 @@ use test_support::wait_until;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::PatchOrigin;
 use turbogit_ui::theme::Palette;
-
-// ---------------------------------------------------------------- helpers --
 
 struct Repo {
     path: PathBuf,
@@ -45,9 +27,6 @@ fn temp_repo(parent: &Path, name: &str) -> Repo {
     Repo { path }
 }
 
-/// A repository with `git init` and nothing else: no commit, no HEAD. The
-/// un-stage route has to work here, which is exactly where the libgit2 backend
-/// used to fail by trying to resolve HEAD.
 fn unborn_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -73,12 +52,10 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     h
 }
 
-/// `git status --porcelain` for the repository, trimmed.
 fn status(repo: &Path) -> String {
     git(repo, &["status", "--porcelain"]).trim().to_string()
 }
 
-/// The repository's staged paths, sorted.
 fn staged(repo: &Path) -> Vec<String> {
     let mut out: Vec<String> = git(repo, &["diff", "--cached", "--name-only"])
         .lines()
@@ -88,17 +65,14 @@ fn staged(repo: &Path) -> Vec<String> {
     out
 }
 
-/// The empty, un-staged checkbox's accessible label.
 fn stage_box(path: &str) -> String {
     format!("Stage {path} (unstaged)")
 }
 
-/// The half-filled checkbox's label.
 fn partial_box(path: &str) -> String {
     format!("Stage all of {path} (partially staged)")
 }
 
-/// The fully ticked checkbox's label.
 fn unstage_box(path: &str) -> String {
     format!("Unstage {path} (staged)")
 }
@@ -111,11 +85,6 @@ fn wait_for_staged(h: &mut Harness<'_, AppState>, repo: &Path, needle: &str) -> 
     })
 }
 
-// ------------------------------------------------ the three checkbox states --
-
-/// **A half-filled box stages the whole file.** Finishing a partial staging is
-/// the shortest path, so the middle state is the *stage* direction, not the
-/// un-stage one — and the answer is read out of git, not out of the box.
 #[test]
 fn the_middle_state_clicks_to_the_whole_file_staged() {
     let parent = tempfile::tempdir().unwrap();
@@ -124,7 +93,6 @@ fn the_middle_state_clicks_to_the_whole_file_staged() {
     git(&repo.path, &["add", "base.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "three lines"]);
     std::fs::write(repo.path.join("base.txt"), "one\nTWO\nthree\n").unwrap();
-    // Stage the first half of the worktree by hand, so git reports `MM`.
     git(&repo.path, &["stash", "push", "-q", "--keep-index"]);
     git(&repo.path, &["stash", "pop", "-q"]);
     std::fs::write(repo.path.join("base.txt"), "ONE\ntwo\nthree\n").unwrap();
@@ -152,9 +120,6 @@ fn the_middle_state_clicks_to_the_whole_file_staged() {
     );
 }
 
-/// **Un-staging a newly added file returns it to untracked**, not to a modified
-/// row and not to a vanished one: git's own `A` line goes away and its `??` line
-/// comes back.
 #[test]
 fn unstaging_a_newly_added_file_returns_it_to_untracked() {
     let parent = tempfile::tempdir().unwrap();
@@ -198,9 +163,6 @@ fn unstaging_a_newly_added_file_returns_it_to_untracked() {
     );
 }
 
-/// **Un-staging works in a repository with no commits.** There is no HEAD for a
-/// backend to resolve, so this is the case a real `git restore --staged` route
-/// must be checked against.
 #[test]
 fn unstaging_works_in_a_repository_with_no_commits() {
     let parent = tempfile::tempdir().unwrap();
@@ -239,9 +201,6 @@ fn unstaging_works_in_a_repository_with_no_commits() {
     );
 }
 
-/// **A click on the checkbox works on a cold diff cache.** The granular
-/// pipeline peeks the cached diff and no-ops without it; the checkbox must not.
-/// This test never opens the diff preview, so the cache is cold by construction.
 #[test]
 fn the_checkbox_works_on_a_cold_diff_cache() {
     let parent = tempfile::tempdir().unwrap();
@@ -262,16 +221,11 @@ fn the_checkbox_works_on_a_cold_diff_cache() {
     );
 }
 
-// --------------------------------------------------- the flat file list ------
-
-/// **One flat list, path-sorted, staging state nowhere in the structure.**
 #[test]
 fn the_list_is_one_flat_path_sorted_list_with_no_staging_headings() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "flat");
     std::fs::create_dir_all(repo.path.join("src")).unwrap();
-    // One of each: modified, staged, untracked, nested — deliberately seeded in
-    // an order that is neither alphabetical nor by staging state.
     std::fs::write(repo.path.join("zzz.txt"), "modified\n").unwrap();
     std::fs::write(repo.path.join("aaa.txt"), "staged\n").unwrap();
     std::fs::write(repo.path.join("mmm.txt"), "untracked\n").unwrap();
@@ -283,8 +237,6 @@ fn the_list_is_one_flat_path_sorted_list_with_no_staging_headings() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Every kind of file is a row of the same list: staged, unstaged, untracked
-    // and nested. The commit above left `zzz.txt` modified and `aaa.txt` staged.
     for row in ["aaa.txt", "zzz.txt", "mmm.txt", "bbb.rs"] {
         h.get_by_label(row);
     }
@@ -296,8 +248,6 @@ fn the_list_is_one_flat_path_sorted_list_with_no_staging_headings() {
         );
     }
 
-    // And they are in path order — component-wise, so `src/…` sorts with the
-    // `s` names rather than after every root-level one.
     let in_path_order = ["aaa.txt", "mmm.txt", "bbb.rs", "zzz.txt"];
     let rows = in_path_order
         .iter()
@@ -309,8 +259,6 @@ fn the_list_is_one_flat_path_sorted_list_with_no_staging_headings() {
     );
 }
 
-/// **Ignored files stay out.** The bucketing that filtered them is gone; the
-/// noise filter that shared it is not.
 #[test]
 fn ignored_files_stay_out_of_the_flat_list() {
     let parent = tempfile::tempdir().unwrap();
@@ -335,10 +283,6 @@ fn ignored_files_stay_out_of_the_flat_list() {
     );
 }
 
-// -------------------------------------------------------- the status badge --
-
-/// **Every status paints its own letter in its own hue**, read off the painted
-/// frame. One new (untracked), one added-and-staged, one modified, one deleted.
 #[test]
 fn each_status_renders_its_expected_letter_and_colour() {
     let parent = tempfile::tempdir().unwrap();
@@ -372,8 +316,6 @@ fn each_status_renders_its_expected_letter_and_colour() {
     let _ = h.get_by_label("fresh.txt");
 }
 
-/// **A file that is both new and modified reads `M`.** One letter has to answer
-/// both facts, and modified wins — the loss of the `N` is accepted, not fixed.
 #[test]
 fn a_new_and_modified_file_renders_m() {
     let parent = tempfile::tempdir().unwrap();
@@ -397,10 +339,6 @@ fn a_new_and_modified_file_renders_m() {
     );
 }
 
-// ------------------------------------------------------------- conflicts ----
-
-/// **A conflicted path carries no checkbox, and its name lines up with every
-/// other row.** Both halves are one claim: the conflict row is a row.
 #[test]
 fn conflicted_rows_have_no_checkbox_and_keep_the_name_column() {
     let parent = tempfile::tempdir().unwrap();
@@ -412,7 +350,6 @@ fn conflicted_rows_have_no_checkbox_and_keep_the_name_column() {
     git(&repo.path, &["add", "."]);
     git(&repo.path, &["commit", "-q", "-m", "base"]);
 
-    // A real merge conflict, so the row is a real conflicted change.
     git(&repo.path, &["checkout", "-q", "-b", "side"]);
     std::fs::write(repo.path.join("conf.txt"), "side\n").unwrap();
     git(&repo.path, &["add", "conf.txt"]);
@@ -430,9 +367,6 @@ fn conflicted_rows_have_no_checkbox_and_keep_the_name_column() {
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
     h.get_by_label("Merge conflicts (1)");
 
-    // No checkbox: an unmerged path cannot be staged, so none of the three
-    // states' labels exists for it. Every checkbox in this list carries one of
-    // them, so their absence is the whole claim.
     for label in [
         stage_box("conf.txt"),
         partial_box("conf.txt"),
@@ -444,11 +378,6 @@ fn conflicted_rows_have_no_checkbox_and_keep_the_name_column() {
         );
     }
 
-    // …and the name sits in the same column: the badge occupies the shared
-    // status-letter slot and the name starts one gap after it. The badge's own
-    // x is the comparable fact — the name's pixel x follows the badge's
-    // *measured* width, which is per-letter by design (`M` and `N` are wider
-    // than `C` and `D`), so an identity here would be a claim about the font.
     let conflict_badge_x = painted_name_x(&h, "C");
     let plain_badge_x = painted_name_x(&h, "M");
     assert!(
@@ -464,7 +393,6 @@ fn conflicted_rows_have_no_checkbox_and_keep_the_name_column() {
     );
 }
 
-/// The x of the painted file-name galley, or a panic naming the missing text.
 #[track_caller]
 fn painted_name_x(h: &Harness<'_, AppState>, name: &str) -> f32 {
     painted_galleys(h)
@@ -475,12 +403,6 @@ fn painted_name_x(h: &Harness<'_, AppState>, name: &str) -> f32 {
         .x
 }
 
-// ----------------------------------------------------- selection lifetime ---
-
-/// **The selection survives a commit, and is pruned when a file leaves the
-/// list.** It means "the files I am looking at", so a commit says nothing about
-/// it and a vanishing path must not sit in it forever. Two rows are held to
-/// prove the pruning is selective: a plain click would leave only the last one.
 #[test]
 fn selection_survives_a_commit_and_is_pruned_on_refresh() {
     let parent = tempfile::tempdir().unwrap();
@@ -499,7 +421,6 @@ fn selection_survives_a_commit_and_is_pruned_on_refresh() {
         h.state().ui.selected
     );
 
-    // Stage and commit one of them.
     h.get_by_label(&stage_box("a.txt")).click();
     h.run();
     assert!(wait_for_staged(&mut h, &repo.path, "a.txt"));
@@ -516,8 +437,6 @@ fn selection_survives_a_commit_and_is_pruned_on_refresh() {
     assert!(
         wait_until(15_000, || {
             h.run();
-            // `b.txt` was never staged, so it is still a row; `a.txt` is gone
-            // and must have been pruned from the selection.
             !h.state().ui.selected.contains(&repo.path.join("a.txt"))
         }),
         "a committed file leaves the list and is pruned from the selection, \
@@ -534,10 +453,6 @@ fn selection_survives_a_commit_and_is_pruned_on_refresh() {
     );
 }
 
-// ----------------------------------------------------------------- Space ----
-
-/// **Space toggles the focused row's checkbox** — the same whole-file operation
-/// the pointer performs, reached from the keyboard.
 #[test]
 fn space_toggles_the_focused_rows_checkbox() {
     let parent = tempfile::tempdir().unwrap();
@@ -546,7 +461,6 @@ fn space_toggles_the_focused_rows_checkbox() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Nothing previewed: nothing focused, so nothing to toggle.
     h.key_press(egui::Key::Space);
     h.run();
     assert!(
@@ -554,7 +468,6 @@ fn space_toggles_the_focused_rows_checkbox() {
         "with no focused row Space must stage nothing at all"
     );
 
-    // Preview a row, then Space.
     h.get_by_label("base.txt").click();
     h.run();
     h.key_press(egui::Key::Space);
@@ -575,15 +488,6 @@ fn space_toggles_the_focused_rows_checkbox() {
     );
 }
 
-// --------------------------------------------- the pinned preview -----------
-
-/// **Ticking never moves the preview.** The pane answers one fixed
-/// comparison, `git diff HEAD`, and that answer cannot change under a tick —
-/// staging a line moves the index, and the worktree's difference from HEAD is
-/// exactly what it was. So the same row is painted before the tick, after it, and
-/// after un-ticking it, with no `(no differences)` frame in between. An
-/// `index ↔ worktree` read would produce exactly that frame for a fully staged
-/// file, which is the failure this pins.
 #[test]
 fn the_preview_stays_on_the_pinned_comparison_through_a_tick() {
     let parent = tempfile::tempdir().unwrap();
@@ -637,11 +541,6 @@ fn the_preview_stays_on_the_pinned_comparison_through_a_tick() {
     );
 }
 
-// ------------------------------------------------ the disabled explanation --
-
-/// **A disabled Commit says why.** Hover it until the tooltip paints, the same
-/// way the disabled menu rows do — a control that refuses without a reason
-/// reads as broken rather than as gated.
 #[test]
 fn the_disabled_commit_explains_itself_on_hover() {
     let parent = tempfile::tempdir().unwrap();
@@ -650,7 +549,6 @@ fn the_disabled_commit_explains_itself_on_hover() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Empty index, empty message: the staged-file reason is the one shown.
     h.state_mut().ui.commit_message = "why is this off".into();
     h.run();
     let control = h.get_by_label("Commit changes").rect();
@@ -661,7 +559,6 @@ fn the_disabled_commit_explains_itself_on_hover() {
         "the disabled Commit must name the gate that is shut",
     );
 
-    // Empty message, full index: the other reason, so both gates are named.
     h.get_by_label(&stage_box("base.txt")).click();
     h.run();
     assert!(wait_for_staged(&mut h, &repo.path, "base.txt"));
@@ -704,13 +601,6 @@ fn assert_hover_paints(h: &mut Harness<'_, AppState>, at: egui::Pos2, needle: &s
     );
 }
 
-// ----------------------------------------------------- multi-selection ------
-
-/// **Two plain clicks leave one file selected, and a multi-selection is what
-/// reaches Discard Changes.** The selection means "the files I am looking at",
-/// and these are the two verbs that still read it — so the last row clicked
-/// plainly is the only row held, and the row Command/Ctrl adds beside it joins
-/// the group the verb acts on.
 #[test]
 fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
     let parent = tempfile::tempdir().unwrap();
@@ -741,8 +631,6 @@ fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
         "the first click's file left the set"
     );
 
-    // A second row joins the set only through Command/Ctrl, so that is how the
-    // multi-selection the verb reads is built.
     click_with_modifiers(&mut h, "a.txt", egui::Modifiers::COMMAND);
     assert_eq!(
         h.state().ui.selected.len(),
@@ -751,7 +639,6 @@ fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
         h.state().ui.selected
     );
 
-    // The header's rollback control opens the discard confirm for the selection.
     h.get_by_label("Rollback").click();
     h.run();
     let mut files: Vec<String> = h
@@ -775,8 +662,6 @@ fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
     );
 }
 
-/// **Multi-selection feeds Create Patch from Local Changes**, by the same route
-/// — the selection's meaning changed, not the verbs that read it.
 #[test]
 fn a_multi_selection_drives_create_patch_from_local_changes() {
     let parent = tempfile::tempdir().unwrap();

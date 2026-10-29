@@ -1,7 +1,3 @@
-//! Issue #07 — user-defined smart group rules: persistence with the
-//! workspace. Rules live in `.turbogit/ui.ron` next to the other UI-only
-//! state and must survive a round trip; files written before rules
-//! existed (no `smart_group_rules` key) load with none, never failing.
 use tempfile::TempDir;
 use turbogit_app::persistence::{UiPersist, load_ui_state, save_ui_state};
 use turbogit_app::smart_rules::SmartGroupRule;
@@ -28,9 +24,6 @@ fn rules_round_trip_through_the_workspace_ui_state() {
     let loaded = load_ui_state(project.path());
 
     assert_eq!(loaded.smart_group_rules, vec![release_rule()]);
-    // The pre-existing fields ride along unchanged: the tab is a `Tab` now, so
-    // a file written with none of it reads back as the default tab rather than
-    // as a string that means nothing.
     assert_eq!(loaded.tab, Tab::default());
 }
 
@@ -60,7 +53,6 @@ fn rules_survive_a_restart_through_the_launch_path() {
     state.ui.smart_group_rules = vec![release_rule()];
     state.save_durable_ui();
 
-    // Relaunching the same project restores the rules into live UI state.
     let reloaded = AppState::launch_in(
         Some(project.path().to_path_buf()),
         Some(recents_cfg.path().to_path_buf()),

@@ -1,16 +1,3 @@
-//! Issue #16 — Settings modal: a category-list dialog opened from the command
-//! palette's `Settings…` action (`Ctrl+Shift+A`) and from the tab strip's
-//! settings button (the gear returned with the strip's action cluster; the
-//! IDE-chrome toolbar of issue #03 and the topbar's `More` button stay gone,
-//! and the VCS popup's frozen action set still carries no entry).
-//!
-//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end.
-//! Asserts only on public surfaces:
-//!
-//! - **Painted output** — text galleys / filled rects from `FullOutput`.
-//! - **Accessibility tree** — widget roles, labels, and the disabled flag.
-//! - **State transitions** — public `AppState` fields + persisted settings.
-
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -21,9 +8,6 @@ use turbogit_app::persistence;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{IncomingCheckInterval, VcsSettings};
 
-/// The modal opens from the command palette: the palette's `Settings…`
-/// action turns the flag on. The tab strip's settings button is the other
-/// entry point; `header_actions.rs` owns that route.
 fn open_settings(harness: &mut Harness<'_, AppState>) {
     harness.state_mut().ui.command_palette = true;
     settle(harness);
@@ -42,16 +26,11 @@ fn toggle_restore_workspace(harness: &mut Harness<'_, AppState>) {
     settle(harness);
 }
 
-// --- Cycle 1: palette entry --------------------------------------------------
-
 #[test]
 fn settings_opens_from_the_command_palette() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    // No Settings surface exists before the palette action runs. This harness
-    // is the Welcome page, where the tab strip does not render at all; the
-    // strip's settings button on repo pages is `header_actions.rs`' subject.
     assert_not_painted(&harness, "Settings");
     assert!(
         harness.query_by_label("Settings").is_none(),
@@ -60,7 +39,6 @@ fn settings_opens_from_the_command_palette() {
 
     open_settings(&mut harness);
 
-    // The modal chrome is really painted: title, category list, footer.
     assert_painted(&harness, "Settings");
     for label in [
         "General",
@@ -76,7 +54,6 @@ fn settings_opens_from_the_command_palette() {
     ] {
         assert_painted(&harness, label);
     }
-    // …and closing the modal removes every trace again.
     harness.get_by_label("Cancel").click();
     settle(&mut harness);
     assert!(!harness.state().ui.settings_open);
@@ -89,11 +66,9 @@ fn categories_switch_the_visible_page() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // The modal opens on General…
     assert!(harness.state().ui.settings_category.is_general());
     assert_painted(&harness, "Restore workspace context on branch switch");
 
-    // …and clicking a category swaps the visible page.
     harness.get_by_label("Protected Branches").click();
     settle(&mut harness);
     assert_painted(&harness, "Protected branch patterns");
@@ -103,7 +78,6 @@ fn categories_switch_the_visible_page() {
     settle(&mut harness);
     assert_not_painted(&harness, "Protected branch patterns");
 
-    // The selection is modal-ephemeral state on UiState, not persisted.
     harness.get_by_label("Cancel").click();
     settle(&mut harness);
     open_settings(&mut harness);
@@ -129,16 +103,9 @@ fn settings_modal_is_about_768px_wide() {
 
 #[test]
 fn tab_strip_offers_no_settings_tab() {
-    // The tab strip only renders with a project open, so run over a real
-    // repo (the Welcome page shows the tool tabs no more).
     let (mut harness, _tmp) = repo_shell_harness();
     settle(&mut harness);
 
-    // The strip renders the five tool tabs (History deleted in issue #19,
-    // the Settings tool window in issue #16) plus the action cluster, whose
-    // settings button opens the modal rather than switching tabs — so the
-    // painted labels gain no Settings tab and the active tab never becomes
-    // one.
     for label in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
         assert_painted(&harness, label);
     }
@@ -151,16 +118,12 @@ fn tab_strip_offers_no_settings_tab() {
     );
 }
 
-// --- Cycle 2: backed rows round-trip to persisted settings --------------------
-
 #[test]
 fn backed_rows_round_trip_to_persisted_settings() {
     let (mut harness, project) = shell_harness();
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // Edit two backed rows: the General checkbox + git executable input
-    // (Git page).
     toggle_restore_workspace(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
@@ -171,7 +134,6 @@ fn backed_rows_round_trip_to_persisted_settings() {
     }
     settle(&mut harness);
 
-    // Apply persists into live state AND onto disk (.turbogit/state.ron).
     harness.get_by_label("Apply").click();
     settle(&mut harness);
     assert!(
@@ -183,7 +145,6 @@ fn backed_rows_round_trip_to_persisted_settings() {
     assert!(on_disk.restore_workspace);
     assert_eq!(on_disk.git_executable, "git-under-test");
 
-    // Cancel closes; reopening shows the persisted values, not defaults.
     harness.get_by_label("Cancel").click();
     settle(&mut harness);
     open_settings(&mut harness);
@@ -198,33 +159,26 @@ fn backed_rows_paint_their_loaded_values() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // General: the landing page carries the commit behavior row.
     assert_painted(&harness, "Restore workspace context on branch switch");
 
-    // Multi-Root carries the cross-root branch sync.
     harness.get_by_label("Multi-Root").click();
     settle(&mut harness);
     assert_painted(&harness, "Sync branch operations across roots");
 
-    // Update Method carries the integration policy dropdowns.
     harness.get_by_label("Update Method").click();
     settle(&mut harness);
     assert_painted(&harness, "Merge");
     assert_painted(&harness, "Stash");
 
-    // Appearance carries the log presentation.
     harness.get_by_label("Appearance").click();
     settle(&mut harness);
     assert_painted(&harness, "Relative");
     assert_painted(&harness, "Highlight modified lines in the gutter");
 
-    // Advanced carries the warning/commit-policy rows.
     harness.get_by_label("Advanced").click();
     settle(&mut harness);
     assert_painted(&harness, "Warn before committing CRLF");
 }
-
-// --- Cycle 2b: the engine is not a setting (ADR-0030) ---------------------------
 
 #[test]
 fn the_git_page_offers_no_engine_choice() {
@@ -234,8 +188,6 @@ fn the_git_page_offers_no_engine_choice() {
     harness.get_by_label("Git").click();
     settle(&mut harness);
 
-    // The row is gone with the field behind it: neither option paints, and
-    // Apply has nothing to enable on this page until the executable is edited.
     assert_not_painted(&harness, "Git backend");
     assert_not_painted(&harness, "CLI");
     assert_not_painted(&harness, "In-process reads");
@@ -246,8 +198,6 @@ fn the_git_page_offers_no_engine_choice() {
     );
 }
 
-// --- Cycle 2c: git-executable version badge + Browse (issue #26) ---------------
-
 #[test]
 fn git_executable_row_shows_a_live_version_badge_and_browse() {
     let (mut harness, _project) = shell_harness();
@@ -256,9 +206,7 @@ fn git_executable_row_shows_a_live_version_badge_and_browse() {
     harness.get_by_label("Git").click();
     settle(&mut harness);
 
-    // The Browse picker action is present…
     assert_painted(&harness, "Browse");
-    // …and the live check resolved the git on PATH into a success badge.
     let badge = harness
         .state()
         .ui
@@ -272,8 +220,6 @@ fn git_executable_row_shows_a_live_version_badge_and_browse() {
     );
     assert_painted(&harness, "✓");
 
-    // Pointing the executable at a missing binary flips the badge to the
-    // error state live, from the draft path (not the saved settings).
     {
         let edit = harness.get_by_role_and_label(Role::TextInput, "Git executable");
         edit.focus();
@@ -288,8 +234,6 @@ fn git_executable_row_shows_a_live_version_badge_and_browse() {
     assert_painted(&harness, "✗");
 }
 
-// --- Cycle 2d: protected-branch pattern chips (issue #26, screen 11) -----------
-
 #[test]
 fn protected_patterns_are_removable_chips_and_apply_gates_immediately() {
     let (mut harness, project) = shell_harness();
@@ -298,11 +242,9 @@ fn protected_patterns_are_removable_chips_and_apply_gates_immediately() {
     harness.get_by_label("Protected Branches").click();
     settle(&mut harness);
 
-    // The default patterns render as chips…
     assert_painted(&harness, "main");
     assert_painted(&harness, "master");
 
-    // …and each chip carries a remove control.
     harness.get_by_label("Remove master").click();
     settle(&mut harness);
     assert_eq!(
@@ -317,7 +259,6 @@ fn protected_patterns_are_removable_chips_and_apply_gates_immediately() {
         "removing a chip edits the draft immediately"
     );
 
-    // "+ Add pattern" appends the new-pattern input's content.
     {
         let edit = harness.get_by_role_and_label(Role::TextInput, "New pattern");
         edit.focus();
@@ -339,8 +280,6 @@ fn protected_patterns_are_removable_chips_and_apply_gates_immediately() {
     let new_pattern = &harness.state().ui.settings_new_pattern;
     assert!(new_pattern.is_empty(), "adding clears the input");
 
-    // Apply persists the edited set, and the protective gate consumes it
-    // immediately (sync_service reads the live settings).
     harness.get_by_label("Apply").click();
     settle(&mut harness);
     let settings = harness.state().settings.clone();
@@ -367,8 +306,6 @@ fn protected_patterns_are_removable_chips_and_apply_gates_immediately() {
     ));
 }
 
-// --- Cycle 3: dirty gating + Reset/Cancel semantics ---------------------------
-
 #[test]
 fn apply_is_disabled_until_dirty() {
     let (mut harness, _project) = shell_harness();
@@ -385,11 +322,9 @@ fn apply_is_disabled_until_dirty() {
         "Apply must start disabled (nothing edited yet)"
     );
 
-    // One edit → dirty → Apply enables.
     toggle_restore_workspace(&mut harness);
     assert!(!apply_disabled(&harness), "Apply must enable once dirty");
 
-    // Restore defaults resets the visible category (General) → clean again.
     harness.get_by_label("Restore defaults").click();
     settle(&mut harness);
     assert!(
@@ -397,8 +332,6 @@ fn apply_is_disabled_until_dirty() {
         "Restore defaults must re-disable Apply when the category is back at its defaults"
     );
 
-    // Apply on a dirty draft succeeds and cleans the flag, keeping the modal
-    // open (IDE semantics — users tweak several pages before closing).
     toggle_restore_workspace(&mut harness);
     harness.get_by_label("Apply").click();
     settle(&mut harness);
@@ -418,7 +351,6 @@ fn restore_defaults_resets_only_the_visible_category() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // Edit a General field, then move to Git and edit its one field.
     toggle_restore_workspace(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
@@ -429,7 +361,6 @@ fn restore_defaults_resets_only_the_visible_category() {
     }
     settle(&mut harness);
 
-    // Restore defaults resets the visible category only.
     harness.get_by_label("Restore defaults").click();
     settle(&mut harness);
     let draft = harness.state().ui.settings_draft.as_ref().unwrap();
@@ -439,7 +370,6 @@ fn restore_defaults_resets_only_the_visible_category() {
         "edits on other categories must survive the reset"
     );
 
-    // Nothing persisted yet.
     assert_eq!(
         persistence::load_settings(project.path()).unwrap(),
         VcsSettings::default(),
@@ -469,7 +399,6 @@ fn cancel_discards_edits() {
         "Cancel must never touch disk"
     );
 
-    // The window close (X) button follows the same discard semantics.
     open_settings(&mut harness);
     toggle_restore_workspace(&mut harness);
     harness.get_by_label("Close window").click();
@@ -478,15 +407,12 @@ fn cancel_discards_edits() {
     assert!(harness.state().ui.settings_draft.is_none());
 }
 
-// --- Cycle 4: unbacked rows are visible but disabled --------------------------
-
 #[test]
 fn unbacked_rows_render_disabled_and_never_persist() {
     let (mut harness, project) = shell_harness();
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // Manage Remotes lives on the Git page.
     harness.get_by_label("Git").click();
     settle(&mut harness);
     let node = harness.get_by_label("Manage Remotes");
@@ -496,9 +422,6 @@ fn unbacked_rows_render_disabled_and_never_persist() {
     );
     node.click();
 
-    // The CRLF-conversion radios and the one remaining commit check live on
-    // Advanced. "Run git commit hooks" is not among them: it is a real
-    // control on the commit card's options menu now, per commit.
     harness.get_by_label("Advanced").click();
     settle(&mut harness);
     assert_not_painted(&harness, "Run git commit hooks");
@@ -517,7 +440,6 @@ fn unbacked_rows_render_disabled_and_never_persist() {
     }
     settle(&mut harness);
 
-    // Clicking disabled controls changed nothing: still clean, still default.
     assert_eq!(
         harness.state().ui.settings_draft.as_ref(),
         Some(&VcsSettings::default()),
@@ -529,24 +451,15 @@ fn unbacked_rows_render_disabled_and_never_persist() {
     );
 }
 
-// --- Cycle 5: the deleted tab cannot be reached by state either ---------------
-
 #[test]
 fn keyboard_navigation_never_lands_on_a_settings_tab() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    // Ctrl+Shift+A opens the palette; its action routes to the same modal —
-    // no tab switch exists at all anymore (Tab::Settings was deleted).
     use egui::{Key, Modifiers};
     harness.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::A);
     settle(&mut harness);
 
-    // Narrow the action list first (the query field auto-focuses), exactly
-    // like a keyboard user would — the full list scrolls. The Commit
-    // window's file filter (spec R7) also matches Role::TextInput but
-    // carries an accessible label ("Filter files"); the palette query is
-    // unlabeled.
     {
         let query = harness
             .get_all_by_role(Role::TextInput)
@@ -571,9 +484,6 @@ fn keyboard_navigation_never_lands_on_a_settings_tab() {
     assert_painted(&harness, "General");
 }
 
-// --- Incoming check: toggle + interval selector (issue #27, screen 11) --------
-
-/// Open the modal straight onto the Update Method page.
 fn open_update_method(harness: &mut Harness<'_, AppState>) {
     open_settings(harness);
     harness.get_by_label("Update Method").click();
@@ -586,8 +496,6 @@ fn incoming_check_is_a_toggle_with_an_interval_selector() {
     settle(&mut harness);
     open_update_method(&mut harness);
 
-    // Screen 11: the Incoming check row is a checkbox plus an interval
-    // selector, off by default and defaulting to one hour.
     let draft = harness.state().ui.settings_draft.as_ref().unwrap();
     assert!(!draft.incoming_poll, "incoming check ships disabled");
     assert_eq!(
@@ -610,10 +518,8 @@ fn incoming_check_edits_persist_on_apply() {
     settle(&mut harness);
     open_update_method(&mut harness);
 
-    // Enable the check and widen the interval, then Apply.
     harness.get_by_label("Check for incoming commits").click();
     settle(&mut harness);
-    // The interval combo is identified by its current value, not a label.
     harness.get_by_value("Every hour").click();
     settle(&mut harness);
     harness.get_by_label("Every 30 minutes").click();

@@ -1,17 +1,3 @@
-//! The bytes behind `Create patch`: which change each of the three sources answers
-//! with, and what `Reverse patch` asks of git.
-//!
-//! Every assertion here is against **real git in a temporary repository**, because
-//! the artifact is the thing under test: a patch that cannot be applied by git is a
-//! broken artifact no matter what the application believes about it. The checks ask
-//! git to apply what this read produced, or compare the bytes on disk, rather than
-//! matching a text shape this file also generates.
-//!
-//! The byte-not-String decision is pinned by a suite of its own at the end: git's
-//! output for a file whose content is not text must arrive holding those same bytes,
-//! because everything upstream — the encoding field included — is a statement about
-//! them.
-
 use std::path::{Path, PathBuf};
 use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use turbogit_domain::model::{PatchOrigin, VcsSettings};
@@ -24,8 +10,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Two committed revisions with a shared name, so an origin's own change is
-/// distinguishable from its ancestor's.
 fn repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(&dir).unwrap();
@@ -47,8 +31,6 @@ fn first(dir: &Path) -> String {
     git(dir, &["rev-parse", "HEAD~1"]).trim().to_string()
 }
 
-/// A commit origin is THAT revision's change and none of its history: an ancestor's
-/// file must not ride into the patch.
 #[test]
 fn a_commit_origin_carries_its_own_change_and_no_ancestor_s() {
     let tmp = tempfile::tempdir().unwrap();
@@ -70,8 +52,6 @@ fn a_commit_origin_carries_its_own_change_and_no_ancestor_s() {
         "an ancestor's change must not ride along: {text}"
     );
 
-    // git's verdict, not a text shape: at the parent, where TWO does not exist,
-    // the patch must apply.
     git(&dir, &["checkout", "-q", &first(&dir)]);
     let ok = std::process::Command::new("git")
         .args(["apply", "--check", "-"])
@@ -92,8 +72,6 @@ fn a_commit_origin_carries_its_own_change_and_no_ancestor_s() {
     assert!(ok.status.success(), "the patch applies at its parent");
 }
 
-/// A file revision is one path's change in one revision — what a row of a file
-/// history is — and a file history's other paths stay out of it.
 #[test]
 fn a_file_revision_origin_names_one_path_only() {
     let tmp = tempfile::tempdir().unwrap();
@@ -124,14 +102,10 @@ fn a_file_revision_origin_names_one_path_only() {
     );
 }
 
-/// Local changes are staged **and** unstaged content at once: `git diff` alone would
-/// answer with one half of what the developer is looking at, and a patch missing the
-/// staged half is a different artifact than the one the Commit window showed.
 #[test]
 fn local_changes_carry_staged_and_unstaged_content_together() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = repo(tmp.path());
-    // `a.txt` staged, `base.txt` unstaged, `new.txt` unversioned.
     std::fs::write(dir.join("a.txt"), "one\ntwo\nTHREE\n").unwrap();
     git(&dir, &["add", "a.txt"]);
     std::fs::write(dir.join("base.txt"), "shared\nadded\n").unwrap();
@@ -156,7 +130,6 @@ fn local_changes_carry_staged_and_unstaged_content_together() {
          make a patch git cannot apply: {text}"
     );
 
-    // Selection is the same origin with paths: a patch of one file names one file.
     let one = engine()
         .patch_bytes(
             &dir,
@@ -177,8 +150,6 @@ fn local_changes_carry_staged_and_unstaged_content_together() {
     );
 }
 
-/// `Reverse patch` is git's `-R`, not a re-rendering: the patch it produces undoes
-/// the change, which is checked by running it against the tree that has the change.
 #[test]
 fn the_reverse_origin_is_a_patch_git_applies_backwards() {
     let tmp = tempfile::tempdir().unwrap();
@@ -197,9 +168,6 @@ fn the_reverse_origin_is_a_patch_git_applies_backwards() {
         .expect("the reverse patch");
     assert_ne!(forward, reverse, "a reversed patch is not the same bytes");
 
-    // The claim the checkbox makes: applying this patch reverts the change, so the
-    // file is what HEAD holds afterwards. Run it through the engine's own worktree
-    // apply, which is the verb `Apply patch` uses.
     let patch = turbogit_engine_api::patch::parse_patch(
         std::str::from_utf8(&reverse).expect("this fixture is text"),
     );
@@ -213,9 +181,6 @@ fn the_reverse_origin_is_a_patch_git_applies_backwards() {
     );
 }
 
-/// The byte decision, stated as behaviour: a patch whose body is not text arrives
-/// holding those bytes. A `String` at this seam would have replaced them already,
-/// and the file the developer wrote would differ from the repository.
 #[test]
 fn a_patch_body_that_is_not_text_survives_the_read_byte_for_byte() {
     let tmp = tempfile::tempdir().unwrap();

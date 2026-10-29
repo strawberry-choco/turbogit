@@ -1,17 +1,3 @@
-//! Root caches (CONTEXT.md "Root caches"): the in-memory cache layer keyed
-//! by repository root — commit logs, ref decorations, changed-file lists,
-//! path-scoped logs, ahead/behind counts, worktree lists, submodule
-//! lists, stash listings, tag lists (with their decoration states) and
-//! checkout histories.
-//!
-//! One deep module with a small interface: the maps are private,
-//! lazy-fill logic lives *inside* (`ensure_*`), and callers get typed
-//! readers plus event-fed writers. Every invalidation drops all maps
-//! uniformly for its scope ([`Affected::Root`] or everything) — the
-//! invariant is never poked field-by-field by callers.
-//!
-//! The module depends on the [`GitExecutor`] trait only; no UI types.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
@@ -24,43 +10,20 @@ use turbogit_services::hunk_stats::{self, FileHunks};
 use crate::events::LogBatchMode;
 use crate::state::LOG_BATCH_SIZE;
 
-/// Which roots an operation's results affect — owned by the
-/// [`Operation`](crate::operation::Operation) that produced them and used to
-/// scope cache invalidation and rescans.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Affected {
-    /// Every registered root (batch operations, unknown scope).
     All,
-    /// Only this root.
     Root(RootId),
 }
 
-/// Which scoped commit listing a cache read fills: a file's history, one ref's
-/// history, or a pickaxe search. Each is a `git log` with one term in one
-/// `LogOpts` field, so the choice is one value rather than three signatures
-/// (issue #19, plan D9, issue 17).
-///
-/// The three batch exactly as the unscoped listing does (log-view-scaling 01):
-/// each is a window of one listing with its own paging flag, and none of them
-/// is ever mixed into another's cache. `Hash` is part of the contract because a
-/// scope is half of an in-flight read's key, so two scopes of one root can be
-/// read at once (log-view-scaling 02). A search batches like the others too, with
-/// its position read in the match stream rather than the traversal
-/// (log-view-scaling 10) — see [`scoped_batch_plan`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LogScope {
-    /// `git log -- <path>`.
     Path(PathBuf),
-    /// `git log <ref>`.
     Ref(String),
-    /// `git log -S <query>`.
     Search(String),
 }
 
 impl LogScope {
-    /// This scope's term, with one batch's position attached: the filter and
-    /// the paging are composed by the engine into a single `git log`
-    /// (log-view-scaling 01).
     pub(crate) fn batch_opts(&self, rows: usize, skip: Option<usize>) -> LogOpts {
         let mut opts = LogOpts {
             max_count: Some(rows),
@@ -77,7 +40,6 @@ impl LogScope {
 }
 
 impl Affected {
-    /// The one root in scope, when the scope is a single root.
     pub fn root(&self) -> Option<&RootId> {
         match self {
             Affected::Root(id) => Some(id),
@@ -86,31 +48,15 @@ impl Affected {
     }
 }
 
-/// One of the log's independently-read values, named by the read that produces
-/// it and the key it was read for.
-///
-/// The four are the four things the Log surface loads separately — the commit
-/// listing, one scoped listing inside it, a commit's changed-file list, and a
-/// commit's line counts — and the name is what lets a failure say which of
-/// them died instead of which pane the user was looking at. It is also the key
-/// of [`RootCaches`]'s failure records, so "the message for this read" is one
-/// lookup with no way to address the wrong entry: a key a caller can build by
-/// hand is a key a caller can build subtly differently wrong.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LogRead {
-    /// The unscoped commit listing of one root.
     Commits(RootId),
-    /// One scoped listing of one root: a file's history, a ref's, a search's.
     Scope(RootId, LogScope),
-    /// One commit's changed-file list.
     Changes(RootId, CommitId),
-    /// One commit's per-file line counts — the details pane's churn.
     Details(RootId, CommitId),
 }
 
 impl LogRead {
-    /// The root this read belongs to, for the invalidation that drops a root's
-    /// failures with its windows.
     fn root(&self) -> &RootId {
         match self {
             Self::Commits(root)
@@ -121,92 +67,27 @@ impl LogRead {
     }
 }
 
-/// The root-keyed caches behind one interface.
 #[derive(Default)]
 pub struct RootCaches {
-    /// Commit-log windows keyed by root: the fetched batches so far, newest
-    /// first, plus what the last batch said about the rest of the history.
-    /// One entry per root, so invalidating a log cannot leave its paging flag
-    /// behind (log paging, P5).
     log_cache: HashMap<RootId, LogWindow>,
-    /// Ref decorations keyed by root, then commit id (issue #12).
     ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
-    /// Changed-file lists keyed by (root, commit id) (issue #12).
     files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
-    /// Per-file line counts keyed by (root, commit id) (logs-panels redesign
-    /// issue 02): the changed-files pane's `+N −M` column and the details
-    /// pane's churn bar. Loaded off the render thread, one request per commit.
     file_stats_cache: HashMap<(RootId, CommitId), Vec<FileStat>>,
-    /// Path-scoped log windows keyed by (root, scoped path) (issue #19). A
-    /// window, not a list: a path scope batches like the unscoped listing, so
-    /// its held rows and its paging flag live as one value (log-view-scaling
-    /// 01).
     log_path_cache: HashMap<(RootId, PathBuf), LogWindow>,
-    /// Ref-scoped log windows keyed by (root, ref) (branch-tree extraction,
-    /// plan D9) — mirrors the path-scoped cache: same shape, same cost model.
     log_ref_cache: HashMap<(RootId, String), LogWindow>,
-    /// Pickaxe search windows keyed by (root, query) (issue 17).
     search_cache: HashMap<(RootId, String), LogWindow>,
-    /// The message each log read last failed with, keyed by the read and its
-    /// key. One map for the four reads, because the rule that governs them is
-    /// one rule: a failure is a fact about one read of one key, forgotten when
-    /// that same read answers or when the root it belongs to is invalidated.
-    /// A surface-wide flag instead would let one pane's crash black out
-    /// another's — which is the collapse [`crate::log_states`] exists to stop.
     log_failed: HashMap<LogRead, String>,
-    /// The message each of a fill's three root-wide diff reads last failed
-    /// with, keyed by root and by which of the three views died. The rule is
-    /// the log's, copied deliberately: a failure is a fact about one read of
-    /// one key, forgotten when that same read answers or when the root it
-    /// belongs to is invalidated. A root-wide or surface-wide flag is refused
-    /// for the same reason the log refuses one. A repository nobody has
-    /// committed in fails only the `HEAD ↔ worktree` read while both
-    /// index-facing reads answer, and a single flag would black out the per-line
-    /// oracle to report one dead read.
     diff_failed: HashMap<(RootId, StatsView), String>,
-    /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     ahead_behind: HashMap<RootId, (usize, usize)>,
-    /// Linked worktrees per root (issue 14).
     worktree_cache: HashMap<RootId, Vec<Worktree>>,
-    /// Registered submodules per root (issue 14).
     submodule_cache: HashMap<RootId, Vec<Submodule>>,
-    /// Stash entries per root (surface 07's Stash pane): what `git stash list`
-    /// answered, in git's own newest-first order. A shelf's content is one of
-    /// these, which is why the Shelf pane and the stash verbs all read through
-    /// here rather than asking git again.
     stash_cache: HashMap<RootId, Vec<Stash>>,
-    /// Tag lists per root (redesign issue 02): `git tag -l` names with each
-    /// tag's decoration state, the Branches tree's TAGS group source. The bare
-    /// read carries no states, so the fill records [`RefState::Default`] and a
-    /// surface holding real decorations upgrades them for its own view.
     tag_cache: HashMap<RootId, Vec<(String, RefState)>>,
-    /// Checkout histories per root: HEAD's own reflog, newest first, the
-    /// Branches tree's Recent group source. Derived from the reflog rather than
-    /// bookkept, so it survives a restart and already carries a checkout made
-    /// in a terminal.
     recent_cache: HashMap<RootId, Vec<RecentCheckout>>,
-    /// Per-root hunk-span statistics over the three working-tree diffs
-    /// (issue 20): HEAD↔worktree, HEAD↔index, and index↔worktree, each
-    /// parsed into per-file hunk spans.
     hunk_stats: HashMap<RootId, RootHunkStats>,
-    /// A counter moved by every write a derived log window reads: the log store
-    /// and its appends, a batch settling under either the unscoped or a scoped
-    /// rule, the has-more flag, and invalidation (log-view-scaling 04). It
-    /// exists so the log pane's held display window
-    /// ([`crate::log_display`]) can ask "did anything the window was derived
-    /// from move?" in O(1) instead of re-deriving to find out. A write the
-    /// window does not read leaves it alone, so no rebuild is paid for a ref
-    /// decoration landing.
     revision: u64,
 }
 
-/// One root's commit-log window: the batches fetched so far, newest first, and
-/// whether history continues past them. The window is the cached log plus its
-/// paging state as one value, so no invalidation can separate the two.
-///
-/// One type for all four listings: the unscoped window and the three scoped
-/// windows differ only in their key, never in the rules they fetch by
-/// (log-view-scaling 01).
 #[derive(Default)]
 struct LogWindow {
     commits: Vec<Commit>,
@@ -214,15 +95,6 @@ struct LogWindow {
 }
 
 impl LogWindow {
-    /// Fold one fetched batch into the window and say what came of it.
-    ///
-    /// An append batch has to lead with the anchor row it was requested
-    /// against — that row is the checksum on the boundary. When it leads with
-    /// anything else the listing moved under the request, so the torn batch is
-    /// never held, the window is emptied, and [`LogBatchSettle::Torn`] asks
-    /// the caller to read the same listing again from the front (P3).
-    /// Either way the batch's length against the rows it asked for is what says
-    /// whether history continues (P4).
     fn settle(&mut self, mode: LogBatchMode, batch: Vec<Commit>) -> LogBatchSettle {
         let has_more = match mode {
             LogBatchMode::Replace => {
@@ -249,32 +121,12 @@ impl LogWindow {
     }
 }
 
-/// What one batch read did to the window it was fetched for (log paging).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogBatchSettle {
-    /// The batch folded in; the flag says whether history continues past it.
-    Settled {
-        /// The window's paging flag after the batch.
-        has_more: bool,
-    },
-    /// The listing moved under the request (P3): the batch was torn, nothing
-    /// was held, and the same listing has to be read again from the front.
+    Settled { has_more: bool },
     Torn,
 }
 
-/// The next batch request for a listing window, and the mode the answer folds
-/// in under (P5). The window is derived from what is held, never from a
-/// stored batch index, so an empty window asks for one batch from the front of
-/// the listing and a window holding rows asks for the batch after them —
-/// `skip = have - 1` deep and one row longer than a batch, so the row it
-/// already holds comes back as the boundary checksum (P3). The walk always
-/// starts at HEAD, so no commit can be lost behind a merge's second parent
-/// (P2).
-///
-/// One function for the unscoped window, a path scope and a ref scope: the rules
-/// are the same, and only the filter in [`LogOpts`] differs. A search is the one
-/// listing with a different POSITION rather than a different rule — see
-/// [`scoped_batch_plan`], which is how a caller reaches this.
 pub(crate) fn log_batch_plan(have: Option<&[Commit]>) -> (usize, Option<usize>, LogBatchMode) {
     match have {
         None => (LOG_BATCH_SIZE, None, LogBatchMode::Replace),
@@ -289,27 +141,9 @@ pub(crate) fn log_batch_plan(have: Option<&[Commit]>) -> (usize, Option<usize>, 
     }
 }
 
-/// The next batch of a SEARCH listing, which cannot be positioned with a `skip`.
-///
 /// git's `--skip` counts commits in the traversal, and a `-S` pickaxe filter is
 /// applied AFTER it, so a skip measured in matches is not a skip in the listing:
 /// a batch asked for at the end of a 50-row match window comes back leading with
-/// whichever commit sits 49 places down the *traversal*, which is not the
-/// window's last row. The app reads that as a torn batch, drops the window and
-/// reads it again from the front — the same first batch, forever, which is how
-/// capping a search at one batch froze every broad search in a long history.
-///
-/// So a search is asked from the front of its match stream for everything it
-/// holds plus one batch, and the batch is the TAIL of what comes back (see
-/// [`batch_within`]). Only the position changes: the mode is still
-/// [`LogBatchMode::Append`], so the anchor checksum and the has-more rule are
-/// the ones every other listing settles under.
-///
-/// **The accepted cost**: a search batch re-reads its own already-held prefix,
-/// so a search is O(held) per batch rather than O(1). It stays bounded to what
-/// is already held plus one batch — never the whole listing, which is the
-/// unbounded read this design exists to close — and a search scope is narrow by
-/// nature. The first batch is still a plain [`LOG_BATCH_SIZE`] from the front.
 fn search_batch_plan(have: Option<&[Commit]>) -> (usize, Option<usize>, LogBatchMode) {
     match have {
         None => (LOG_BATCH_SIZE, None, LogBatchMode::Replace),
@@ -324,10 +158,6 @@ fn search_batch_plan(have: Option<&[Commit]>) -> (usize, Option<usize>, LogBatch
     }
 }
 
-/// The plan for one SCOPED listing: the unscoped rule for a path or a ref, the
-/// match-stream rule for a search. One function so the two paths that read a
-/// scope's batch — the synchronous cold fill and the off-thread batch — cannot
-/// pick different positions for the same window.
 pub(crate) fn scoped_batch_plan(
     scope: &LogScope,
     have: Option<&[Commit]>,
@@ -338,18 +168,6 @@ pub(crate) fn scoped_batch_plan(
     }
 }
 
-/// The batch inside what a scoped read brought back: for everything but a search
-/// that is the page as the engine returned it, and for a search it is the TAIL,
-/// starting where the window's last row is (see [`search_batch_plan`]).
-///
-/// The cut is by POSITION, not by looking the anchor up in the page, and that is
-/// what keeps the checksum honest. A listing that moved under the request leaves
-/// a different row at that position, so the batch does not lead with the anchor
-/// and [`LogWindow::settle`] reads it as torn and restarts the window — exactly
-/// as it does for a path or a ref. Finding the anchor instead would paper over
-/// that: a moved listing would be cut to the new position and stitched, which is
-/// the torn window this rule exists to prevent. A page shorter than the cut is
-/// no batch at all, which is torn the same way.
 fn batch_within(
     scope: &LogScope,
     held: usize,
@@ -364,34 +182,15 @@ fn batch_within(
     }
 }
 
-/// The three working-tree diff views of one root, parsed into per-file hunk
-/// spans (issue 20): the per-line staged oracle and a whole-hunk click's
-/// resolution of the displayed hunk into section hunks both read from this one
-/// snapshot.
 #[derive(Clone, Debug, Default)]
 pub struct RootHunkStats {
-    /// HEAD↔worktree (`git diff HEAD`): every change, staged or not.
     pub repo: Vec<FileHunks>,
-    /// HEAD↔index (`git diff --cached`): the staged hunks.
     pub staged: Vec<FileHunks>,
-    /// index↔worktree (`git diff`): the unstaged hunks.
     pub local: Vec<FileHunks>,
-    /// The changed line numbers of the two index-facing views above, in each
-    /// patch's own numbering space, and beside them the retained per-file
-    /// sections those numbers were counted out of: what
-    /// [`row_is_staged`](Self::row_is_staged) answers from, and what a
-    /// [`crate::staged_lines::row_source`] click composes its operation from
-    /// without spawning git. Held here rather
-    /// than beside the displayed diff because a line stage leaves
-    /// `git diff HEAD` byte-identical, so this entry's one-unit lifetime is the
-    /// only one that keeps the answer honest. See
-    /// [`crate::staged_lines`](crate::staged_lines) for the derivation, its
-    /// two-spaces rule, and what the retained sections cost.
     pub line_sets: Vec<crate::staged_lines::FileLineSets>,
 }
 
 impl RootHunkStats {
-    /// The per-file hunk spans of `path` in the view `pick` selects.
     pub fn file(&self, pick: StatsView, path: &Path) -> Option<&FileHunks> {
         let view = match pick {
             StatsView::Repo => &self.repo,
@@ -402,20 +201,11 @@ impl RootHunkStats {
         view.iter().find(|f| f.path == want)
     }
 
-    /// Whether the line `row` reports is in the index, or has no per-line
-    /// answer. The reasoning is all in [`crate::staged_lines`], which is the
-    /// only place in the app allowed to relate a line of one patch to a line of
-    /// another; this is the one door the pane and the staging path knock on.
     pub fn row_is_staged(&self, path: &Path, row: &crate::diff_model::Row) -> Option<bool> {
         crate::staged_lines::row_is_staged(&self.line_sets, path, row)
     }
 }
 
-/// Fold one fetched batch of one scoped listing into that scope's window and
-/// report what came of it (log-view-scaling 02). Written once for all three
-/// [`LogScope`]s, which differ only in key type — and in where their batch sits
-/// inside what came back, which [`batch_within`] decides from the window's own
-/// length.
 fn settle_scoped_window<K>(
     map: &mut HashMap<K, LogWindow>,
     key: &K,
@@ -430,19 +220,10 @@ where
     let batch = batch_within(scope, held, &mode, page);
     let settle = map.entry(key.clone()).or_default().settle(mode, batch);
     if settle == LogBatchSettle::Torn {
-        // A torn batch is not a window: the listing this window was measured
-        // against no longer exists, and an emptied window that says "no more
-        // history" would be a lie the next read would believe. Dropping the
-        // entry leaves the cache exactly where it was before the first read,
-        // so the caller's refetch plans batch 0.
         map.remove(key);
     }
     settle
 }
-/// Which of the three working-tree diff views [`RootHunkStats::file` reads.
-/// `Hash` is part of the contract because a view names half of a recorded
-/// read failure's key (`RootCaches::diff_failed`), and a key a caller can
-/// build by hand is a key a caller can build subtly differently wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StatsView {
     Repo,
@@ -450,13 +231,10 @@ pub enum StatsView {
     Local,
 }
 
-/// One file's line counts within a change, as the **Git engine** answers them.
-/// Re-exported from the domain so the log's panes never name a numstat tuple.
 pub use turbogit_domain::model::FileStat;
 
-/// The `(insertions, deletions)` of `path` within one change's stats slice, or
 /// `None` when there is nothing to render: the path is absent, the counts are
-/// still in flight, or git measured no line counts at all — a **Binary change**
+/// still in flight, or git measured no line counts at all, a **Binary change**
 /// has `-` where the numbers would be. A row with no stat renders neither
 /// number, never a `+0 −0` that claims a measured zero.
 pub fn file_stat(stats: &[FileStat], path: &Path) -> Option<(usize, usize)> {
@@ -467,51 +245,26 @@ pub fn file_stat(stats: &[FileStat], path: &Path) -> Option<(usize, usize)> {
 }
 
 impl RootCaches {
-    // --- Readers -----------------------------------------------------------
-
-    /// The cached commit log for `root`, if loaded.
     pub fn log(&self, root: &RootId) -> Option<&[Commit]> {
         self.log_cache.get(root).map(|w| w.commits.as_slice())
     }
 
-    /// Whether `root`'s cached window stops short of the end of its history —
-    /// the authoritative answer the log pane pages on (log paging, P4), `false`
-    /// for a root with nothing cached.
     pub fn log_has_more(&self, root: &RootId) -> bool {
         self.log_cache.get(root).is_some_and(|w| w.has_more)
     }
 
-    /// The held window of any scoped listing in `root` — a file's history, a
-    /// ref's, or a pickaxe search's — if loaded (log-view-scaling 01). One
-    /// reader for the three scopes; the [`LogScope::Path`],
-    /// [`LogScope::Ref`] and [`LogScope::Search`] forms below are the spelled
-    /// out call sites.
     pub fn scoped_log(&self, root: &RootId, scope: &LogScope) -> Option<&[Commit]> {
         self.scope_window(root, scope).map(|w| w.commits.as_slice())
     }
 
-    /// Whether `scope`'s window in `root` stops short of the end of that
-    /// listing's history — the same answer [`Self::log_has_more`] gives for the
-    /// unscoped window, and per scope (log-view-scaling 01). `false` for a
-    /// scope that has never been read.
     pub fn scoped_log_has_more(&self, root: &RootId, scope: &LogScope) -> bool {
         self.scope_window(root, scope).is_some_and(|w| w.has_more)
     }
 
-    /// Whether `scope`'s window in `root` can be asked for another batch: a
-    /// scope nobody has read yet, or one that says its history continues past
-    /// what it holds. A window that reports the end of its own listing is not
-    /// asked again — a short batch is an answer, not a reason to ask twice
-    /// (log-view-scaling 02). This is the admission decision for a scoped
-    /// read, and it is the per-scope twin of the guard the unscoped
-    /// [`Self::log_has_more`] drives.
     pub fn scoped_log_can_grow(&self, root: &RootId, scope: &LogScope) -> bool {
         self.scope_window(root, scope).is_none_or(|w| w.has_more)
     }
 
-    /// The window `scope` names in `root`, whichever of the three maps holds
-    /// it. The three stay separate: one scope's batches are never read out of
-    /// another's map.
     fn scope_window(&self, root: &RootId, scope: &LogScope) -> Option<&LogWindow> {
         match scope {
             LogScope::Path(target) => self.log_path_cache.get(&(root.clone(), target.clone())),
@@ -520,25 +273,18 @@ impl RootCaches {
         }
     }
 
-    /// The cached path-scoped log for `(root, path)`, if loaded (issue #19).
     pub fn path_log(&self, root: &RootId, path: &Path) -> Option<&[Commit]> {
         self.scoped_log(root, &LogScope::Path(path.to_path_buf()))
     }
 
-    /// The cached ref-scoped log for `(root, ref)`, if loaded (plan D9).
     pub fn ref_log(&self, root: &RootId, ref_name: &str) -> Option<&[Commit]> {
         self.scoped_log(root, &LogScope::Ref(ref_name.to_string()))
     }
 
-    /// The cached pickaxe search result for `(root, query)`, if loaded
-    /// (issue 17).
     pub fn search_log(&self, root: &RootId, query: &str) -> Option<&[Commit]> {
         self.scoped_log(root, &LogScope::Search(query.to_string()))
     }
 
-    /// Cached ref decorations for one commit of `root` (empty when absent).
-    /// Borrows the cache (plan §1.2): called per visible log row per frame,
-    /// so it must not clone the decoration list.
     pub fn refs_for(&self, root: &RootId, commit: &CommitId) -> &[CommitRef] {
         self.ref_cache
             .get(root)
@@ -547,8 +293,6 @@ impl RootCaches {
             .unwrap_or(&[])
     }
 
-    /// Every cached decoration group of `root` (empty when not loaded) —
-    /// feeds the branches pane's LOCAL / REMOTE / TAGS union.
     pub fn ref_groups(&self, root: &RootId) -> impl Iterator<Item = &[CommitRef]> + '_ {
         self.ref_cache
             .get(root)
@@ -557,147 +301,99 @@ impl RootCaches {
             .map(|(_, refs)| refs.as_slice())
     }
 
-    /// True when `root`'s ref decorations have been stored (event-fed writer
-    /// path) — the Log view's kick checks this before dispatching a fetch.
     pub fn refs_loaded(&self, root: &RootId) -> bool {
         self.ref_cache.contains_key(root)
     }
 
-    /// The cached changed-file list of `(root, commit)`, if loaded (issue #12).
     pub fn files_for(&self, root: &RootId, commit: &CommitId) -> Option<&[Change]> {
         self.files_cache
             .get(&(root.clone(), commit.clone()))
             .map(|v| v.as_slice())
     }
 
-    /// The cached per-file line counts of `(root, commit)`, if loaded
-    /// (logs-panels redesign issue 02). `None` means the request has not
-    /// settled yet — rows render without numbers rather than waiting.
     pub fn file_stats_for(&self, root: &RootId, commit: &CommitId) -> Option<&[FileStat]> {
         self.file_stats_cache
             .get(&(root.clone(), commit.clone()))
             .map(|v| v.as_slice())
     }
 
-    /// True when `(root, commit)`'s line counts are stored — the check
-    /// [`AppState::fetch_file_stats`](crate::state::AppState::fetch_file_stats)
-    /// makes before dispatching, mirroring [`RootCaches::refs_loaded`].
     pub fn file_stats_loaded(&self, root: &RootId, commit: &CommitId) -> bool {
         self.file_stats_cache
             .contains_key(&(root.clone(), commit.clone()))
     }
 
-    /// Ahead/behind of `root`'s current branch vs its upstream, if known.
     pub fn ahead_behind(&self, root: &RootId) -> Option<(usize, usize)> {
         self.ahead_behind.get(root).copied()
     }
 
-    /// The cached worktree list of `root`, if loaded (issue 14).
     pub fn worktrees(&self, root: &RootId) -> Option<&[Worktree]> {
         self.worktree_cache.get(root).map(|v| v.as_slice())
     }
 
-    /// The cached submodule list of `root`, if loaded (issue 14).
     pub fn submodules(&self, root: &RootId) -> Option<&[Submodule]> {
         self.submodule_cache.get(root).map(|v| v.as_slice())
     }
 
-    /// The cached stash listing of `root`, if loaded (surface 07). Git's own
-    /// order, newest first — the pane numbers rows by `Stash::index`, not by
+    /// The cached stash listing of `root`, if loaded. Git's own
+    /// order, newest first, the pane numbers rows by `Stash::index`, not by
     /// position, because `stash@{n}` is what the verbs hand the engine.
     pub fn stashes(&self, root: &RootId) -> Option<&[Stash]> {
         self.stash_cache.get(root).map(|v| v.as_slice())
     }
 
-    /// The cached tag list of `root` with each tag's decoration state, if
-    /// loaded (redesign issue 02).
     pub fn tags(&self, root: &RootId) -> Option<&[(String, RefState)]> {
         self.tag_cache.get(root).map(|v| v.as_slice())
     }
 
-    /// The whole per-root tag map, for the branch view builder: a read-only
-    /// borrow, never the per-frame clone the surface used to make. Keys the
-    /// branches tree already speaks; a repo absent from the map has no list.
     pub fn tags_by_root(&self) -> &HashMap<RootId, Vec<(String, RefState)>> {
         &self.tag_cache
     }
 
-    /// The cached checkout history of `root`, newest first, if loaded — the
-    /// Recent group's source.
     pub fn recents(&self, root: &RootId) -> Option<&[RecentCheckout]> {
         self.recent_cache.get(root).map(|v| v.as_slice())
     }
 
-    /// The whole per-root checkout-history map, for the branch view builder —
-    /// same borrow contract as [`Self::tags_by_root`].
     pub fn recents_by_root(&self) -> &HashMap<RootId, Vec<RecentCheckout>> {
         &self.recent_cache
     }
 
-    /// The cached hunk-span statistics of `root`, if loaded (issue 20).
     pub fn hunk_stats(&self, root: &RootId) -> Option<&RootHunkStats> {
         self.hunk_stats.get(root)
     }
 
-    /// The caches' revision counter (log-view-scaling 04): the same answer for
-    /// every reader, and the half of the derived log window's staleness check
-    /// that lives in the data. Two reads at the same revision mean the same
-    /// loaded windows.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Move the revision: called by every write whose result a derived value
-    /// reads. Monotonic by construction, so a held value can only ever be
-    /// stale, never accidentally current.
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    // --- Log read failures ---------------------------------------------------
-
-    /// The message `read` last failed with, if it failed and nothing has since
-    /// answered or forgotten it. The state machine's whole input for an error
-    /// state ([`crate::log_states`]).
     pub fn log_failure(&self, read: &LogRead) -> Option<&str> {
         self.log_failed.get(read).map(String::as_str)
     }
 
-    /// Whether `read` is recorded as failed — the same question as
-    /// [`Self::log_failure`] for a caller that only needs the yes.
     pub fn has_log_failure(&self, read: &LogRead) -> bool {
         self.log_failed.contains_key(read)
     }
 
-    /// Record the message one log read answered with on failure. An event-fed
-    /// writer like [`Self::store_log`]: the read happened off the frame path,
-    /// and this is where its outcome lands.
     pub fn record_log_failure(&mut self, read: LogRead, message: impl Into<String>) {
         self.log_failed.insert(read, message.into());
     }
 
-    /// Forget one read's failure because the same read has now answered.
     pub fn clear_log_failure(&mut self, read: &LogRead) {
         self.log_failed.remove(read);
     }
 
-    // --- Root-wide diff view read failures -----------------------------------
-
-    /// The message `(root, view)`'s read last failed with, if it failed and
-    /// nothing has since answered or forgotten it. A surface that displays
-    /// that view reads this before it displays any content.
     pub fn diff_view_failure(&self, root: &RootId, view: StatsView) -> Option<&str> {
         let key = (root.clone(), view);
         self.diff_failed.get(&key).map(String::as_str)
     }
 
-    /// Whether `(root, view)` is recorded as failed, for a caller that only
-    /// needs the yes.
     pub fn has_diff_view_failure(&self, root: &RootId, view: StatsView) -> bool {
         self.diff_failed.contains_key(&(root.clone(), view))
     }
 
-    /// Record the message one root-wide diff read answered with on failure.
     pub fn record_diff_view_failure(
         &mut self,
         root: &RootId,
@@ -708,19 +404,10 @@ impl RootCaches {
             .insert((root.clone(), view), message.into());
     }
 
-    /// Forget `(root, view)`'s failure because that same read has now answered.
     pub fn clear_diff_view_failure(&mut self, root: &RootId, view: StatsView) {
         self.diff_failed.remove(&(root.clone(), view));
     }
 
-    /// Forget one log read's **answer and its failure together**, so the
-    /// surface that showed the failure asks again.
-    ///
-    /// The two are dropped as one because either alone leaves the read stuck:
-    /// clearing the failure of a scope whose empty window is still cached keeps
-    /// answering "no commits", and dropping the window while the failure record
-    /// stands keeps painting the error the retry was meant to clear. A
-    /// compute-on-miss reader then fills the window it just dropped.
     pub fn forget_log_read(&mut self, read: &LogRead) {
         self.log_failed.remove(read);
         match read {
@@ -748,13 +435,6 @@ impl RootCaches {
         self.bump();
     }
 
-    // --- Compute-on-miss ---------------------------------------------------
-
-    /// The changed files of `(root, commit)`, computed through the engine
-    /// seam on miss and cached. Returns a borrow of the cached list (plan
-    /// §1.2): neither path deep-clones the file list anymore. Callers must
-    /// not touch the caches (or any other `&mut AppState` state) while
-    /// holding the slice.
     pub fn ensure_files(
         &mut self,
         exec: &dyn GitExecutor,
@@ -763,11 +443,6 @@ impl RootCaches {
     ) -> &[Change] {
         let key = (root.clone(), commit.clone());
         if !self.files_cache.contains_key(&key) {
-            // A failure is held as an empty list AND recorded against the read:
-            // the empty entry is what stops the pane's every-frame ask from
-            // re-running a call that just failed, and the record is what lets
-            // the pane say `Error loading changes` rather than `No changed
-            // files.` about a commit whose file list was never read.
             let read = LogRead::Changes(root.clone(), commit.clone());
             match exec.commit_files(&root.0, commit) {
                 Ok(files) => {
@@ -780,21 +455,12 @@ impl RootCaches {
                 }
             }
         }
-        // Reborrow after the optional fill so the returned slice always
-        // aliases the cache. The tuple key cannot be probed in borrowed form
-        // (`HashMap` has no mixed-reference `Borrow` for tuples), so the
-        // owned key is built once up front and cloned only for the insert.
         self.files_cache
             .get(&key)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
     }
 
-    /// Compute `root`'s tag list through the engine seam on miss and cache it
-    /// (redesign issue 02) — the fill behind the Branches surface's per-frame
-    /// warm. A failed read caches an empty list rather than leaving the entry
-    /// absent, exactly as the warm helper did: a surface must not re-ask git
-    /// every frame about a repository that answered nothing.
     pub fn ensure_tags(&mut self, exec: &dyn GitExecutor, root: &RootId) {
         if self.tag_cache.contains_key(root) {
             return;
@@ -808,10 +474,6 @@ impl RootCaches {
         self.tag_cache.insert(root.clone(), tags);
     }
 
-    /// Compute `root`'s checkout history through the engine seam on miss and
-    /// cache it — the fill behind the Recent group's warm. A repository with no
-    /// reflog yet, and one that is not there at all, both cache an empty
-    /// history: no surface may show an error for "nothing yet".
     pub fn ensure_recents(&mut self, exec: &dyn GitExecutor, root: &RootId) {
         if self.recent_cache.contains_key(root) {
             return;
@@ -820,17 +482,6 @@ impl RootCaches {
         self.recent_cache.insert(root.clone(), history);
     }
 
-    /// The held window of one scoped listing in `root`, computed through the
-    /// engine seam on miss: a scope that has never been read is read ONE BATCH
-    /// of, under the unscoped window's own batch rules (log-view-scaling 01),
-    /// and a scope that already holds rows is not asked again here — it grows
-    /// through [`Self::fetch_log_batch`]. The three scopes are one operation
-    /// apart from which map they fill and which `LogOpts` field carries the
-    /// term, so the choice lives here and the batch read lives in
-    /// `read_scoped_log_batch`.
-    ///
-    /// Returns a borrow of the held rows — same rule as
-    /// [`RootCaches::ensure_files`] (plan §1.2).
     pub fn ensure_log(
         &mut self,
         exec: &dyn GitExecutor,
@@ -843,27 +494,12 @@ impl RootCaches {
         self.scoped_log(root, scope).unwrap_or_default()
     }
 
-    /// Read one batch of one scoped listing in `root` through the engine seam,
-    /// synchronously, and fold it into that scope's own window
-    /// (log-view-scaling 01).
-    ///
-    /// The caller decides WHICH batch: the window is derived here, never stored,
-    /// so this reads the batch after whatever the window holds, or batch 0 when
-    /// it holds nothing. Whether a scope may be read at all is
-    /// [`Self::scoped_log_can_grow`]'s answer, and only the caller has the
-    /// in-flight guard that decides it — this is the read, not the policy.
     pub fn fetch_log_batch(
         &mut self,
         exec: &dyn GitExecutor,
         root: &RootId,
         scope: &LogScope,
     ) -> LogBatchSettle {
-        // The read is here rather than inside the window fold because its
-        // outcome is a record the pane reads back: a scope whose listing failed
-        // settles an empty window AND keeps the message. That is the only way
-        // `Error calculating file history` can be told apart from a file with
-        // no history — and an empty window is still what stops the pane's
-        // every-frame ask from re-running a read that just failed.
         let (rows, skip, mode) = scoped_batch_plan(scope, self.scoped_log(root, scope));
         let read = LogRead::Scope(root.clone(), scope.clone());
         let page = match exec.log(&root.0, &scope.batch_opts(rows, skip)) {
@@ -881,9 +517,6 @@ impl RootCaches {
         settle
     }
 
-    /// Fold a batch into the window of the one scope that names it. The three
-    /// maps stay separate — a slow ref read must not land in a path window —
-    /// and this is the single place that picks between them.
     fn settle_scope(
         &mut self,
         root: &RootId,
@@ -916,25 +549,6 @@ impl RootCaches {
         }
     }
 
-    /// Fold one batch of one scoped listing into THAT scope's window and report
-    /// what came of it (log-view-scaling 02) — the window write behind
-    /// [`AppEvent::LogBatchLoaded`](crate::events::AppEvent::LogBatchLoaded).
-    ///
-    /// A batch that arrives off-thread obeys the same
-    /// [`LogWindow::settle`] the unscoped window settles under, so the
-    /// anchor-checksum and has-more rules cannot drift between a batch read on
-    /// the asking frame and one read off it. A batch that comes back torn (the
-    /// listing moved under the request) is never held and leaves no window at
-    /// all, which is what tells the caller to read the listing again from the
-    /// front.
-    ///
-    /// A search's page holds more than its batch — everything the window already
-    /// holds plus the batch behind it — so the batch is cut out of it here, by
-    /// the window's own length and before the checksum sees it. The cut is
-    /// measured against the window as it stands now, which is the same length
-    /// the request was planned against unless something moved the window in
-    /// between: and a window that did move puts a different row at the cut, so
-    /// the checksum still reads the batch as torn.
     pub fn settle_scoped_log_batch(
         &mut self,
         root: &RootId,
@@ -947,36 +561,6 @@ impl RootCaches {
         settle
     }
 
-    // --- Event-fed writes (called from drain_events) ------------------------
-
-    /// Compute `root`'s hunk-span statistics through the engine seam on miss
-    /// and cache them (issue 20). Three whole-root diffs per fill — the same
-    /// compute-on-miss shape as [`RootCaches::ensure_files`].
-    ///
-    /// The per-line staged sets are derived here, from the patch values before
-    /// [`hunk_stats::file_hunks`] reduces them to a path and four `@@` numbers,
-    /// because that reduction is where every line of every hunk body is
-    /// discarded. `repo` is not an input: `git diff HEAD` prints an unmerged
-    /// path as an ordinary two-sided diff, so the only patch that can mark a
-    /// conflict is `local`, and the only patches that reach the index are
-    /// `staged` and `local`.
-    ///
-    /// **What a partially failed fill stores.** The entry is installed even
-    /// when one of the three reads died, and each view holds exactly what that
-    /// view's own read answered: a dead read contributes an empty list and a
-    /// recorded failure in `Self::diff_failed`, never an empty patch dressed
-    /// up as an answer. A repository nobody has committed in is this fill's
-    /// steady state, not a corner case: the `HEAD`-facing read refuses there
-    /// while both index-facing reads answer, so the spans and the per-line
-    /// oracle keep their real data and only the HEAD-facing view is marked
-    /// failed. Blanking the answered views for one dead read is the
-    /// surface-wide collapse the log rule above refuses. The entry is one
-    /// value, so dropping it on a partial failure would take the two views
-    /// that did answer down with it. A surface that displays a view consults
-    /// the view's record before it displays anything built from it
-    /// ([`AppState::failed_view_message`](crate::state::AppState::failed_view_message));
-    /// a `staged` or `local` failure additionally means `line_sets` saw an
-    /// empty patch for that half, which is what the record is for there too.
     pub fn ensure_hunk_stats(&mut self, exec: &dyn GitExecutor, root: &RootId) {
         if self.hunk_stats.contains_key(root) {
             return;
@@ -1011,13 +595,6 @@ impl RootCaches {
         );
     }
 
-    /// One of a fill's three reads, under the log failure rule per view: an
-    /// answer installs git's patch and forgets any failure recorded for that
-    /// view; a failure records the message and hands back the empty patch so
-    /// the view contributes nothing. The early return in
-    /// [`Self::ensure_hunk_stats`] means a retry only happens on a fill the
-    /// root's invalidation allowed again, which is the same lifetime the
-    /// record has.
     fn read_diff_view(
         &mut self,
         exec: &dyn GitExecutor,
@@ -1037,10 +614,6 @@ impl RootCaches {
         }
     }
 
-    /// Store a freshly loaded commit log for `root`, replacing whatever window
-    /// it held. A wholesale write makes no claim about rows beyond itself, so
-    /// `has_more` resets with it; the fetcher states the flag from what it
-    /// asked for ([`Self::set_log_has_more`]).
     pub fn store_log(&mut self, root: RootId, commits: Vec<Commit>) {
         self.log_cache.insert(
             root,
@@ -1052,11 +625,6 @@ impl RootCaches {
         self.bump();
     }
 
-    /// Append a fetched batch onto `root`'s window (log paging): the
-    /// newest-first list grows by every commit it does not already hold.
-    /// Dedup by [`CommitId`] is what makes an overlapping batch — the anchor
-    /// row the pager asks for again, a retry, a race with a refresh —
-    /// harmless. Says nothing about `has_more`, which the fetcher states.
     pub fn append_log(&mut self, root: RootId, commits: Vec<Commit>) {
         let window = self.log_cache.entry(root).or_default();
         for commit in commits {
@@ -1067,19 +635,11 @@ impl RootCaches {
         self.bump();
     }
 
-    /// Record whether `root`'s history continues past the cached window
-    /// (log paging, P4): a full batch means more, a short one means the end.
     pub fn set_log_has_more(&mut self, root: &RootId, has_more: bool) {
         self.log_cache.entry(root.clone()).or_default().has_more = has_more;
         self.bump();
     }
 
-    /// Fold one fetched batch of `root`'s unscoped window and report what came
-    /// of it (log paging). This is the window write behind
-    /// [`AppEvent::LogLoaded`](crate::events::AppEvent::LogLoaded), and it is
-    /// the same [`LogWindow::settle`] the three scoped windows settle under —
-    /// one implementation of the anchor-checksum and has-more rules, so a
-    /// scope cannot drift from the unscoped listing's rules.
     pub fn settle_log_batch(
         &mut self,
         root: &RootId,
@@ -1093,41 +653,27 @@ impl RootCaches {
             .settle(mode, batch);
         self.bump();
         if settle == LogBatchSettle::Torn {
-            // A torn batch is no window at all — the same reason the scoped
-            // read drops its window, so the refetch plans batch 0.
             self.log_cache.remove(root);
         }
         settle
     }
 
-    /// Store freshly loaded ref decorations for `root` (log-open perf, D1):
-    /// the worker-event writer behind `AppEvent::RefsLoaded`. Callers check
-    /// [`Self::refs_loaded`] before dispatching a (re)fetch.
     pub fn store_refs(&mut self, root: RootId, deco: Vec<(CommitId, Vec<CommitRef>)>) {
         self.ref_cache.insert(root, deco.into_iter().collect());
     }
 
-    /// Store freshly loaded per-file line counts for one commit (logs-panels
-    /// redesign issue 02): the worker-event writer behind
-    /// `AppEvent::FileStatsLoaded`, same contract as [`Self::store_refs`].
     pub fn store_file_stats(&mut self, root: RootId, commit: CommitId, stats: Vec<FileStat>) {
         self.file_stats_cache.insert((root, commit), stats);
     }
 
-    /// Store freshly computed ahead/behind counts for `root`.
     pub fn store_ahead_behind(&mut self, root: RootId, ab: (usize, usize)) {
         self.ahead_behind.insert(root, ab);
     }
 
-    /// Store a freshly loaded worktree list for `root` (issue 14).
     pub fn store_worktrees(&mut self, root: RootId, worktrees: Vec<Worktree>) {
         self.worktree_cache.insert(root, worktrees);
     }
 
-    /// Fill in just one worktree row's dirty flag (ticket 03): the per-row
-    /// probe result updates that row's entry, leaving every other row — and
-    /// the rest of the list — untouched. A row whose path is no longer listed
-    /// (e.g. removed mid-probe) is a no-op.
     pub fn update_worktree_dirty(&mut self, root: &RootId, path: &Path, dirty: bool) {
         if let Some(list) = self.worktree_cache.get_mut(root)
             && let Some(wt) = list.iter_mut().find(|w| w.path == path)
@@ -1136,40 +682,22 @@ impl RootCaches {
         }
     }
 
-    /// Store a freshly loaded submodule list for `root` (issue 14).
     pub fn store_submodules(&mut self, root: RootId, submodules: Vec<Submodule>) {
         self.submodule_cache.insert(root, submodules);
     }
 
-    /// Store a freshly loaded stash listing for `root` (surface 07). An empty
-    /// list is an answer, not an absence: storing it is what stops the pane
-    /// asking git again every frame.
     pub fn store_stashes(&mut self, root: RootId, stashes: Vec<Stash>) {
         self.stash_cache.insert(root, stashes);
     }
 
-    /// Store a freshly loaded tag list for `root` (redesign issue 02),
-    /// replacing whatever it held.
     pub fn store_tags(&mut self, root: RootId, tags: Vec<(String, RefState)>) {
         self.tag_cache.insert(root, tags);
     }
 
-    /// Store a freshly loaded checkout history for `root`, replacing whatever
-    /// it held. An empty history is an answer, not an absence.
     pub fn store_recents(&mut self, root: RootId, recents: Vec<RecentCheckout>) {
         self.recent_cache.insert(root, recents);
     }
 
-    // --- Invalidation -------------------------------------------------------
-
-    /// Drop the caches for the affected scope. One sanctioned per-cache
-    /// exception (ticket 02): the worktree list is **not** dropped for
-    /// [`Affected::Root`] — ordinary operations (commit, checkout, staging,
-    /// push…) cannot change a root's linked worktrees, so keeping the list
-    /// stops the refetch storm. The list IS dropped for [`Affected::All`]
-    /// (project switches, rescans) and, per root, through the explicit
-    /// [`RootCaches::invalidate_worktrees`] used by the add/remove flows.
-    /// Everything else stays policy-uniform.
     pub fn invalidate(&mut self, affected: &Affected) {
         self.bump();
         match affected {
@@ -1188,31 +716,20 @@ impl RootCaches {
                 self.tag_cache.remove(root);
                 self.recent_cache.remove(root);
                 self.hunk_stats.remove(root);
-                // A root's failures go with its windows: an operation that
-                // changed the repository must not leave a pane still reporting
-                // the read the operation made stale. The diff view records go
-                // with the entry they describe, so a refill answers the same
-                // three reads again before any view is trusted.
                 self.log_failed.retain(|read, _| read.root() != root);
                 self.diff_failed.retain(|(r, _), _| r != root);
             }
         }
     }
 
-    /// Drop only one root's cached worktree list (ticket 02): the sanctioned
-    /// targeted invalidation behind the worktree-mutating flows — add and
-    /// remove — so their completion settles with fresh data while unrelated
-    /// operations keep the list.
     pub fn invalidate_worktrees(&mut self, root: &RootId) {
         self.worktree_cache.remove(root);
     }
 
-    /// clear every root's worktree list on rescan, including removed roots (ticket 02).
     pub fn invalidate_all_worktrees(&mut self) {
         self.worktree_cache.clear();
     }
 
-    /// Drop every entry in all caches.
     pub fn invalidate_all(&mut self) {
         self.bump();
         self.log_cache.clear();
@@ -1233,8 +750,6 @@ impl RootCaches {
         self.diff_failed.clear();
     }
 
-    /// True when every map is empty — the invalidation invariant's
-    /// diagnostic surface (tests, assertions).
     pub fn is_empty(&self) -> bool {
         self.log_cache.is_empty()
             && self.ref_cache.is_empty()
@@ -1286,14 +801,8 @@ mod tests {
         }
     }
 
-    // --- the revision (log-view-scaling 04) --------------------------------------
-
-    /// One cache write, named — the table below is a list of them.
     type Write = fn(&mut RootCaches);
 
-    /// The revision is the caches' own word for "the loaded window moved". Every
-    /// write the derived log display window reads has to move it, or the held
-    /// window would outlive the batch it was derived from.
     #[test]
     fn every_write_the_log_display_reads_moves_the_revision() {
         let cases: Vec<(&str, Write)> = vec![
@@ -1342,10 +851,6 @@ mod tests {
         }
     }
 
-    /// A write the display window does not read leaves the revision alone:
-    /// ref decorations, line counts, ahead/behind and worktree lists are not
-    /// derivation inputs, and moving the revision for them would rebuild the
-    /// window over a list that did not change.
     #[test]
     fn a_write_the_display_window_does_not_read_leaves_the_revision_alone() {
         let mut caches = RootCaches::default();
@@ -1364,8 +869,6 @@ mod tests {
         );
     }
 
-    /// The revision only ever moves forward, so a held window is never mistaken
-    /// for a current one by a later comparison.
     #[test]
     fn the_revision_moves_forward_and_never_back() {
         let mut caches = RootCaches::default();

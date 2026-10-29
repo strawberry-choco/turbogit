@@ -1,18 +1,3 @@
-//! The file-level comparison behind
-//! `Show Diff with Working Tree`, and `Get from Branch` itself.
-//!
-//! One seam: the services function over a real temporary repository with git on
-//! `PATH`. It has to be a real repository, because the three-rung grammar is read
-//! off git's own `new file` / `deleted file` section headers: a canned patch would
-//! assert that this suite and the service agree about what a header means, which is
-//! not a fact about the product.
-//!
-//! The fixture is the reference's own case (`apply-changes:269-287`): one file that
-//! exists **only on the branch**, one that exists **only on the current side**, one
-//! that **differs**, and one identical file that must not appear at all. That last
-//! row is what stops the list from being "everything", and the first three are what
-//! prove the grammar rather than decorate it.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
@@ -26,9 +11,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// `main` and `feature` sharing one ancestor, diverging in exactly the three ways
-/// the window names: `only-feature.txt` on the branch side, `only-main.txt` on the
-/// current side, `both.txt` with different content, and `base.txt` identical.
 fn repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(&dir).unwrap();
@@ -56,7 +38,6 @@ fn repo(parent: &Path) -> PathBuf {
     dir
 }
 
-/// `(path, rung)` pairs, in the list's own order.
 fn rows(dir: &Path, base_is_branch: bool) -> Vec<(String, BranchFileStatus)> {
     integrate_service::branch_file_changes(&engine(), dir, "feature", base_is_branch)
         .expect("the comparison is one git read")
@@ -65,8 +46,6 @@ fn rows(dir: &Path, base_is_branch: bool) -> Vec<(String, BranchFileStatus)> {
         .collect()
 }
 
-/// The opening posture: grey = the branch has it and you do not, green = the reverse,
-/// blue = differs — and the identical file is not in the list at all.
 #[test]
 fn the_three_rungs_read_off_gits_own_section_headers() {
     let tmp = tempfile::tempdir().unwrap();
@@ -84,13 +63,6 @@ fn the_three_rungs_read_off_gits_own_section_headers() {
     );
 }
 
-/// `Swap Branches` exchanges which side is the base, and the two one-sided rows
-/// therefore exchange **positions** while the differing row stays where it was.
-///
-/// This is the ticket's own hazard: a swap that re-tinted the same rows in place
-/// would leave grey meaning "missing from the base" instead of "missing from the
-/// branch you are standing on", and the list order is the only place that reading
-/// is visible. One path set, one git read, two postures.
 #[test]
 fn swapping_the_base_exchanges_the_two_one_sided_rows_and_leaves_the_blue_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -119,8 +91,6 @@ fn swapping_the_base_exchanges_the_two_one_sided_rows_and_leaves_the_blue_one() 
     );
 }
 
-/// The verb itself: the working tree's copy is replaced by the branch's **whole
-/// contents**, byte for byte, and no other file moves.
 #[test]
 fn getting_a_file_copies_the_branchs_entire_contents_into_the_working_tree() {
     let tmp = tempfile::tempdir().unwrap();
@@ -144,10 +114,6 @@ fn getting_a_file_copies_the_branchs_entire_contents_into_the_working_tree() {
         "same on both sides\n",
         "one row's verb touches one path"
     );
-    // The reference's flow ends at "Commit and push", so the take lands as an
-    // ordinary local change rather than as an index entry: git still sees the
-    // old content in HEAD, which is what makes the developer's next commit the
-    // thing that records the take.
     let status = git(&dir, &["status", "--porcelain"]);
     assert!(
         status.contains("M  both.txt") || status.contains(" M both.txt"),
@@ -155,9 +121,6 @@ fn getting_a_file_copies_the_branchs_entire_contents_into_the_working_tree() {
     );
 }
 
-/// A path the branch does not carry is an error, not an empty file. The window
-/// withholds the verb on the green rung for exactly this reason, and the service
-/// refuses rather than writing a zero-length file over real work.
 #[test]
 fn a_path_the_branch_does_not_carry_is_refused_not_answered_empty() {
     let tmp = tempfile::tempdir().unwrap();

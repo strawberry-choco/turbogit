@@ -1,10 +1,3 @@
-//! The second seam this design is checked at: [`Operation`] as a type, with no
-//! repository and no thread. These are the properties the dispatch seam and the
-//! settlement match rely on, so they are asserted where they are defined.
-//!
-//! Everything here is a fact about the type — the label a kind of work paints,
-//! the scope an operation owns, and the identity it settles under.
-
 use std::path::PathBuf;
 
 use turbogit_app::operation::{OpKind, Operation};
@@ -24,17 +17,12 @@ fn plan_one() -> Vec<RebasePlanEntry> {
     }]
 }
 
-/// A full commit id, as the log carries it.
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn settings() -> VcsSettings {
     VcsSettings::default()
 }
 
-// --- the label is display-only, and derived ------------------------------------
-
-/// A fetch of one root reads as a fetch; a fetch of several counts them. Both
-/// settle identically, because the scope carries the difference.
 #[test]
 fn a_fetch_label_says_how_many_roots_it_covered() {
     let one = Operation::Fetch {
@@ -48,8 +36,6 @@ fn a_fetch_label_says_how_many_roots_it_covered() {
     assert_eq!(many.label(), "Fetch · 2 repos");
 }
 
-/// Every rebase flavour paints the wording the dialog used to hard-code, and
-/// they all settle as the same kind.
 #[test]
 fn each_rebase_flavour_keeps_its_wording_and_shares_its_kind() {
     let r = root("alpha");
@@ -94,7 +80,6 @@ fn each_rebase_flavour_keeps_its_wording_and_shares_its_kind() {
     }
 }
 
-/// A merge names the commits it brings in only when the preview knew.
 #[test]
 fn a_merge_label_carries_the_commit_count_only_when_the_preview_knew() {
     let mk = |commits: usize| Operation::Merge {
@@ -108,10 +93,6 @@ fn a_merge_label_carries_the_commit_count_only_when_the_preview_knew() {
     assert_eq!(mk(3).label(), "Merge topic (3 commits)");
 }
 
-// --- the operation owns its scope ----------------------------------------------
-
-/// A caller cannot hand `dispatch` a scope that disagrees with the work: the
-/// scope comes out of the operation.
 #[test]
 fn an_operation_derives_its_own_invalidation_scope() {
     let a = root("alpha");
@@ -143,8 +124,6 @@ fn an_operation_derives_its_own_invalidation_scope() {
     );
 }
 
-/// Only the worktree operations change a root's linked-worktree set, and that
-/// is what makes dispatch post the extra invalidation.
 #[test]
 fn only_the_worktree_operations_mutate_the_worktree_set() {
     let a = root("alpha");
@@ -181,12 +160,6 @@ fn only_the_worktree_operations_mutate_the_worktree_set() {
     }
 }
 
-// --- the two targeted history rewrites ------------------------------------------
-
-/// A history rewrite of one named commit is its own kind of work, not anonymous
-/// custom work: the activity view, the settlement path and the completion report
-/// all read its identity. Its label names the short reference the developer
-/// right-clicked, and it owns the root whose history moves.
 #[test]
 fn a_targeted_rewrite_is_its_own_kind_and_names_its_commit() {
     let r = root("alpha");
@@ -216,8 +189,6 @@ fn a_targeted_rewrite_is_its_own_kind_and_names_its_commit() {
     );
 }
 
-/// A reword's new message is content the label must not leak into the activity
-/// feed — the feed records the work, not the text.
 #[test]
 fn a_reword_label_names_the_commit_and_not_its_new_message() {
     let op = Operation::reword_commit(
@@ -230,16 +201,6 @@ fn a_reword_label_names_the_commit_and_not_its_new_message() {
     assert_eq!(op.label(), "Reword commit 0123456");
 }
 
-// --- Custom is the untyped tail ------------------------------------------------
-
-/// `Custom` carries a consumed closure and no identity of its own, so it settles
-/// as `OpKind::Other`.
-///
-/// This is what replaced `Operation::retry` and its three tests. Retrying is a
-/// property of the variant set, not of a method: the one place a user reaches a
-/// retry — the Shelve confirmation — already dispatches a freshly constructed
-/// `Operation::shelve`, which is exactly what the method did. If a Retry button
-/// is ever ticketed, the method returns with its first caller.
 #[test]
 fn a_custom_operation_has_no_kind_of_its_own() {
     let op = Operation::custom("Stage hunk", Affected::Root(root("alpha")), |_| Ok(()));

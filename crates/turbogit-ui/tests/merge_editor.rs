@@ -1,25 +1,3 @@
-//! Issue #15 — 3-way merge editor redesign tests.
-//!
-//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] against a
-//! temporary repository seeded with a REAL two-hunk merge conflict, asserting
-//! only on public surfaces:
-//!
-//! - **Painted output** — pane headers, block text, yours/theirs tints,
-//!   marker strips, the Result focus outline, and the "N conflicts
-//!   remaining" counter.
-//! - **State transitions** — public `AppState` fields (`conflict_res`,
-//!   `conflict_text`, `conflict_open`) and the on-disk file after Apply.
-//!
-//! Covered behavior:
-//! - three EQUAL panes Local | Result | Incoming with discrete conflict
-//!   blocks (marker strips + tinted yours/theirs sections) and the Result
-//!   pane visually outlined as focused
-//! - per-block Accept Yours / Accept Theirs / Ignore buttons drive a
-//!   READ-ONLY composed Result and decrement the remaining counter
-//! - Apply is disabled until every block resolves, then writes the composed
-//!   result through the engine's existing resolution flow and clears the
-//!   conflict state
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{
@@ -36,13 +14,6 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 use turbogit_ui::theme::Palette;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Run `git` without asserting success (for commands that may legitimately
-/// fail, e.g. a merge that conflicts).
-/// Run `git` WITHOUT asserting success, unlike `git_seed::git` which asserts:
-/// `seed_two_conflicts` ends with `git merge`, whose refusal to auto-merge two
-/// rewritten hunks IS the fixture.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -54,12 +25,6 @@ struct Repo {
     path: PathBuf,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly. The caller
-/// keeps `parent` (a `TempDir`) alive for the duration of the test.
-/// Local repo builder, not a `git_seed` recipe: it runs `init -q` with **no
-/// `-b main`**, so the default branch is whatever `init.defaultBranch` says,
-/// where every recipe pins `main`. A green run would not catch that.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -108,13 +73,11 @@ fn seed_two_conflicts(repo: &Path, branch: &str) {
     .unwrap();
     git(repo, &["add", "conf.txt"]);
     git(repo, &["commit", "-q", "-m", "main commit"]);
-    git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected to conflict
+    git_unchecked(repo, &["merge", "--no-edit", "side"]);
 }
 
-/// Expected composed result for resolutions `[Accept Yours 1, Accept Theirs 2]`.
 const COMPOSED: &str = "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n";
 
-/// Headless harness over the given repository roots (see CONTEXT.md).
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
         .first()
@@ -130,28 +93,21 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// tokens plus embedded JetBrains Mono would re-measure it in another face.
 ///
 /// `max_steps` is 1024, not kittest's default of 4: this suite calls
-/// `Harness::run()`, and `run()` — unlike `step()` — enforces the budget, by
+/// `Harness::run()`, and `run()`, unlike `step()`, enforces the budget, by
 /// panicking past it.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Open the redesigned merge editor for the seeded conflicted file.
 fn open_merge_editor(h: &mut Harness<'_, AppState>) {
     h.get_by_label("Merge…").click();
     h.run();
 }
 
-/// The Apply action button of the merge editor window.
 fn apply_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
     h.get_by_label("Apply")
 }
 
-// --------------------------------------------- tint + geometry mirror fns --
-
-/// Mirror of the editor's `tint_over_bg`: per-channel linear blend of
-/// `accent` over [`Palette::BG`] at opacity `t`. Kept local so the tests
-/// pin the exact painted colors without exposing crate internals.
 fn tint_over_bg(accent: Color32, t: f32) -> Color32 {
     let bg = Palette::BG;
     let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
@@ -162,23 +118,18 @@ fn tint_over_bg(accent: Color32, t: f32) -> Color32 {
     )
 }
 
-/// Conflict "yours" section background (STATE_INFO @ 12% over BG).
 fn yours_bg() -> Color32 {
     tint_over_bg(Palette::STATE_INFO, 0.12)
 }
 
-/// Conflict "theirs" section background (STATE_ERROR @ 12% over BG).
 fn theirs_bg() -> Color32 {
     tint_over_bg(Palette::STATE_ERROR, 0.12)
 }
 
-/// Conflict marker-strip background (STATE_WARNING @ 15% over BG).
 fn marker_bg() -> Color32 {
     tint_over_bg(Palette::STATE_WARNING, 0.15)
 }
 
-/// Paint-time origin of the first text galley whose content equals `text`
-/// modulo trailing newlines (block labels carry a trailing '\n').
 fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
     harness
         .output()
@@ -190,15 +141,6 @@ fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
         })
 }
 
-/// The pane header's own hairline across `label`'s column: the shared pane
-/// header's one `RULE_STRUCTURAL` rule.
-///
-/// The header used to paint a `SURFACE`-filled box around its label, so this
-/// looked for the smallest such box. It no longer does — a pane header is a
-/// band and a hairline, not a box (a stroke means "this floats", and a pane's
-/// own header does not) — so the identification is now the header's own
-/// underline, the nearest one below the label. The assertion downstream is
-/// unchanged in meaning: the three panes are the same width.
 fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let pos = galley_origin(harness, label)
         .unwrap_or_else(|| panic!("{label} header label was not painted"));
@@ -210,8 +152,6 @@ fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
         .unwrap_or_else(|| panic!("{label} header band was not painted"))
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
     let parent = tempfile::tempdir().unwrap();
@@ -222,12 +162,10 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_merge_editor(&mut h);
 
-    // Three pane headers paint.
     assert_painted(&h, "Local (Yours)");
     assert_painted(&h, "Result");
     assert_painted(&h, "Incoming (Theirs)");
 
-    // The editor's footer controls remain reachable as real AccessKit buttons.
     for label in ["Apply", "Cancel"] {
         assert_eq!(
             h.get_by_label(label).accesskit_node().role(),
@@ -236,16 +174,12 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
         );
     }
 
-    // Both sides of the first conflict block paint…
     assert_painted(&h, "MAIN-one");
     assert_painted(&h, "SIDE-one");
-    // …and unresolved blocks show the read-only placeholder in Result.
     assert_painted(&h, "<< unresolved >>");
 
-    // The counter starts at the full count.
     assert_painted(&h, "2 conflicts remaining");
 
-    // The three panes are EQUAL width (header bands within 6px).
     let local = header_band(&h, "Local (Yours)");
     let result = header_band(&h, "Result");
     let incoming = header_band(&h, "Incoming (Theirs)");
@@ -258,7 +192,6 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
         incoming.width()
     );
 
-    // Yours/theirs sections are tinted behind their block text.
     let ours_pos = origin_of(&h, "MAIN-one").expect("ours text painted");
     let theirs_pos = origin_of(&h, "SIDE-one").expect("theirs text painted");
     assert!(
@@ -274,16 +207,11 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
         "theirs section must be tinted behind its text"
     );
 
-    // Marker strips paint as warning-tinted bands.
     assert!(
         filled_rects(&h).iter().any(|(_, c)| *c == marker_bg()),
         "conflict marker strips must be painted"
     );
 
-    // The Result pane is marked as focused: a 2pt accent rail at its leading
-    // edge, in the air beside the header's title. R1's one rail shape, painted
-    // by the one rail painter — the old header drew a 2pt brand *stroke* around
-    // the whole band, which said "this floats" about a pane header.
     let result_pos = galley_origin(&h, "Result").expect("Result header painted");
     assert!(
         filled_rects(&h).iter().any(|(r, c)| {
@@ -317,13 +245,11 @@ fn accept_buttons_resolve_blocks_update_read_only_result_and_counter() {
         "per-block resolution must remain an accessible button"
     );
 
-    // Resolving block 1 decrements the counter and records the choice.
     h.get_by_label("Accept Yours 1").click();
     h.run();
     assert_painted(&h, "1 conflict remaining");
     assert_eq!(h.state().ui.conflict_res[0], Some(0));
 
-    // Resolving block 2 reaches zero and composes the final text.
     h.get_by_label("Accept Theirs 2").click();
     h.run();
     assert_painted(&h, "0 conflicts remaining");
@@ -339,9 +265,6 @@ fn accept_buttons_resolve_blocks_update_read_only_result_and_counter() {
     );
     assert_not_painted(&h, "<< unresolved >>");
 
-    // READ-ONLY: the composed buffer is not exposed as one editable widget
-    // (the old editor offered a multiline TextEdit over the whole text), and
-    // stray keyboard input cannot mutate it.
     assert!(
         h.query_by_label(COMPOSED).is_none(),
         "the composed result must not be a single (editable) widget value"
@@ -402,8 +325,6 @@ fn apply_writes_composed_result_and_clears_conflict_state() {
     apply_button(&h).click();
     h.run();
 
-    // End-to-end: the composed result lands on disk through the engine's
-    // resolution flow (write + stage), clearing the unmerged index state.
     assert!(
         wait_until(15_000, || {
             std::fs::read_to_string(repo.path.join("conf.txt"))
@@ -417,7 +338,6 @@ fn apply_writes_composed_result_and_clears_conflict_state() {
         git(&repo.path, &["status", "--porcelain"])
     );
 
-    // The editor closes and the root rescans to zero conflicts.
     let root_id = RootId(repo.path.clone().into());
     let start = Instant::now();
     loop {
@@ -440,13 +360,6 @@ fn apply_writes_composed_result_and_clears_conflict_state() {
     }
 }
 
-/// The ordinal-3 branch — "Take both · theirs first", the resolver's word for
-/// it — through the INLINE editor. This surface has no button that produces
-/// the ordinal, so before this assertion the branch lived in one module's
-/// match and was pinned by nothing on the surface that shares it: the two
-/// copies of the match could have disagreed about what a `3` means with no
-/// suite noticing. The choice is therefore seeded the way the app holds it and
-/// the read-only Result is read off the frame.
 #[test]
 fn ordinal_three_places_theirs_before_ours_in_the_read_only_result() {
     let parent = tempfile::tempdir().unwrap();
@@ -460,9 +373,6 @@ fn ordinal_three_places_theirs_before_ours_in_the_read_only_result() {
     h.state_mut().ui.conflict_res[0] = Some(3);
     h.run();
 
-    // The cell that carries BOTH sides of conflict 1 is its Result cell — the
-    // panes behind it each carry one side alone — and the ordinal decides the
-    // order inside it.
     let cell = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text.contains("SIDE-one") && g.text.contains("MAIN-one"))
@@ -475,8 +385,6 @@ fn ordinal_three_places_theirs_before_ours_in_the_read_only_result() {
         cell.text
     );
 
-    // The choice resolves the block exactly the way a button-produced one
-    // does, so the counter drops and Apply's gate moves with it.
     assert_painted(&h, "1 conflict remaining");
 }
 

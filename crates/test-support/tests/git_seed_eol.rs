@@ -1,18 +1,7 @@
-//! Where a fixture repository's eol policy comes from — the rule the seed module
-//! owns, read back from git rather than from the builder passing a flag.
-//!
-//! A sibling of `git_seed_identity` rather than a row inside it: that suite pins
-//! where a fixture's commit identity comes from, and eol policy is the other half
-//! of the per-repository machine state a fixture must pin. Both read git's own
-//! answer back, because asserting that a value was *passed* would test the
-//! builder against itself; what has to be caught is git disagreeing with the pin.
-
 use std::path::Path;
 
 use test_support::git_seed::{git, pin_eol_lf, repo_with_one_commit};
 
-/// git's own account of `repo`'s persisted eol policy — the only thing this file
-/// is allowed to assert.
 fn persisted_eol(repo: &Path) -> String {
     git(repo, &["config", "core.autocrlf"]).trim().to_owned()
 }

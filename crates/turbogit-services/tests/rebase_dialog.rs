@@ -1,10 +1,3 @@
-//! Issue 29 — rebase dialog upgrade (screen 15): the MODE → invocation
-//! mapping, the cross-repo affected detection, and the protected-branch
-//! guard.
-//!
-//! The mode mapping and affected detection are pure functions over the
-//! domain model; the guard runs against real git repositories (tempdir +
-//! system `git`).
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -15,13 +8,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_services::integrate_service;
 use turbogit_services::multi_root::{build_root, register};
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
-///
-/// **Not `git_seed::commit`, and deliberately so.** The shared primitive *overwrites*
-/// `path`; this one appends a line, so the day a call site reuses a path the
-/// overwriting primitive would silently drop the earlier line.
 fn append_commit(dir: &Path, name: &str, text: &str) -> String {
     let file = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
@@ -43,11 +29,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Repo on `main` (one base commit) with a `feature` branch two commits
-/// ahead, checked out — the rebase subject.
-///
-/// **Kept local, not `repo_with_history`:** that one is three commits deep and carries a
-/// bare `origin`, and the test below measures `HEAD~2` landing on `main`'s tip.
 fn rebase_repo(tmp: &Path, name: &str) -> std::path::PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
@@ -61,8 +42,6 @@ fn rebase_repo(tmp: &Path, name: &str) -> std::path::PathBuf {
     repo
 }
 
-// ------------------------------------------------------------------ modes --
-
 #[test]
 fn standard_mode_maps_to_a_plain_rebase() {
     let opts = integrate_service::rebase_mode_opts(RebaseMode::Standard, true, false, false);
@@ -73,9 +52,6 @@ fn standard_mode_maps_to_a_plain_rebase() {
 
 #[test]
 fn autosquash_mode_forces_the_autosquash_flag() {
-    // The mode wins over a leftover toggle (the merge_flags precedent):
-    // Autosquash always folds fixup!/squash! commits, even with the option
-    // row unticked.
     let opts = integrate_service::rebase_mode_opts(RebaseMode::Autosquash, false, true, false);
     assert!(opts.autosquash);
     assert!(opts.keep_empty);
@@ -90,20 +66,11 @@ fn options_pass_through_on_top_of_the_standard_mode() {
     assert!(!opts.update_refs);
 }
 
-// --------------------------------------------------------- affected repos --
-
-/// The focused repo (feature checked out, tracking `origin/feature` in a
-/// shared bare remote) plus three siblings: one with feature checked out,
-/// one on main with a local feature tracking the same upstream, and one
-/// without any feature branch.
 fn affected_fixtures(tmp: &Path) -> (Vec<turbogit_domain::model::Root>, RootId, [RootId; 3]) {
     let bare = tmp.join("origin.git");
     std::fs::create_dir_all(&bare).unwrap();
     git(&bare, &["init", "-q", "--bare", "-b", "main"]);
 
-    // Each repo gets its own unrelated base commit; only the focused repo
-    // pushes main (the bare's main is irrelevant — the fixtures share the
-    // `feature` ref). The others just fetch.
     let mk = |name: &str, push: bool| -> std::path::PathBuf {
         let repo = tmp.join(name);
         std::fs::create_dir_all(&repo).unwrap();
@@ -120,24 +87,20 @@ fn affected_fixtures(tmp: &Path) -> (Vec<turbogit_domain::model::Root>, RootId, 
         repo
     };
 
-    // Focused: feature branch pushed with upstream tracking, checked out.
     let focused = mk("focused", true);
     git(&focused, &["checkout", "-q", "-b", "feature"]);
     append_commit(&focused, "a.txt", "feature-1");
     git(&focused, &["push", "-q", "-u", "origin", "feature"]);
 
-    // Sibling 1: feature checked out too.
     let checked_out = mk("checked-out", false);
     git(
         &checked_out,
         &["checkout", "-q", "-b", "feature", "origin/feature"],
     );
 
-    // Sibling 2: on main, but a local feature tracks the same upstream.
     let tracking_shared = mk("tracking-shared", false);
     git(&tracking_shared, &["branch", "feature", "origin/feature"]);
 
-    // Sibling 3: no feature branch at all.
     let unrelated = mk("unrelated", false);
 
     let engine = engine();
@@ -176,26 +139,11 @@ fn affected_repos_cover_checked_out_and_tracking_shared_siblings() {
     );
 }
 
-/// The focused root's current branch has NO tracking entry, alongside a
-/// sibling root whose current branch does.
-///
-/// The fifth inline derivation walked `root.branches` for the current branch
-/// with an extra `b.kind == BranchKind::Local` filter that the fold into
-/// `sync_service::tracked_upstream` drops. The filter is redundant, not lost:
-/// every value-producing adapter (`cli.rs:757`, `git2_exec.rs:657`,
-/// `fake.rs:160`) leaves `tracking` `None` on a remote row, and `git branch -a`
-/// lists local rows ahead of remote rows, so the first match for a current
-/// branch is always its local row. A focus with no tracking entry therefore
-/// answers exactly as it did with the filter: the upstream half is `None`, and
-/// only the current-branch comparison decides the siblings.
 #[test]
 fn a_focus_with_no_tracking_entry_answers_from_the_current_branch_comparison_only() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (mut roots, _focused, _siblings) = affected_fixtures(tmp.path());
 
-    // A root whose current branch tracks nothing: it was checked out of a
-    // sibling's remote-tracking ref, so its local row has no upstream and the
-    // upstream half of the filter is `None`.
     let lonely = rebase_repo(tmp.path(), "lonely");
     git(&lonely, &["checkout", "-q", "-b", "lonely-branch"]);
     append_commit(&lonely, "c.txt", "lonely-1");
@@ -220,10 +168,6 @@ fn a_focus_with_no_tracking_entry_answers_from_the_current_branch_comparison_onl
     );
 }
 
-/// The same shape with the upstream half populated: the focused root tracks
-/// `origin/feature`, and the branch list behind it carries the remote row the
-/// dropped filter existed for — `origin/feature` shares the short name
-/// `feature` with the local row. The answer is unchanged, which is the point.
 #[test]
 fn a_focus_whose_branch_list_carries_a_remote_row_of_the_same_short_name_answers_as_before() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -259,8 +203,6 @@ fn a_focus_whose_branch_list_carries_a_remote_row_of_the_same_short_name_answers
     );
 }
 
-// -------------------------------------------------------- protected guard --
-
 fn settings_protecting(pattern: &str) -> VcsSettings {
     VcsSettings {
         protected_branch_patterns: vec![pattern.to_string()],
@@ -286,8 +228,6 @@ fn protected_current_branch_refuses_the_rebase() {
     .expect_err("a protected branch must refuse the rebase");
     assert!(err.to_string().contains("protected"), "{err}");
 
-    // The interactive plan path is guarded the same way — a rewrite through
-    // any mode must refuse.
     let plan = turbogit_services::history_editor::build_plan(&engine, &repo, "main").expect("plan");
     let err = integrate_service::rebase_plan(&engine, &repo, &plan, &settings, "feature")
         .expect_err("a protected branch must refuse the plan");
@@ -299,8 +239,6 @@ fn unprotected_current_branch_rebases() {
     let engine = engine();
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = rebase_repo(tmp.path(), "repo");
-    // main moves on after feature branched, so replaying feature onto main
-    // changes HEAD's parent to main's tip.
     git(&repo, &["checkout", "-q", "main"]);
     let main_tip = append_commit(&repo, "main.txt", "main-1");
     git(&repo, &["checkout", "-q", "feature"]);
@@ -316,8 +254,6 @@ fn unprotected_current_branch_rebases() {
     )
     .expect("an unprotected branch rebases");
 
-    // feature carried two commits, so after the replay main's tip sits two
-    // commits below HEAD.
     let new_parent = git(&repo, &["rev-parse", "HEAD~2"]).trim().to_string();
     assert_eq!(new_parent, main_tip, "feature was replayed onto main's tip");
 }

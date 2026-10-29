@@ -14,15 +14,15 @@
 # fixtures, not to the renderer: the repo-backed pages painted a random
 # `tempfile` directory name in the shell header, two seeded commit SHAs that
 # changed with the commit timestamp, an age label that ticks every second and,
-# on two pages, a full temp path. `acceptance_matrix.rs` pins all of it now —
-# capture root, commit dates, painted path form, the host `git --version` — and
+# on two pages, a full temp path. `acceptance_matrix.rs` pins all of it now,
+# capture root, commit dates, painted path form, the host `git --version`, and
 # the floor went with it. Measured on macOS with the Apple GPU on 2026-10-10,
 # three separate processes against freshly captured baselines: 0 differing px on
 # all eleven pages, no diff box anywhere. The mac budget is that number.
 #
 # Which is also the reason a generous one is dangerous rather than merely loose:
-# the page that had gone stale by two and a half thousand pixels — the diff
-# viewer's whitespace control becoming a menu — reported green under the 8 000
+# the page that had gone stale by two and a half thousand pixels, the diff
+# viewer's whitespace control becoming a menu, reported green under the 8 000
 # that was sized to absorb fixture noise. A count above the measured floor
 # licenses exactly that, so it is set from a measurement and not from a feeling.
 # If a future mac run reports a nonzero count on a page whose fixtures have not
@@ -43,8 +43,4 @@ failed_pixel_count_threshold = 8_000
 failed_pixel_count_threshold = 20_000
 
 [mac]
-# Measured 2026-10-10: 0 differing px on all eleven pages, three separate
-# processes, macOS with the Apple GPU, against the deterministic fixtures
-# (`01-welcome` through `10-submodules`). Upstream's default is 0 for the same
-# reason and its docs call a count above 0 a last resort. See the header.
 failed_pixel_count_threshold = 0

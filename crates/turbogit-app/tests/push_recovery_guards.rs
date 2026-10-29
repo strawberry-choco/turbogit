@@ -1,24 +1,3 @@
-//! The rejected-push recovery's update is a rewrite like any other, so it pays
-//! the same two guards: a protected branch refuses *before* git is touched, and
-//! a rebasing update records the rewrite backup it is about to make possible.
-//!
-//! The path under test is the whole round trip — a push real git rejects, the
-//! settlement that classifies it, the silent update the `Update without asking`
-//! setting opts into, and the recovery that runs before the re-push. Nothing
-//! here reaches for an internal function: `dispatch_push` and `drain_events` are
-//! the same seam the Shell drives.
-//!
-//! The pairing is deliberate. Each guarded case sits next to the case that must
-//! still run, so a refusal that widened to "never update a protected branch" or
-//! a backup that leaked onto a plain merge fails here too:
-//!
-//! - protected branch, Rebase update method: refuses, history untouched, remote
-//!   untouched, and no rewrite happened.
-//! - unprotected branch, Rebase update method: rebases, and the pre-rebase tip
-//!   is recorded at the backup ref the Undo verb reads.
-//! - protected branch, Merge update method: merges and pushes, because a merge
-//!   rewrites nothing and so owes neither guard.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -29,15 +8,6 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::{UpdateMethod, VcsSettings};
 use turbogit_services::sync_service::PushOutcome;
 
-// ---------------------------------------------------------------- fixtures --
-
-/// The repository the rejected push runs in: `main` published to a bare
-/// `origin`, then genuinely diverged — one local commit, one commit landed on
-/// the remote by a second clone.
-///
-/// Real divergence, not an injected error, because the defect this suite exists
-/// for is reachable only through git's own `(non-fast-forward)` rejection: the
-/// classification is what opts the update in silently.
 fn diverged_repo(project: &Path, name: &str) -> (PathBuf, PathBuf) {
     let work = repo_with_origin(project, name);
     let bare = project.join(format!("{name}.git"));
@@ -65,8 +35,6 @@ fn rev(dir: &Path, r: &str) -> String {
     git(dir, &["rev-parse", r]).trim().to_string()
 }
 
-/// Whether `ancestor` is in `rev`'s history — how a test says "the remote's
-/// commit was not integrated" without naming a merge or a rebase.
 fn is_ancestor(dir: &Path, ancestor: &str, rev: &str) -> bool {
     Command::new("git")
         .args(["merge-base", "--is-ancestor", ancestor, rev])
@@ -76,7 +44,6 @@ fn is_ancestor(dir: &Path, ancestor: &str, rev: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether a reference exists at all — the rewrite backup's slot.
 fn ref_exists(dir: &Path, name: &str) -> bool {
     Command::new("git")
         .args(["show-ref", "--verify", "--quiet", name])
@@ -86,7 +53,6 @@ fn ref_exists(dir: &Path, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `origin`'s tip, read from the bare repository itself.
 fn bare_tip(bare: &Path, refname: &str) -> Option<String> {
     let out = Command::new("git")
         .arg("--git-dir")
@@ -99,9 +65,6 @@ fn bare_tip(bare: &Path, refname: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Settings for the silent-update round trip: the opt-in on, the update method
-/// the case names, and the protected list either the shipped default (which
-/// covers `main`) or empty.
 fn settings(method: UpdateMethod, protect_main: bool) -> VcsSettings {
     VcsSettings {
         update_method: method,
@@ -115,11 +78,6 @@ fn settings(method: UpdateMethod, protect_main: bool) -> VcsSettings {
     }
 }
 
-/// One rejected push, settled: dispatch and drain until the state stops moving.
-///
-/// The recovery dispatches from inside settlement, so one drain is not enough
-/// for the round trip; the loop is the headless form of the frames a live Shell
-/// spends between the rejection and its notification.
 fn push_and_settle(state: &mut AppState, request: PushRequest) {
     state.dispatch_push(request, None);
     for _ in 0..6 {
@@ -138,23 +96,14 @@ fn push_request(state: &AppState, settings: &VcsSettings) -> PushRequest {
     )
 }
 
-/// The rejection the settlement left on screen, if any.
 fn rejection(state: &AppState) -> Option<PushOutcome> {
     state.ui.push_rejection.as_ref().map(|r| r.outcome.clone())
 }
 
-/// The class a recovery that never ran its update lands in: the guard's own
-/// refusal is the update's failure, and the re-push is never attempted.
 fn is_update_failure(outcome: &PushOutcome) -> bool {
     matches!(outcome, PushOutcome::UpdateErrored { .. })
 }
 
-// -------------------------------------------------------------------- tests --
-
-/// `Update without asking` on a protected branch with `Rebase` as the update
-/// method must not rewrite the branch behind the user's back. The refusal is
-/// the guard's own: nothing moves — not the branch, not the remote, not the
-/// backup reference.
 #[test]
 fn a_silent_rebasing_update_refuses_a_protected_branch_and_rewrites_nothing() {
     let tmp: TempDir = tempfile::tempdir().unwrap();
@@ -200,9 +149,6 @@ fn a_silent_rebasing_update_refuses_a_protected_branch_and_rewrites_nothing() {
     );
 }
 
-/// The same update on an unprotected branch is allowed — and must record the
-/// state it is about to destroy at the backup reference, the same net every
-/// other rewrite pays. Without it the auto-update's rebase has nothing to undo.
 #[test]
 fn a_silent_rebasing_update_records_its_backup_before_it_rewrites() {
     let tmp = tempfile::tempdir().unwrap();
@@ -247,8 +193,6 @@ fn a_silent_rebasing_update_records_its_backup_before_it_rewrites() {
     );
 }
 
-/// The guard is on the rewrite, not on the branch: a protected branch updated by
-/// a merge is not rewritten, so the silent update still runs and still pushes.
 #[test]
 fn a_silent_merging_update_still_runs_on_a_protected_branch() {
     let tmp = tempfile::tempdir().unwrap();

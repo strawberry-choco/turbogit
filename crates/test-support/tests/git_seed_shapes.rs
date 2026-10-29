@@ -1,12 +1,3 @@
-//! The `git_seed` recipes are shared fixtures, so what each one *promises* has
-//! to be true of what it builds — a suite that adopts a recipe to measure an
-//! operation must not silently measure a different history instead.
-//!
-//! Every assertion here reads real git output through the crate's own `git()`
-//! runner. Re-deriving the expectation the way the recipe does would be
-//! tautological; `git` disagreeing with the doc comment is the failure worth
-//! catching.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{
@@ -14,19 +5,14 @@ use test_support::git_seed::{
     two_repos,
 };
 
-/// `git <args>` in `repo`, stdout trimmed — the form every assertion compares
-/// against, so no assertion has to remember the `.trim()`.
 fn out(repo: &Path, args: &[&str]) -> String {
     git(repo, args).trim().to_owned()
 }
 
-/// git's own toplevel, canonicalized: where git says the repository is, rather
-/// than the returned path compared against itself.
 fn toplevel(repo: &Path) -> PathBuf {
     std::fs::canonicalize(out(repo, &["rev-parse", "--show-toplevel"])).expect("canonical toplevel")
 }
 
-/// `<remote>...<local>` ahead/behind as git counts it, both directions.
 fn ahead_behind(repo: &Path, left: &str, right: &str) -> String {
     out(
         repo,
@@ -68,8 +54,6 @@ fn the_two_repo_recipe_is_two_sibling_repositories_the_app_can_discover() {
     let project = tempfile::tempdir().expect("temp project dir");
     let (alpha, beta) = two_repos(project.path(), "alpha", "beta");
 
-    // Two SEPARATE repositories, not one repository and a subdirectory: git
-    // itself has to agree they are independent toplevels.
     for (label, repo) in [("alpha", &alpha), ("beta", &beta)] {
         assert_eq!(
             toplevel(repo),
@@ -93,9 +77,6 @@ fn the_two_repo_recipe_is_two_sibling_repositories_the_app_can_discover() {
         "the two are siblings, so neither discovery swallows the other: {alpha:?} / {beta:?}"
     );
 
-    // The claim that matters to a multi-root suite: launching over the project
-    // finds exactly these two and nothing else — proved against the real
-    // discovery walk, not against the recipe's return value.
     #[cfg(feature = "harness")]
     {
         let state = turbogit_app::state::AppState::new(project.path().to_path_buf());
@@ -145,9 +126,6 @@ fn the_feature_recipe_is_origin_plus_main_plus_an_unpublished_feature() {
         "main is its own upstream, so ahead/behind is a known zero"
     );
     assert_eq!(ahead_behind(&repo, "origin/main", "main"), "0 0");
-    // `feature` is exactly one commit ahead, touching only its OWN path — the
-    // property that lets a rewrite act on it without tripping git's conflict
-    // machinery.
     assert_eq!(out(&repo, &["rev-list", "--count", "feature"]), "2");
     assert_eq!(
         out(&repo, &["diff", "--name-only", "main..feature"]),
@@ -171,8 +149,6 @@ fn the_conflict_recipe_leaves_a_merge_in_progress_with_one_unmerged_path() {
         "main",
         "the merge was started from main, so ours/theirs are main/side in that order"
     );
-    // `git()` asserts success, so this IS the assertion that the merge is left
-    // half-done rather than aborted or committed.
     assert_eq!(
         out(&repo, &["rev-parse", "--verify", "-q", "MERGE_HEAD"]).len(),
         40,
@@ -193,8 +169,6 @@ fn the_conflict_recipe_leaves_a_merge_in_progress_with_one_unmerged_path() {
         "the working copy carries git's own two-way conflict markers — ours \
          (HEAD) first, theirs last — the default `merge` style a resolver parses"
     );
-    // The three index stages are what a three-way read actually opens, and a
-    // file that merely *looked* conflicted would not have them.
     assert_eq!(
         out(&repo, &["ls-files", "-u", "conf.txt"])
             .lines()
@@ -205,9 +179,6 @@ fn the_conflict_recipe_leaves_a_merge_in_progress_with_one_unmerged_path() {
     );
 }
 
-/// Regression guard, not a new recipe: `repo_with_origin` now delegates its
-/// working repository to `repo_with_one_commit`, so its own documented
-/// guarantee is pinned here rather than left to the delegating suite.
 #[test]
 fn the_origin_recipe_still_yields_a_pushed_main_with_a_bare_remote() {
     let project = tempfile::tempdir().expect("temp project dir");

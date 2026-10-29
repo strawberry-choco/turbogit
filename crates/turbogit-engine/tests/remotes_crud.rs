@@ -1,21 +1,8 @@
-//! Issue 33 — Manage remotes surface, engine-port seam.
-//!
-//! The remote manager CRUDs remotes: list fetch/push URLs, set a fetch or push
-//! URL, rename, remove, and set a branch's upstream. These tests pin the
-//! `GitExecutor` port contract against the real CLI adapter over temporary
-//! repositories.
-
 use test_support::git_seed::git;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-// `temp_repo` stays local because no `git_seed` recipe produces a commit-free
-// repository: `set_branch_upstream_sets_the_tracking_branch` makes its own first
-// commit, so `refs/heads/main` exists before anything tracks it.
-
-/// Fresh initialized repo on `main` with local identity configured, and NO
-/// commits.
 fn temp_repo(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
@@ -175,8 +162,6 @@ fn set_branch_upstream_sets_the_tracking_branch() {
     );
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "c1"]);
 
-    // Provide the `origin/main` tracking ref git requires to exist
-    // (`--set-upstream-to` refuses an unknown upstream), without any network.
     git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     executor()
@@ -194,12 +179,6 @@ fn set_branch_upstream_sets_the_tracking_branch() {
     );
 }
 
-/// Read a single git config value, or `None` when unset.
-///
-/// A third opposite contract, and not the same one as a failing command: here the
-/// exit status **is** the value. `git config --get` exits 1 precisely when the key is
-/// absent, which is what this suite reads back — asserting success would fail every
-/// unset key, and discarding the status would report an empty string, not `None`.
 fn config_or_absent(repo: &std::path::Path, key: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["config", "--get", key])

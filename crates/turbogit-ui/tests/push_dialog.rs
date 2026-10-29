@@ -1,28 +1,3 @@
-//! Issue #20 — Push dialog core tests.
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary multi-root git repositories, each with its own local bare
-//! "remote", asserting painted labels and public `AppState` transitions only.
-//!
-//! Covered behaviors (ADR-0006 / ADR-0007):
-//! - aggregated outgoing-commit tree (project node → per-root nodes → commits)
-//! - clicking a root node filters the changed-files PREVIEW only — the Push
-//!   action still batches across ALL roots
-//! - edited Remote/Branch fields propagate into the narrowed execution
-//! - per-root failures surface while healthy roots still succeed
-//!
-//! Issue #21 — Push safety:
-//! - Preview runs a REAL `git push --dry-run` through the engine seam and
-//!   paints the report VERBATIM in-dialog (success and rejection render
-//!   distinctly)
-//! - checking the force-push acknowledgment switches the executed push to
-//!   `--force-with-lease` (asserted at the executor boundary via a recording
-//!   executor)
-//! - force-push to a protected branch (settings.protected_branch_patterns,
-//!   keyed off the exact Remote/Branch fields) is BLOCKED in-dialog: nothing
-//!   reaches the engine and the block is painted instead of silently
-//!   downgrading
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -45,16 +20,10 @@ use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::Palette;
 
-// ---------------------------------------------------------------- helpers --
-
 fn head_sha(repo: &Path) -> String {
     git(repo, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Resolve `refname` in a bare repository; `None` when it does not exist.
-///
-/// Its own `Command` on purpose: the non-zero exit of `rev-parse --verify` on a
-/// missing ref IS the answer this reads, and `git_seed::git` asserts success.
 fn bare_ref(bare: &Path, refname: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("--git-dir")
@@ -67,17 +36,9 @@ fn bare_ref(bare: &Path, refname: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// A temp repo on `main` that is 2 commits ahead of its own local bare
-/// remote (`<parent>/<name>-remote.git`). Commits c2/c3 each touch a
-/// distinctly named file so changed-file previews can distinguish repos.
-///
-/// Kept local rather than `git_seed::repo_with_origin`: every commit is NAMED after the
-/// repository and the builder hands all three SHAs back for the outgoing-tree
-/// assertions, so the messages and paths are the fixture.
 struct Repo {
     path: PathBuf,
     remote: PathBuf,
-    /// `[c1 (pushed), c2, c3]` full SHAs.
     shas: [String; 3],
 }
 
@@ -145,7 +106,6 @@ fn repo_diverged_from_origin(parent: &Path, name: &str) -> (Repo, String) {
             other.to_str().unwrap(),
         ],
     );
-    // The bare remote's HEAD may be unborn; land on main before committing.
     git(&other, &["checkout", "main"]);
     git(&other, &["config", "user.email", "test@example.com"]);
     git(&other, &["config", "user.name", "Test"]);
@@ -156,23 +116,15 @@ fn repo_diverged_from_origin(parent: &Path, name: &str) -> (Repo, String) {
     let d1 = head_sha(&other);
     git(&other, &["push", "-q", "origin", "main"]);
 
-    // Teach the original repo about d1 (updates origin/main only).
     git(&repo.path, &["fetch", "origin"]);
 
     (repo, d1)
 }
 
-/// Build an `AppState` over fully-built roots (branches/remotes/tracking
-/// included via the production registration path) with synchronous scans —
-/// no background threads.
 fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
     AppState::for_roots(project_dir, roots)
 }
 
-/// [`app_state`] with an injected engine and settings — lets tests assert at
-/// the executor boundary through [`RecordingExecutor`] and configure
-/// protected-branch patterns. The executor/settings swap happens AFTER
-/// synchronous registration, so setup reads never reach the recorder.
 fn app_state_with(
     project_dir: &Path,
     roots: &[PathBuf],
@@ -194,27 +146,12 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Open the Push dialog directly (the Ctrl+Shift+K shortcut is covered by
-/// `shell_frame.rs`).
 fn open_push_dialog(h: &mut Harness<'_, AppState>) {
     h.state_mut().ui.dialog = Some(Dialog::Push);
     h.run();
 }
 
-/// The dialog's primary Push button. The dialog's own `egui::Window` carries
-/// the title "Push" as its accessibility label, so disambiguate geometrically:
-/// the footer sits below the window's title bar.
-/// Issue #25: the dialog label varies — "Push" for the ThisRepo scope,
-/// "Push N commits to M repos" for the multi-repo scopes. We collect every
-/// button whose label starts with "Push" (case sensitive) and pick the
-/// bottom-most one (the dialog footer).
 fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
-    // The dialog's primary Push button. The dialog window itself also carries
-    // "Push" (its title), so disambiguate geometrically: the footer sits
-    // below it. Issue #25: the dialog label varies — "Push" for the
-    // ThisRepo scope, "Push N commits to M repo(s)" for the multi-repo
-    // scopes. We use `query_all_by_label` (no panic on zero matches) and
-    // try each known label.
     let labels = [
         "Push",
         "Push 1 commits to 1 repo",
@@ -238,15 +175,9 @@ fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
     nodes.pop().expect("at least one Push button")
 }
 
-/// The painted toast galley carrying the last op result, if visible.
-/// Op toasts render as `Push` (success) or `Push: <error>` (issue #22 typed
-/// toasts replaced the ✓/✗ glyph prefixes); the colon disambiguates the
-/// failure toast from the bare dialog Push button.
 fn toast_galley(h: &Harness<'_, AppState>) -> Option<String> {
     painted_text(h).into_iter().find(|t| t.starts_with("Push:"))
 }
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn outgoing_tree_aggregates_all_roots_under_project_node() {
@@ -260,12 +191,10 @@ fn outgoing_tree_aggregates_all_roots_under_project_node() {
     ));
     open_push_dialog(&mut h);
 
-    // Project node aggregates; per-root nodes carry per-root counts.
     assert_painted(&h, "(all roots)");
     assert_painted(&h, "alpha — 2 commits ahead");
     assert_painted(&h, "beta — 2 commits ahead");
 
-    // Every outgoing commit is listed under its root (short SHA + subject).
     for sha in [&alpha.shas[1], &alpha.shas[2], &beta.shas[1], &beta.shas[2]] {
         assert_painted(&h, &sha[..7]);
     }
@@ -274,7 +203,6 @@ fn outgoing_tree_aggregates_all_roots_under_project_node() {
     assert_painted(&h, "beta second");
     assert_painted(&h, "beta third");
 
-    // Unfiltered changed-files preview spans every root's outgoing commits.
     assert_painted(&h, "alpha-c2.txt");
     assert_painted(&h, "alpha-c3.txt");
     assert_painted(&h, "beta-c2.txt");
@@ -293,7 +221,6 @@ fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
     ));
     open_push_dialog(&mut h);
 
-    // Clicking a root node narrows the PREVIEW only…
     h.get_by_label("alpha — 2 commits ahead").click();
     h.run();
 
@@ -305,7 +232,6 @@ fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
         "root click must set the preview filter"
     );
 
-    // …while Push still executes the batch across ALL roots (ADR-0006).
     dialog_push_button(&h).click();
     h.run();
 
@@ -333,7 +259,6 @@ fn remote_and_branch_edits_propagate_to_execution() {
     git(&repo_path, &["add", "."]);
     git(&repo_path, &["commit", "-q", "-m", "base"]);
 
-    // Two bare remotes; origin carries main, upstream is registered but empty.
     let origin = parent.path().join("solo-origin.git");
     let upstream = parent.path().join("solo-upstream.git");
     git(
@@ -354,7 +279,6 @@ fn remote_and_branch_edits_propagate_to_execution() {
         &["remote", "add", "upstream", upstream.to_str().unwrap()],
     );
 
-    // Local branch with no tracking: prefill falls back to first remote.
     git(&repo_path, &["checkout", "-q", "-b", "feature"]);
     std::fs::write(repo_path.join("feature-file.txt"), "work\n").unwrap();
     git(&repo_path, &["add", "."]);
@@ -369,7 +293,6 @@ fn remote_and_branch_edits_propagate_to_execution() {
         "dialog must prefill the current branch"
     );
 
-    // Edit the Remote field, narrow the scope, push.
     h.state_mut().ui.dlg.push_remote = "upstream".into();
     h.run();
     h.query_all_by_label("This repo")
@@ -398,8 +321,6 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = repo_ahead_of_origin(parent.path(), "alpha");
     let beta = repo_ahead_of_origin(parent.path(), "beta");
-    // Break beta's remote after setup so its config still names it but the
-    // target directory is gone — its push must fail while alpha's succeeds.
     std::fs::remove_dir_all(&beta.remote).unwrap();
 
     let mut h = harness(app_state(
@@ -439,10 +360,6 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
     assert!(surfaced, "per-root failure must surface in the op toast");
 }
 
-// ------------------------------------------------------- issue #21: safety --
-
-/// A real CLI engine behind a recording wrapper, plus the settings clone to
-/// hand to [`app_state_with`].
 fn recording_engine(settings: VcsSettings) -> (Arc<RecordingExecutor>, VcsSettings) {
     let cli: Arc<dyn GitExecutor> = Arc::new(turbogit_engine::cli::CliExecutor {
         settings: settings.clone(),
@@ -478,7 +395,6 @@ fn preview_runs_real_dry_run_and_paints_report_verbatim() {
     h.get_by_label("Preview dry-run").click();
     h.run();
 
-    // The ENTIRE git report is painted verbatim (single galley substring).
     let texts = painted_text(&h);
     assert!(
         texts.iter().any(|t| t.contains(expected.trim_end())),
@@ -486,7 +402,6 @@ fn preview_runs_real_dry_run_and_paints_report_verbatim() {
     );
     assert_painted(&h, "Dry-run report (verbatim):");
 
-    // REAL dry-run: the remote ref is provably untouched.
     let c1 = solo.shas[0].clone();
     assert_eq!(
         bare_ref(&solo.remote, "refs/heads/main").as_deref(),
@@ -494,7 +409,6 @@ fn preview_runs_real_dry_run_and_paints_report_verbatim() {
         "preview must not mutate the remote"
     );
 
-    // Flag selection asserted at the executor boundary.
     assert!(
         rec.contains_dry_run("origin", "main", false),
         "expected PushDryRun {{ origin, main, force: false }}, got: {:?}",
@@ -531,7 +445,6 @@ fn preview_shows_rejection_verbatim_when_diverged() {
     h.get_by_label("Preview dry-run").click();
     h.run();
 
-    // Rejected output renders VERBATIM, distinctly from the success case.
     let texts = painted_text(&h);
     assert!(
         texts.iter().any(|t| t.contains(expected.trim_end())),
@@ -540,7 +453,6 @@ fn preview_shows_rejection_verbatim_when_diverged() {
     assert_painted(&h, "Push rejected by git:");
     assert_not_painted(&h, "Dry-run report (verbatim):");
 
-    // Still non-mutating: the remote tip remains the divergent d1 commit.
     assert_eq!(
         bare_ref(&solo.remote, "refs/heads/main").as_deref(),
         Some(d1.as_str()),
@@ -551,12 +463,9 @@ fn preview_shows_rejection_verbatim_when_diverged() {
 #[test]
 fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
     let parent = tempfile::tempdir().unwrap();
-    // Clear the default protected patterns so 'main' may be force-pushed
-    // here; the blocking behavior has its own dedicated test below.
     let mut settings = VcsSettings::default();
     settings.protected_branch_patterns.clear();
 
-    // Phase 1: checking the acknowledgment box sends force=true downstream.
     let ack = repo_ahead_of_origin(parent.path(), "ack");
     let (rec, settings) = recording_engine(settings);
     let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
@@ -584,9 +493,6 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
         "acknowledged force push must reach the boundary as force=true, got: {:?}",
         rec.recorded()
     );
-    // The real --force-with-lease push landed too (lease matched: we pushed
-    // the base commit ourselves during setup). Recording precedes the actual
-    // subprocess, so poll the remote rather than asserting immediately.
     let ack_tip = head_sha(&ack.path);
     assert!(
         wait_until(15_000, || {
@@ -595,7 +501,6 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
         "--force-with-lease push must update the remote"
     );
 
-    // Phase 2: without the acknowledgment the boundary sees force=false.
     let plain = repo_ahead_of_origin(parent.path(), "plain");
     let (rec2, settings2) = recording_engine(settings);
     let dyn_exec2: Arc<dyn GitExecutor> = rec2.clone();
@@ -631,7 +536,6 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
 fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
     let parent = tempfile::tempdir().unwrap();
     let guarded = repo_ahead_of_origin(parent.path(), "guarded");
-    // Default settings protect 'main'; the Branch field prefills to 'main'.
     let (rec, settings) = recording_engine(VcsSettings::default());
     let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
     let mut h = harness(app_state_with(
@@ -642,8 +546,6 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
     ));
     open_push_dialog(&mut h);
 
-    // Acknowledge force against the protected branch and narrow the scope so
-    // the exact Remote/Branch fields drive execution…
     h.get_by_label("Force push (--force-with-lease)").click();
     h.run();
     h.query_all_by_label("This repo")
@@ -653,11 +555,9 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
         .click();
     h.run();
 
-    // …the block surfaces IN-DIALOG…
     assert_painted(&h, "is protected");
     assert_painted(&h, "force-push blocked");
 
-    // …and clicking Push neither dispatches anything nor closes the dialog.
     dialog_push_button(&h).click();
     h.run();
     std::thread::sleep(Duration::from_millis(400));
@@ -679,9 +579,6 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
         "blocked force-push must leave the remote untouched"
     );
 
-    // Keyed off the EXACT Branch field: retargeting an unprotected branch
-    // lifts the block, and the executed push KEEPS force=true (no silent
-    // downgrade to a regular push).
     h.state_mut().ui.dlg.push_branch = "feature".into();
     h.run();
     assert_not_painted(&h, "force-push blocked");
@@ -732,10 +629,6 @@ fn push_footer_keeps_action_order_minimum_targets_and_shared_divider() {
     );
 }
 
-// ------------------------------------------ issue: severity vocabulary (C2) --
-
-/// The ink of the painted galley whose text contains `needle`; the actual
-/// visible severity treatment, not a token-name assertion.
 fn painted_ink_for(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Color32> {
     painted_galleys(h)
         .into_iter()
@@ -743,9 +636,6 @@ fn painted_ink_for(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Colo
         .map(|g| g.color)
 }
 
-/// C2: push messages use the shared semantic severity inks — warnings in
-/// STATE_WARNING, blocking errors in STATE_ERROR, guidance in STATE_INFO —
-/// through the actual dialog consumers, never raw severity colors.
 #[test]
 fn push_severity_messages_use_the_shared_semantic_inks() {
     let parent = tempfile::tempdir().unwrap();
@@ -764,7 +654,6 @@ fn push_severity_messages_use_the_shared_semantic_inks() {
     ));
     open_push_dialog(&mut h);
 
-    // Blocking error + informational guidance share the semantic inks.
     h.get_by_label("Force push (--force-with-lease)").click();
     h.get_by_label("Set upstream (--set-upstream)").click();
     h.run();
@@ -786,8 +675,6 @@ fn push_severity_messages_use_the_shared_semantic_inks() {
         "upstream guidance must render in the shared informational ink"
     );
 
-    // Nonblocking force-push warning: retarget an unprotected branch so the
-    // warning (not the block) is the visible treatment.
     h.state_mut().ui.dlg.push_branch = "feature".into();
     h.run();
     assert_eq!(
@@ -796,7 +683,6 @@ fn push_severity_messages_use_the_shared_semantic_inks() {
         "force-push warning must render in the shared warning ink"
     );
 
-    // Push-subset guidance ("All commits will be pushed…") is a warning too.
     let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
     let commits = snapshot[0].commits.as_ref().expect("commits");
     let older = commits[1].id.clone();
@@ -809,10 +695,6 @@ fn push_severity_messages_use_the_shared_semantic_inks() {
     );
 }
 
-// ------------------------------------------- issue #24: per-commit selection --
-
-/// All commits in the outgoing list are pre-selected when the dialog opens
-/// (the safe fallback when no commit has been unchecked).
 #[test]
 fn outgoing_commits_open_with_every_commit_selected() {
     let parent = tempfile::tempdir().unwrap();
@@ -849,8 +731,6 @@ fn outgoing_commits_open_with_every_commit_selected() {
     }
 }
 
-/// Every outgoing commit row paints a checkbox and a "N selected of M"
-/// counter appears next to the list; unchecking one updates both.
 #[test]
 fn commit_rows_paint_checkboxes_and_a_selection_counter() {
     use egui::accesskit::Role;
@@ -865,18 +745,14 @@ fn commit_rows_paint_checkboxes_and_a_selection_counter() {
     let commits = snapshot[0].commits.as_ref().expect("commits");
     let subject = commits[0].message.lines().next().unwrap().to_string();
 
-    // Every commit paints a checkbox the kittest can address by role.
     assert!(
         h.get_all_by_role(Role::CheckBox)
             .any(|n| n.accesskit_node().label() == Some(subject.clone())),
         "the first outgoing commit must paint as a checkbox row"
     );
 
-    // Default state: full selection, counter reflects that.
     assert_painted(&h, "2 selected of 2");
 
-    // Unchecking the older commit removes it from the selection and updates
-    // the counter to "1 selected of 2".
     h.get_by_role_and_label(Role::CheckBox, &subject).click();
     h.run();
     assert_painted(&h, "1 selected of 2");
@@ -895,16 +771,11 @@ fn commit_rows_paint_checkboxes_and_a_selection_counter() {
         "the other commit stays selected"
     );
 
-    // Re-checking restores full selection.
     h.get_by_role_and_label(Role::CheckBox, &subject).click();
     h.run();
     assert_painted(&h, "2 selected of 2");
 }
 
-/// When the user unchecks an older commit but keeps the newer one selected,
-/// only the newest commit is pushed (a suffix of the outgoing list). The
-/// recorded `Push` carries the oldest selected SHA so the engine forwards
-/// only that range to git.
 #[test]
 fn suffix_selection_pushes_only_the_selected_newest_commit() {
     let parent = tempfile::tempdir().unwrap();
@@ -922,17 +793,11 @@ fn suffix_selection_pushes_only_the_selected_newest_commit() {
 
     let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
     let commits = snapshot[0].commits.as_ref().expect("commits");
-    let older = commits[1].id.clone(); // c2: first committed / oldest ahead
-    let newer = commits[0].id.clone(); // c3: newest
-
-    // Drop the older commit (c2) so only c3 stays. The newest sits at
-    // index 0 because outgoing commits are listed newest-first.
+    let older = commits[1].id.clone();
+    let newer = commits[0].id.clone();
     h.state_mut().ui.dlg.push_selected_commits = vec![newer.clone()];
     h.run();
     assert_painted(&h, "1 selected of 2");
-
-    // Narrow the dialog to "This repo" scope so it executes the push
-    // synchronously against the selected root instead of batching.
 
     h.query_all_by_label("This repo")
         .last()
@@ -954,10 +819,6 @@ fn suffix_selection_pushes_only_the_selected_newest_commit() {
     let _ = older_short;
 }
 
-/// When the user unchecks a NEWER commit but keeps an OLDER one, the
-/// selection is NOT a suffix of the outgoing list. The dialog must
-/// explain this fallback and still push the FULL outgoing list, never a
-/// subset.
 #[test]
 fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
     let parent = tempfile::tempdir().unwrap();
@@ -975,22 +836,13 @@ fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
 
     let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
     let commits = snapshot[0].commits.as_ref().expect("commits");
-    // Outgoing is newest-first; commits[0] is the newest (c3), commits[1]
-    // is the older one (c2). Drop the NEWER commit while keeping the
-    // older one — the selection is no longer a suffix.
     let older = commits[1].id.clone();
     h.state_mut().ui.dlg.push_selected_commits = vec![older.clone()];
     h.run();
 
-    // The dialog explains WHY this falls back: an older unchecked
-    // ancestor is needed by the kept newer commits (actually the inverse
-    // — the kept older commit is fine, but the unset newer one is older
-    // than the kept older one. Either way, no proper subset is
-    // expressible).
     assert_painted(&h, "all");
     assert_painted(&h, "commits will be pushed");
 
-    // Narrow the scope and execute.
     h.query_all_by_label("This repo")
         .last()
         .unwrap()
@@ -1000,8 +852,6 @@ fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
     dialog_push_button(&h).click();
     h.run();
 
-    // The push reaches the boundary as a full push (selected_oldest
-    // None), not a subset.
     assert!(
         wait_until(15_000, || {
             rec.contains_push_selected("origin", "main", false, None)
@@ -1011,8 +861,6 @@ fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
     );
 }
 
-/// Toggling the "Push tags" checkbox sends `tags=true` to the executor
-/// boundary (issue #24). The flag is independent of force / selection.
 #[test]
 fn push_tags_checkbox_propagates_to_engine_boundary() {
     let parent = tempfile::tempdir().unwrap();
@@ -1028,7 +876,6 @@ fn push_tags_checkbox_propagates_to_engine_boundary() {
     ));
     open_push_dialog(&mut h);
 
-    // The checkbox is rendered next to the other options.
     assert_painted(&h, "Push tags");
 
     h.get_by_label("Push tags").click();
@@ -1061,8 +908,6 @@ fn push_tags_checkbox_propagates_to_engine_boundary() {
     );
 }
 
-/// Toggling "Skip pre-push hooks" sends `no_verify=true` to the engine
-/// boundary (issue #24).
 #[test]
 fn skip_pre_push_hooks_propagates_to_engine_boundary() {
     let parent = tempfile::tempdir().unwrap();
@@ -1108,8 +953,6 @@ fn skip_pre_push_hooks_propagates_to_engine_boundary() {
     );
 }
 
-/// Toggling "Set upstream" sends `set_upstream=true` to the engine
-/// boundary AND paints the "upstream will be set" hint (issue #24).
 #[test]
 fn set_upstream_propagates_and_paints_hint() {
     let parent = tempfile::tempdir().unwrap();
@@ -1125,7 +968,6 @@ fn set_upstream_propagates_and_paints_hint() {
     ));
     open_push_dialog(&mut h);
 
-    // The hint is hidden until the checkbox is on.
     assert_not_painted(&h, "upstream will be set");
 
     h.get_by_label("Set upstream (--set-upstream)").click();
@@ -1160,9 +1002,6 @@ fn set_upstream_propagates_and_paints_hint() {
     );
 }
 
-/// Force-pushing to a protected branch stays BLOCKED even when the new
-/// issue-#24 options (Push tags / Skip pre-push hooks / Set upstream) are
-/// checked — the engine must never see the push.
 #[test]
 fn protected_branch_block_survives_new_push_options() {
     let parent = tempfile::tempdir().unwrap();
@@ -1188,7 +1027,6 @@ fn protected_branch_block_survives_new_push_options() {
         .click();
     h.run();
 
-    // The block surfaces in-dialog — nothing reaches the engine.
     assert_painted(&h, "is protected");
     assert_painted(&h, "force-push blocked");
 
@@ -1209,13 +1047,8 @@ fn protected_branch_block_survives_new_push_options() {
     );
 }
 
-// ----------------------------------------------- issue #25: PUSH SCOPE / banner --
-
 use turbogit_services::sync_service::PushScope;
 
-/// The PUSH SCOPE segmented control (screen 10) renders the four variants.
-/// The default scope is `All` and the labels name the resolved counts so
-/// the user sees what each segment will cover.
 #[test]
 fn push_scope_segmented_control_lists_all_four_variants() {
     let parent = tempfile::tempdir().unwrap();
@@ -1231,15 +1064,12 @@ fn push_scope_segmented_control_lists_all_four_variants() {
 
     assert_painted(&h, "PUSH SCOPE");
     assert_painted(&h, "This repo");
-    // No selection yet → "Selected 0".
     assert_painted(&h, "Selected 0");
     assert_painted(&h, "Project subtree");
     assert_painted(&h, "All 3");
     assert_eq!(h.state().ui.dlg.push_scope, PushScope::All);
 }
 
-/// When `Selection` is chosen, the executed push targets ONLY the
-/// workspace tree's checked roots — unchecked ones must NOT be pushed.
 #[test]
 fn push_scope_selection_pushes_only_checked_roots() {
     use std::collections::HashSet;
@@ -1292,15 +1122,11 @@ fn push_scope_selection_pushes_only_checked_roots() {
     assert_eq!(alpha_pushes, 0, "unselected alpha must NOT be pushed");
 }
 
-/// When the scope contains roots on a protected branch, the dialog paints
-/// a remediation banner naming those repos and the protected branch (the
-/// patterns join with `|`), instead of blocking the push outright.
 #[test]
 fn protected_branch_banner_names_protected_repos_in_scope() {
     let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha"); // tracks main
-    let feature_only = repo_ahead_of_origin(parent.path(), "feature_only"); // tracks main
-
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
+    let feature_only = repo_ahead_of_origin(parent.path(), "feature_only");
     let (rec, settings) = recording_engine(VcsSettings::default());
     let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
     let mut h = harness(app_state_with(
@@ -1317,16 +1143,10 @@ fn protected_branch_banner_names_protected_repos_in_scope() {
     assert_painted(&h, "main");
 }
 
-/// When the scope contains BOTH protected and unprotected roots, the
-/// remediation banner's "Remove N protected repos from scope" button
-/// excludes the listed protected roots. After that exclusion, a regular
-/// push goes through for the unprotected root only.
 #[test]
 fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    // A second repo on an UNPROTECTED branch (feature) so the scope
-    // contains a mix: alpha (main, protected) + work (feature, not protected).
     let work_path = parent.path().join("work");
     std::fs::create_dir_all(&work_path).unwrap();
     git(&work_path, &["init", "-q", "-b", "main"]);
@@ -1371,12 +1191,10 @@ fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
     ));
     open_push_dialog(&mut h);
 
-    // Banner shows the remediation action naming alpha (the only protected root).
     assert_painted(&h, "Protected branch in scope");
     h.get_by_label("Remove 1 protected repo from scope").click();
     h.run();
 
-    // alpha excluded, work NOT excluded.
     let excluded = &h.state().ui.dlg.push_scope_excluded;
     assert!(
         excluded.iter().any(|id| id.0.to_path_buf() == alpha.path),
@@ -1387,8 +1205,6 @@ fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
         "work (unprotected) must NOT be excluded"
     );
 
-    // Now push — work is in scope and not protected, so the recording
-    // executor records exactly one Push for work_path.
     dialog_push_button(&h).click();
     h.run();
     assert!(
@@ -1410,9 +1226,6 @@ fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
     assert_eq!(alpha_pushes, 0, "alpha must stay excluded from the push");
 }
 
-/// The action button states the resolved scope (issue #25): "Push 4 commits
-/// to 3 repos" — not a bare "Push" — so the user sees what they are about
-/// to push before clicking.
 #[test]
 fn push_button_states_the_resolved_scope() {
     let parent = tempfile::tempdir().unwrap();
@@ -1425,15 +1238,12 @@ fn push_button_states_the_resolved_scope() {
     ));
     open_push_dialog(&mut h);
 
-    // Two roots × 2 commits ahead each = 4 commits, 2 repos.
     assert_painted(&h, "Push 4 commits to 2 repos");
 }
 
-// --- rejection classes -----------------------------------------------------
-
 /// `repo_ahead_of_origin` plus divergence, WITHOUT the follow-up fetch: the
 /// remote moved while the repo's remote-tracking ref still names the old tip.
-/// That is exactly a stale force-with-lease — the push (not the lease) would
+/// That is exactly a stale force-with-lease, the push (not the lease) would
 /// otherwise overwrite, so git refuses with `(stale info)`.
 fn repo_with_stale_lease(parent: &Path, name: &str) -> Repo {
     let repo = repo_ahead_of_origin(parent, name);
@@ -1456,8 +1266,6 @@ fn repo_with_stale_lease(parent: &Path, name: &str) -> Repo {
     repo
 }
 
-/// Poll until `needle` is painted somewhere (worker threads settle
-/// asynchronously; every poll pumps a frame so events drain).
 fn wait_for_painted(h: &mut Harness<'_, AppState>, needle: &str, ms: u64) -> bool {
     let deadline = Instant::now() + Duration::from_millis(ms);
     loop {
@@ -1472,15 +1280,10 @@ fn wait_for_painted(h: &mut Harness<'_, AppState>, needle: &str, ms: u64) -> boo
     }
 }
 
-/// A force-with-lease rejection is its own class: the painted notification
-/// carries the lease wording and NOT the ordinary rejected-by-remote wording.
-/// A single shared string cannot pass this — the classification must exist.
 #[test]
 fn lease_rejection_paints_lease_wording_not_remote_wording() {
     let parent = tempfile::tempdir().unwrap();
     let repo = repo_with_stale_lease(parent.path(), "alpha");
-    // Force push is refused before git for protected branches, and the
-    // fixture's branch is `main` — clear the patterns so the push runs.
     let settings = VcsSettings {
         protected_branch_patterns: Vec::new(),
         ..VcsSettings::default()
@@ -1513,10 +1316,6 @@ fn lease_rejection_paints_lease_wording_not_remote_wording() {
     );
 }
 
-// ------------------ inline `Define remote` and the named target states ------
-
-/// A temp repo on `main` with two commits and **no remote configured at all** —
-/// the case the panel answers with a link rather than a field.
 fn repo_without_remote(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -1534,7 +1333,6 @@ fn repo_without_remote(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A `git init` with no commit and no remote.
 fn repo_with_no_commits(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -1542,13 +1340,6 @@ fn repo_with_no_commits(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// The centre-line y of the row painting the galley whose text is EXACTLY
-/// `text`, or `None` when nothing paints it.
-///
-/// Exact because `assert_painted` matches by substring: `New & Upstream`
-/// contains `New`, `New Branch…` contains `New`, and a frame full of branch
-/// names contains `origin`. Substring matching here would pass for labels that
-/// are not on the row being asked about.
 fn row_y(h: &Harness<'_, AppState>, text: &str) -> Option<f32> {
     painted_galleys(h)
         .into_iter()
@@ -1556,10 +1347,6 @@ fn row_y(h: &Harness<'_, AppState>, text: &str) -> Option<f32> {
         .map(|g| g.rect.center().y)
 }
 
-/// The target-state name the panel paints: the exact galley between the
-/// `Branch:` row and the `Force push (--force-with-lease)` row. The band is the
-/// dialog's own target panel, so a `New` painted by the branch popup or the
-/// sidebar cannot satisfy this.
 fn painted_target_state(h: &Harness<'_, AppState>) -> Option<String> {
     let top = row_y(h, "Branch:")?;
     let bottom = row_y(h, "Force push (--force-with-lease)")?;
@@ -1580,16 +1367,11 @@ fn painted_target_state(h: &Harness<'_, AppState>) -> Option<String> {
         .map(|g| g.text)
 }
 
-/// Open the VCS operations popup — the app's action surface, and the only place
-/// the two push verbs appear as controls.
 fn open_vcs_popup(h: &mut Harness<'_, AppState>) {
     h.state_mut().ui.vcs_popup = true;
     h.run();
 }
 
-/// Filled control-sized rects on the popup's push row. The row is located by its
-/// own label because `Push` and `Push…` also paint in the palette, the branch
-/// menu and the dialog footer, and the popup's chrome is a filled rect of its own.
 fn push_row_rects(h: &Harness<'_, AppState>) -> Vec<(egui::Rect, egui::Color32)> {
     let y = row_y(h, "Push…").expect("the popup offers the dialog-opening verb");
     filled_rects(h)
@@ -1600,7 +1382,6 @@ fn push_row_rects(h: &Harness<'_, AppState>) -> Vec<(egui::Rect, egui::Color32)>
         .collect()
 }
 
-/// The push control's node on the popup's push row, by position.
 fn push_verb<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Option<Node<'h>> {
     let y = row_y(h, "Push…")?;
     h.query_all_by_label(label)
@@ -1608,23 +1389,11 @@ fn push_verb<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Option<Node<'h
         .find(|n| (n.rect().center().y - y).abs() < 6.0)
 }
 
-/// Move the open dialog onto the `ThisRepo` scope: the only scope with an
-/// explicit Remote/Branch target, and so the only one that paints the target
-/// panel at all.
 fn use_this_repo_scope(h: &mut Harness<'_, AppState>) {
     h.state_mut().ui.dlg.push_scope = PushScope::ThisRepo;
     h.run();
 }
 
-/// The single-line text field painted on the row whose centre-line is `y`.
-///
-/// Matched by ROW rather than by count or by window containment: the Commit
-/// window's message editor and file filter are TextInputs too, and the floating
-/// dialog's rect overlaps them, so "the first field" is the commit message and
-/// "the fields inside the window" is everything. Height-filtered because the
-/// message editor is a tall multiline field, not a row's input.
-/// Poll until `f` holds or the deadline passes, pumping a frame each poll so a
-/// worker thread's completion drains into state.
 fn wait_for_state(h: &mut Harness<'_, AppState>, ms: u64, f: impl Fn(&AppState) -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_millis(ms);
     loop {
@@ -1639,12 +1408,6 @@ fn wait_for_state(h: &mut Harness<'_, AppState>, ms: u64, f: impl Fn(&AppState) 
     }
 }
 
-/// The single-line text field painted on the row whose centre-line is `y`.
-///
-/// Matched by ROW rather than by count or by window containment: the Commit
-/// window's message editor and file filter are TextInputs too, and the floating
-/// dialog's rect overlaps them, so "the first field" is the commit message.
-/// Height-filtered because the message editor is a tall multiline field.
 fn field_on_row<'h>(h: &'h Harness<'_, AppState>, y: f32) -> Node<'h> {
     let mut found = h
         .get_all_by_role(egui::accesskit::Role::TextInput)
@@ -1667,8 +1430,6 @@ fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
         .into_iter()
         .find(|g| g.text == "Define remote")
         .expect("`Define remote` must paint for a repository with no remote");
-    // In place of the remote name: same row, to the right of the label — not a
-    // disabled field with a separate button somewhere else.
     assert!(
         (link.rect.center().y - remote_row).abs() < 6.0,
         "`Define remote` must share the Remote row; row y {remote_row}, link {:?}",
@@ -1678,8 +1439,6 @@ fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
         link.rect.min.x > row_right_of(&h, "Remote:"),
         "the link stands where the name would be, not left of its label"
     );
-    // …and no empty field is painted on that row: the row's only filled rect
-    // would be a `TextEdit` background.
     assert!(
         filled_rects(&h)
             .into_iter()
@@ -1687,11 +1446,9 @@ fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
         "a remote-less panel paints a link, not a field"
     );
 
-    // The bare repository's own truth: git still knows no remote at all.
     assert_eq!(git(&path, &["remote"]).trim(), "");
 }
 
-/// The right edge of the galley painting exactly `text`.
 fn row_right_of(h: &Harness<'_, AppState>, text: &str) -> f32 {
     painted_galleys(h)
         .into_iter()
@@ -1732,7 +1489,6 @@ fn the_target_state_names_new_then_new_and_upstream() {
     open_push_dialog(&mut h);
     use_this_repo_scope(&mut h);
 
-    // A branch the remote has never heard of: the push CREATES a ref.
     h.state_mut().ui.dlg.push_branch = "fresh".into();
     h.run();
     assert_eq!(
@@ -1741,7 +1497,6 @@ fn the_target_state_names_new_then_new_and_upstream() {
         "a branch absent from the remote is named `New`"
     );
 
-    // Ticking the upstream box changes the NAME — not the name plus a suffix.
     h.get_by_label("Set upstream (--set-upstream)").click();
     h.run();
     assert_eq!(
@@ -1759,8 +1514,6 @@ fn a_branch_on_the_remote_is_named_as_upstream_not_new() {
     open_push_dialog(&mut h);
     use_this_repo_scope(&mut h);
 
-    // The fixture pushed `main` with `-u`, so `origin/main` is a remote row and
-    // the field carries that name: this push moves a ref that exists.
     assert_eq!(
         painted_target_state(&h).as_deref(),
         Some("Upstream"),
@@ -1814,11 +1567,6 @@ fn defining_a_remote_in_the_panel_saves_it_immediately() {
     h.get_by_label("Define remote").click();
     h.run();
 
-    // The entry's own fields, told apart by ROW: name on the Remote row, URL
-    // below it, Branch below that. Nothing here reaches into widget internals.
-    // The name opens pre-filled with the conventional `origin` ON the Remote row
-    // — the substitution is the point — and the URL is the one thing the panel
-    // cannot know.
     let on_remote_row: Vec<String> = painted_galleys(&h)
         .into_iter()
         .filter(|g| (g.rect.center().y - remote_row).abs() < 6.0)
@@ -1917,11 +1665,6 @@ fn a_rejected_remote_add_paints_the_reason_inline_and_keeps_the_panel_open() {
     assert_eq!(git(&path, &["remote"]).trim(), "");
 }
 
-// -------------------------- the push-without-dialog path ---------------------
-
-/// A single-root workspace, an unprotected branch, a configured remote: two
-/// verbs on the strip, with distinct rects and distinct fills, and the plain one
-/// pushes without ever opening the panel.
 #[test]
 fn the_direct_and_dialog_verbs_are_two_fills_and_the_direct_one_pushes_alone() {
     let parent = tempfile::tempdir().unwrap();
@@ -1971,8 +1714,6 @@ fn the_direct_and_dialog_verbs_are_two_fills_and_the_direct_one_pushes_alone() {
         rec.recorded()
     );
 
-    // The dialog verb is still there, and still opens the panel with its
-    // dry-run preview — the fast path is a shortcut, not a replacement.
     open_vcs_popup(&mut h);
     push_verb(&h, "Push…")
         .expect("the dialog verb stays reachable")
@@ -1982,7 +1723,6 @@ fn the_direct_and_dialog_verbs_are_two_fills_and_the_direct_one_pushes_alone() {
     assert_painted(&h, "Preview dry-run");
 }
 
-/// Whether the push row paints NO primary-filled rect.
 fn no_direct_rect(h: &Harness<'_, AppState>) -> bool {
     !push_row_rects(h)
         .iter()
@@ -1998,8 +1738,6 @@ fn the_direct_verb_is_withheld_when_it_would_have_to_choose() {
         ..VcsSettings::default()
     };
 
-    // Protected branch: the dialog's force-push block and remediation banner are
-    // the only place this push can be decided.
     let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
     open_vcs_popup(&mut h);
     assert!(
@@ -2012,7 +1750,6 @@ fn the_direct_verb_is_withheld_when_it_would_have_to_choose() {
         "…and the dialog verb is still there"
     );
 
-    // Two roots: which one? That is the dialog's scope control.
     let beta = repo_ahead_of_origin(parent.path(), "beta");
     let mut h = harness(
         app_state(parent.path(), &[repo.path.clone(), beta.path.clone()])
@@ -2024,8 +1761,6 @@ fn the_direct_verb_is_withheld_when_it_would_have_to_choose() {
         "a multi-root workspace gets no one-click push"
     );
 
-    // No remote at all: nothing to push to, and the panel is where `Define
-    // remote` lives.
     let orphan = repo_without_remote(parent.path(), "orphan");
     let mut h =
         harness(app_state(parent.path(), std::slice::from_ref(&orphan)).with_settings(open));
@@ -2035,8 +1770,6 @@ fn the_direct_verb_is_withheld_when_it_would_have_to_choose() {
         "a remote-less repository gets no one-click push"
     );
 
-    // The command palette reaches the same verb without the popup's enablement,
-    // so the verb itself has to answer for that case: the panel, not silence.
     h.state_mut().ui.vcs_popup = false;
     h.run();
     assert!(

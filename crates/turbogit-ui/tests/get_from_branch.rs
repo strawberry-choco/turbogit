@@ -1,29 +1,3 @@
-//! The `Get from Branch` window: its
-//! three-rung status grammar, `Swap Branches`, and the verb's end-to-end channel.
-//!
-//! The reference's fifth integration verb is a per-file take, not a history
-//! operation, and the ticket's whole argument is that its three-colour grammar is a
-//! **contract**: grey = on the base side and missing here, green = the reverse, blue
-//! = differs. That is the same rule the diff viewer states for change kinds, so the
-//! suite asserts the grammar as painted structure — one rung per row, rows that
-//! exchange **positions** on a swap, and the verb present on the blue rung only.
-//!
-//! Seams under test:
-//!
-//! 1. `painted_text` scoped to the window's own row band — all three rung words are
-//!    the change-kind vocabulary the commit tree paints beside it, so an unscoped
-//!    substring assert would measure the wrong list and pass for the wrong reason.
-//! 2. Row **position**, not tint, for `Swap Branches`: a swap that re-coloured the
-//!    same rows would have inverted the grammar, and the ticket names that as the
-//!    wrong answer.
-//! 3. `filled_rects` for the verb: `Palette::ACCENT` on a blue row, and *absent* on a
-//!    green one — offering the take where the base side has no copy is the case that
-//!    would delete a file.
-//! 4. The dispatch channel end to end: a real repository, the row's control, the
-//!    confirmation the verb adds, and the **durable** activity record (the
-//!    settle seam) — not a transient notification.
-//! 5. `branch_menu_items`' gate for the menu verb that opens the window.
-
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, Rect, Vec2};
@@ -39,11 +13,6 @@ use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_menu::{BranchMenuAction, branch_menu_items};
 use turbogit_ui::ui::get_from_branch::VERB;
 
-// ------------------------------------------------------------------ fixtures --
-
-/// `main` checked out, `feature` diverging in exactly the three ways the window
-/// names: a file only the branch has, a file only this side has, a file whose
-/// content differs — plus one identical file that must not become a row.
 fn repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(&dir).unwrap();
@@ -75,9 +44,6 @@ fn root_id(dir: &Path) -> RootId {
     RootId(dir.to_path_buf().into())
 }
 
-/// The shell with the window open over `feature`. `open_get_from_branch` is what
-/// the branch row's `Show Diff with Working Tree` calls, so the dialog is reached
-/// through the same app-layer entry the menu verb uses.
 fn shell(dir: &Path) -> Harness<'static, AppState> {
     let state = AppState::for_roots(dir.parent().unwrap(), &[dir.to_path_buf()])
         .with_settings(VcsSettings::default());
@@ -94,10 +60,6 @@ fn shell(dir: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-// ------------------------------------------------------------------ measuring --
-
-/// One painted row of the comparison list: its vertical centre, its path, its rung
-/// word and the ink that word was drawn with.
 #[derive(Debug, PartialEq)]
 struct Row {
     y: f32,
@@ -106,11 +68,6 @@ struct Row {
     ink: Color32,
 }
 
-/// The band the rows live in: from the group title that heads the list to the
-/// footer row that bounds it, exclusive.
-///
-/// Position is the only honest scope available here — every rung word in this window
-/// is also the commit tree's change-kind vocabulary, painted on the same frame.
 fn rows_band(galleys: &[PaintedGalley]) -> Rect {
     let top = galleys
         .iter()
@@ -130,13 +87,6 @@ fn rows_band(galleys: &[PaintedGalley]) -> Rect {
     )
 }
 
-/// Every row the window paints, in paint order, for the paths its own payload lists.
-///
-/// Anchored on the payload rather than on a `.txt` suffix for two reasons: the shell
-/// behind this floating window can paint a file of the same name on a line that
-/// happens to fall inside the band, and shapes arrive in paint order, so the *last*
-/// match is this window's. What is then asserted is where each path landed and in
-/// what ink — a paint fact, measured, not a state echo.
 fn rows(harness: &Harness<'_, AppState>) -> Vec<Row> {
     let galleys = painted_galleys(harness);
     let band = rows_band(&galleys);
@@ -149,10 +99,6 @@ fn rows(harness: &Harness<'_, AppState>) -> Vec<Row> {
             .rev()
             .find(|g| g.text == text)
             .unwrap_or_else(|| panic!("`{text}` is a payload row the window never painted"));
-        // The rung word is the change-kind galley on THIS path's line, immediately to
-        // its right — vertical overlap plus adjacency, not `Rect::intersects` (two
-        // side-by-side labels never overlap horizontally) and not a bare string match
-        // (the commit tree paints the same three words for its own rows).
         let word = inside
             .iter()
             .rev()
@@ -175,8 +121,6 @@ fn rows(harness: &Harness<'_, AppState>) -> Vec<Row> {
     out
 }
 
-/// The fill painted for the control at `rect` — matched by centre and size, so the
-/// measurement aims at this control rather than at the frame's first filled rect.
 #[track_caller]
 fn fill_of(harness: &Harness<'_, AppState>, rect: Rect) -> Color32 {
     filled_rects(harness)
@@ -190,9 +134,6 @@ fn fill_of(harness: &Harness<'_, AppState>, rect: Rect) -> Color32 {
         .1
 }
 
-/// Every control wearing the verb's label, as its rect. The window's title carries
-/// the same words, and the commit tree can hold a control of the same name, so the
-/// label alone never identifies a row's control.
 fn verb_controls(harness: &Harness<'_, AppState>) -> Vec<Rect> {
     harness
         .get_all_by_role(egui::accesskit::Role::Button)
@@ -215,9 +156,6 @@ fn click_by_label(harness: &mut Harness<'_, AppState>, label: &str) {
     harness.step();
 }
 
-/// Step until `done` holds, failing with what the frame is stuck on. Every click in
-/// this suite is followed by one, because a verb that dispatches onto a worker and a
-/// control that needs two frames are not distinguishable from a dead click otherwise.
 #[track_caller]
 fn wait_until(harness: &mut Harness<'_, AppState>, what: &str, done: impl Fn(&AppState) -> bool) {
     for _ in 0..200 {
@@ -225,8 +163,8 @@ fn wait_until(harness: &mut Harness<'_, AppState>, what: &str, done: impl Fn(&Ap
         std::thread::sleep(std::time::Duration::from_millis(10));
         if done(harness.state()) {
             // The state moves a frame before the tree does: a floating window's
-            // first painted frame has no known size, so its anchored rect — and the
-            // node rects the next click is aimed at — only land on the frame after.
+            // first painted frame has no known size, so its anchored rect, and the
+            // node rects the next click is aimed at, only land on the frame after.
             // Stepping until the paint repeats is what makes a click following this
             // wait aim at the rect the window actually occupies.
             settle(harness);
@@ -239,14 +177,6 @@ fn wait_until(harness: &mut Harness<'_, AppState>, what: &str, done: impl Fn(&Ap
     );
 }
 
-// ------------------------------------------------------- the three-rung grammar --
-
-/// Verification 1: comparing two sides where one file exists only on the branch,
-/// one only here, and one differs, the window paints all three rungs, each **on its
-/// own row**, in the grey/green/blue order the grammar lists them in.
-///
-/// The three-rung case is what proves the grammar is doing work rather than
-/// decorating a list; a one-colour window would pass any weaker assert.
 #[test]
 fn all_three_rungs_paint_each_on_its_own_row() {
     let tmp = tempfile::tempdir().unwrap();
@@ -280,11 +210,6 @@ fn all_three_rungs_paint_each_on_its_own_row() {
     assert!(ys[0] < ys[1] && ys[1] < ys[2], "one rung per row: {ys:?}");
 }
 
-/// Verification 2: after `Swap Branches` the grey and green rows have exchanged
-/// **positions** and the blue row has not moved. Asserted by row position, never by
-/// colour alone — a swap that re-tinted the same rows would leave grey meaning
-/// "missing from the base" rather than "missing from the branch you are standing on",
-/// which is the inversion the ticket calls out.
 #[test]
 fn swapping_the_branches_exchanges_the_two_one_sided_rows_and_holds_the_blue_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -325,8 +250,6 @@ fn swapping_the_branches_exchanges_the_two_one_sided_rows_and_holds_the_blue_one
         harness.state().ui.dlg.get_from_branch_swapped,
         "the posture is app state, not a paint-time coincidence"
     );
-    // The header names the base side first, so the sentence and the rows read the
-    // same way after the swap rather than only before it.
     let header = painted_galleys(&harness)
         .into_iter()
         .find(|g| g.text.starts_with("Comparing "))
@@ -335,9 +258,6 @@ fn swapping_the_branches_exchanges_the_two_one_sided_rows_and_holds_the_blue_one
     assert_eq!(header, "Comparing main with feature (working tree)");
 }
 
-/// Verification 3: the verb is a filled `Palette::ACCENT` control on the blue rung
-/// and is **withheld** on the green one — where the base side has no copy of the
-/// path and a "take" would be a delete.
 #[test]
 fn the_verb_is_filled_on_the_blue_rung_and_withheld_on_the_green_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -366,8 +286,6 @@ fn the_verb_is_filled_on_the_blue_rung_and_withheld_on_the_green_one() {
         "the affirmative verb on the rung it can act on"
     );
 
-    // The absence is the safety property, asserted on the row rather than globally:
-    // the green rung is where taking would delete a file.
     for row in painted.iter().filter(|r| r.word != "Modified") {
         assert!(
             controls.iter().all(|c| (c.center().y - row.y).abs() >= 8.0),
@@ -377,15 +295,6 @@ fn the_verb_is_filled_on_the_blue_rung_and_withheld_on_the_green_one() {
     }
 }
 
-// ------------------------------------------------------------- the verb runs --
-
-/// The whole channel, over a real repository: the row's control arms the
-/// confirmation the ticket adds, confirming runs the take, the file on disk is the
-/// branch's copy, and the **durable** activity record names the verb and its root
-/// (the settle seam — the toast is a summary, not the record).
-///
-/// The list then re-reads itself: the taken path stops being a row, because a window
-/// that still listed it would offer the same overwrite a second time.
 #[test]
 fn a_take_arms_the_confirmation_writes_the_file_and_is_recorded_durably() {
     let tmp = tempfile::tempdir().unwrap();
@@ -420,9 +329,6 @@ fn a_take_arms_the_confirmation_writes_the_file_and_is_recorded_durably() {
     );
 
     click_by_label(&mut harness, "Replace file");
-    // Waiting on the durable record is the honest condition: it is posted by the
-    // same settlement arm that re-reads the list, so the worker has landed and the
-    // frame the assertions measure is the frame after it.
     wait_until(
         &mut harness,
         "the take to settle into the activity feed",
@@ -472,8 +378,6 @@ fn a_take_arms_the_confirmation_writes_the_file_and_is_recorded_durably() {
     );
 }
 
-/// Cancel is not a take. The confirmation exists because the verb destroys a file's
-/// contents, so the refusal arm has to leave the worktree byte-identical.
 #[test]
 fn cancelling_the_confirmation_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -512,12 +416,6 @@ fn cancelling_the_confirmation_writes_nothing() {
     );
 }
 
-// ------------------------------------------------------------------ the entry point --
-
-/// The menu verb that opens the window: `Show Diff with Working Tree`, the
-/// eleventh item, gated by the same read-only rule as `Compare` — a row that IS the
-/// checked-out branch has nothing to take from itself, and a remote-tracking row is
-/// still legal because the comparison reads a revision rather than moving a ref.
 #[test]
 fn the_branch_row_offers_the_comparison_except_on_itself() {
     let side = Branch {
@@ -547,8 +445,6 @@ fn the_branch_row_offers_the_comparison_except_on_itself() {
     assert!(items[BranchMenuAction::DiffWithWorkingTree.index()].enabled);
 }
 
-/// The window's `Detached HEAD` posture: no current side, so no comparison and no
-/// window. A bounded default rather than an error — there is nothing to answer.
 #[test]
 fn a_root_with_no_current_branch_opens_nothing() {
     let tmp = tempfile::tempdir().unwrap();

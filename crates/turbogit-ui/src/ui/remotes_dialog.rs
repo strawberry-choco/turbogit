@@ -1,10 +1,3 @@
-//! Issue 33 — Manage remotes dialog (screen 13 "Manage remotes…").
-//!
-//! Lists the focused repo's remotes with their fetch/push URLs, and offers
-//! add / rename / edit-URL / remove / set-upstream-per-branch. In multi-root
-//! projects the pending change can be applied across a checked repo selection
-//! with per-repo outcomes (routed through the bulk-completed pipeline).
-
 use egui::Ui;
 use turbogit_app::remote_service::RemoteChange;
 use turbogit_app::shell_writes::remote as writes;
@@ -15,7 +8,6 @@ use crate::theme::Palette;
 use crate::ui::widgets;
 use crate::ui::widgets::group_title;
 
-/// The dialog window: title names the focused repo; the body edits it.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
@@ -33,7 +25,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The focused root's remotes plus the manager's controls.
 fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     let Some(id) = state.selected_root.clone() else {
         widgets::empty_state(ui, "No repository selected.");
@@ -46,7 +37,6 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     let root_path = root.path.clone();
     let remotes = root.remotes.clone();
 
-    // REMOTES — one row per remote: name, fetch/push URLs, row actions.
     group_title(ui, "REMOTES");
     if remotes.is_empty() {
         widgets::empty_state(ui, "No remotes configured.");
@@ -180,8 +170,6 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     }
     ui.add_space(6.0);
 
-    // ADD REMOTE — the pending change; in multi-root projects the same form
-    // drives the apply-to-selection below.
     group_title(ui, "ADD REMOTE");
     ui.horizontal(|ui| {
         ui.label("Name:");
@@ -239,8 +227,6 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     }
     ui.add_space(6.0);
 
-    // APPLY TO SELECTION — multi-root only: the pending change (add or
-    // update) applied to every checked repo, reporting per-repo outcomes.
     if state.multi.roots.len() > 1 {
         group_title(ui, "APPLY TO SELECTION");
         ui.horizontal(|ui| {

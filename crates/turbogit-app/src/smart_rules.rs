@@ -1,16 +1,3 @@
-//! User-defined smart group rules (issue #07): predicates over per-root
-//! status that collect repos into custom sidebar groups alongside the
-//! built-ins.
-//!
-//! Plain data + pure logic (the app crate's plain-data precedent, cf.
-//! `diff_data`): rules serialize into `.turbogit/ui.ron` via
-//! `persistence::UiPersist`, and the UI crate maps each sidebar row onto
-//! [`RepoFacts`] to evaluate them. Patterns follow the protected-branch
-//! convention (`services::sync_service::is_protected`): a trailing `*`
-//! matches by prefix, a leading `*` by suffix, no wildcard matches by
-//! case-insensitive substring; blank means "any" (the editor normalizes
-//! blank input to `None`).
-
 use turbogit_domain::model::DisplayName;
 
 /// One pattern against one text, per the module-doc convention: `*`
@@ -28,9 +15,6 @@ pub fn pattern_matches(pattern: &str, text: &str) -> bool {
     }
 }
 
-/// The per-root facts a rule's predicate reads. The UI crate projects each
-/// sidebar row onto this; keeping it plain keeps the rule logic egui-free
-/// and unit-testable here.
 #[derive(Clone, Debug)]
 pub struct RepoFacts {
     pub name: String,
@@ -45,27 +29,19 @@ pub struct RepoFacts {
     pub behind: usize,
 }
 
-/// One user-defined smart group: a label plus optionally-constrained
-/// predicates, all of which must hold for a repo to be a member.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SmartGroupRule {
-    /// The sidebar row's label.
     pub label: String,
     /// Name/path pattern (`None` or blank = any repo).
     pub path_pattern: Option<String>,
     /// Current-branch pattern (`None` or blank = any branch; a detached
     /// repo matches only when unconstrained).
     pub branch_pattern: Option<String>,
-    /// Require at least N uncommitted paths.
     pub min_dirty: Option<usize>,
-    /// Require at least N outgoing commits.
     pub min_ahead: Option<usize>,
-    /// Require at least N incoming commits.
     pub min_behind: Option<usize>,
 }
 
-/// Blank (or whitespace-only) patterns are stored by the editor but read
-/// as "any".
 fn constrained(pattern: &Option<String>) -> Option<&str> {
     pattern.as_deref().map(str::trim).filter(|p| !p.is_empty())
 }
@@ -122,7 +98,6 @@ mod tests {
 
     #[test]
     fn trailing_star_matches_only_by_prefix() {
-        // "release/*" must not match a repo merely containing the text.
         assert!(!pattern_matches("release/*", "forks/release-tools"));
     }
 

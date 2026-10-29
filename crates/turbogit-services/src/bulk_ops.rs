@@ -1,53 +1,19 @@
-//! Bulk operations over a selection of roots (issue 09, screens 02 + 04):
-//! the preflight matrix that predicts — per repo — what will run and why a
-//! repo would be skipped, plus the scoped fan-out that executes one operation
-//! across exactly the roots the user confirmed.
-//!
-//! Skip policy per operation:
-//! - **Fetch all** never skips: fetching is safe on any tree.
-//! - **Pull all** skips dirty worktrees (local changes could be clobbered),
-//!   diverged roots (a merge needs a human decision first), and roots with
-//!   no upstream to pull from; when the run rebases, it also skips roots
-//!   whose current branch is protected (a rebase rewrites that branch).
-//! - **Push all** skips diverged roots (the remote would reject a
-//!   non-fast-forward) and roots with no upstream to push to; a dirty tree
-//!   does not block a push.
-//! - **Stash all** is the inverse of pull: it skips clean trees (nothing to
-//!   stash) and runs wherever there are local changes.
-//! - **Custom command** skips roots whose current branch is protected,
-//!   whatever the command typed — an arbitrary command's effect on that
-//!   branch is unknowable.
-
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 
-/// The fleet operations offered by the operations grid (screen 04).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BulkOp {
     FetchAll,
     PullAll,
     PushAll,
     StashAll,
-    /// Cascade create-&-checkout branch (issue 11): the branch name rides
-    /// in [`BulkPlan::branch`].
     CreateBranch,
-    /// User-typed git command across the selection (issue 13): the command
-    /// text rides in [`BulkPlan::command`].
     Custom,
-    /// Cascade commit across the selection (issue 21): the message + amend
-    /// flag ride in the per-step closure (not in [`BulkPlan`]) because the
-    /// pure plan only carries preflight scope; the actual git call is
-    /// [`crate::commit_across::run_one`].
     Commit,
-    /// Cascade merge (issue 28): the merge dialog's "Cascade with N other
-    /// repos" hand-off. The source branch rides in [`BulkPlan::branch`]
-    /// (same as `CreateBranch`); the dialog's chosen [`MergeOpts`] are
-    /// passed to [`run_step`] directly.
     Merge,
 }
 
 impl BulkOp {
-    /// The grid label (screen 04).
     pub fn label(self) -> &'static str {
         match self {
             BulkOp::FetchAll => "Fetch all",
@@ -62,26 +28,16 @@ impl BulkOp {
     }
 }
 
-/// Why a repo will not take part in the run (the preflight matrix's STATUS
-/// column, screen 02).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SkipReason {
-    /// Uncommitted local changes make the operation unsafe.
     DirtyWorktree,
-    /// The branch and its upstream both have commits (ahead > 0, behind > 0).
     Diverged,
-    /// The current branch has no tracking upstream (or there is no current
-    /// branch at all).
     NoUpstream,
-    /// A clean tree has nothing to stash.
     CleanTree,
-    /// The current branch is protected, so the run may not rewrite it
-    /// (pull-all in rebase mode) or run arbitrary git on it (custom).
     ProtectedBranch,
 }
 
 impl SkipReason {
-    /// The matrix's parenthesized reason ("dirty worktree", …).
     pub fn label(self) -> &'static str {
         match self {
             SkipReason::DirtyWorktree => "dirty worktree",
@@ -93,9 +49,6 @@ impl SkipReason {
     }
 }
 
-/// Total the given reasons per kind, most frequent first, ties broken
-/// ascending by [`SkipReason::label`] so the painted header line is
-/// deterministic.
 fn tally_skips(reasons: impl Iterator<Item = SkipReason>) -> Vec<(SkipReason, usize)> {
     let mut totals: Vec<(SkipReason, usize)> = Vec::new();
     for reason in reasons {
@@ -108,42 +61,31 @@ fn tally_skips(reasons: impl Iterator<Item = SkipReason>) -> Vec<(SkipReason, us
     totals
 }
 
-/// One row of the preflight matrix: a selected repo, its current state, and
-/// whether it will run or be skipped (with reason).
 #[derive(Debug, Clone)]
 pub struct PreflightRow {
     pub root: RootId,
-    /// Repo display name (the directory's file name).
     pub name: String,
     pub branch: Option<String>,
-    /// Modified + unversioned paths.
     pub dirty: usize,
     pub ahead: usize,
     pub behind: usize,
-    /// `Ok(())` = will run; `Err(reason)` = skipped.
     pub outcome: Result<(), SkipReason>,
 }
 
-/// The preflight matrix for one operation over the selected roots.
 #[derive(Debug, Clone, Default)]
 pub struct Preflight {
-    /// One row per selected root, in the caller's order.
     pub rows: Vec<PreflightRow>,
 }
 
 impl Preflight {
-    /// The header's "N of M will run" numerator: rows the operation will run on.
     pub fn will_run(&self) -> usize {
         self.rows.iter().filter(|r| r.outcome.is_ok()).count()
     }
 
-    /// The matrix's row count (the "M" in "N of M").
     pub fn total(&self) -> usize {
         self.rows.len()
     }
 
-    /// Skipped rows totaled per reason, most frequent first — the header
-    /// line's "2 skipped (dirty worktree) · 1 skipped (diverged)".
     pub fn skip_totals(&self) -> Vec<(SkipReason, usize)> {
         tally_skips(self.rows.iter().filter_map(|r| r.outcome.err()))
     }
@@ -153,8 +95,6 @@ impl Preflight {
 /// `ahead_behind` supplies each root's ↑/↓ counts vs its upstream (the root
 /// caches in the app; test fixtures otherwise). `settings` carries the
 /// protected-branch patterns and `rebase` the pull policy the confirmed run
-/// will execute (`BulkOp::PullAll` only), so the matrix predicts the plan
-/// the user is looking at, not a default.
 pub fn preflight(
     op: BulkOp,
     roots: &[Root],
@@ -169,8 +109,6 @@ pub fn preflight(
                 let (ahead, behind) = ahead_behind(&root.id);
                 let dirty = root.status.changes.len();
                 let upstream = super::sync_service::tracked_upstream(root).is_some();
-                // A root with no current branch is never protected — the
-                // same rule `sync_service::protected_roots` states.
                 let protected = root
                     .current_branch
                     .as_deref()
@@ -190,9 +128,6 @@ pub fn preflight(
     }
 }
 
-/// The skip policy of one operation against one root's state. The
-/// create-&-checkout cascade classifies through [`branch_preflight`] —
-/// never here.
 fn classify(
     op: BulkOp,
     dirty: usize,
@@ -204,12 +139,6 @@ fn classify(
 ) -> Result<(), SkipReason> {
     match op {
         BulkOp::FetchAll => Ok(()),
-        // A root on a protected branch is refused whatever the command was
-        // typed: an arbitrary command's effect on that branch is unknowable.
-        // The refusal is about the root, not the command — the grammar stays
-        // unrestricted (no per-command parsing beyond the destructive
-        // confirmation, which still gates the command itself) because the
-        // branch predicate holds for every command equally.
         BulkOp::Custom => {
             if protected {
                 Err(SkipReason::ProtectedBranch)
@@ -218,9 +147,6 @@ fn classify(
             }
         }
         BulkOp::PullAll => {
-            // A rebasing pull rewrites the current branch, so a protected
-            // branch skips before any per-tree condition is weighed; a
-            // merging pull rewrites nothing and so never skips for it.
             if rebase && protected {
                 Err(SkipReason::ProtectedBranch)
             } else if dirty > 0 {
@@ -233,9 +159,6 @@ fn classify(
                 Ok(())
             }
         }
-        // A cascade merge (issue 28) only needs a clean tree: the target is
-        // the source branch picked in the merge dialog, not an upstream, so
-        // divergence and tracking are irrelevant.
         BulkOp::Merge => {
             if dirty > 0 {
                 Err(SkipReason::DirtyWorktree)
@@ -260,32 +183,16 @@ fn classify(
             }
         }
         BulkOp::CreateBranch => Ok(()),
-        // Cascade commit (issue 21): always "will run" at the preflight
-        // level — the per-repo skip lives in [`crate::commit_across::plan`]
-        // (clean roots are seeded as `Skipped` rows), not here. The
-        // `BulkOp` enum exists only so the cascade-run monitor can label
-        // the running command (`git commit` vs `git commit --amend`).
         BulkOp::Commit => Ok(()),
     }
 }
 
-/// A confirmed preflight: one operation over exactly the roots that will run
-/// (the matrix's non-skipped rows), plus the per-op policy. `rebase` is the
-/// pull policy for [`BulkOp::PullAll`] and the apply-broadly (base on the
-/// upstream when behind) policy for [`BulkOp::CreateBranch`]; `branch`
-/// carries the target branch name of a create-&-checkout run (empty for
-/// every other op).
 #[derive(Debug, Clone)]
 pub struct BulkPlan {
     pub op: BulkOp,
-    /// The roots the operation runs on — preflight-approved scope only.
     pub roots: Vec<RootId>,
-    /// Pull policy: `true` rebases onto the upstream instead of merging.
     pub rebase: bool,
-    /// The cascade's target branch name (`BulkOp::CreateBranch` only).
     pub branch: String,
-    /// The user-typed git command (`BulkOp::Custom` only, verbatim as
-    /// entered — a leading "git" is tolerated by [`parse_command`]).
     pub command: String,
 }
 
@@ -304,9 +211,6 @@ pub fn run_bulk(
     run_bulk_with_merge(vcs, mgr, settings, plan, &MergeOpts::default())
 }
 
-/// [`run_bulk`] with the merge dialog's chosen options (issue 28): the
-/// cascade-merge plan executes with exactly the strategy and option rows the
-/// user confirmed in the dialog.
 pub fn run_bulk_with_merge(
     vcs: &dyn turbogit_engine_api::GitExecutor,
     mgr: &MultiRootManager,
@@ -324,17 +228,12 @@ pub fn run_bulk_with_merge(
         .collect()
 }
 
-// -- Custom command (issue 13, screen 04) -------------------------------------
-
 /// Parse the command a user typed into the custom-command modal into git
 /// arguments. The executor always runs the git binary, so a leading "git"
-/// the user naturally types is dropped and the rest is taken verbatim —
+/// the user naturally types is dropped and the rest is taken verbatim,
 /// whitespace-separated, with single- or double-quoted runs grouping into
 /// one argument. `None` when nothing remains to run (empty input, or just
 /// the bare "git").
-///
-/// [`echo_command`] is the other reader of the same rule: what the run reports
-/// back is decided here, so the echo cannot disagree with what executed.
 pub fn parse_command(input: &str) -> Option<Vec<String>> {
     let mut args = tokenize(input)?;
     if args.first().map(String::as_str) == Some(GIT) {
@@ -343,15 +242,8 @@ pub fn parse_command(input: &str) -> Option<Vec<String>> {
     if args.is_empty() { None } else { Some(args) }
 }
 
-/// The git binary's own name, which the user may or may not type: the engine
-/// supplies it, so [`parse_command`] drops it from the arguments and
-/// [`echo_command`] supplies it for display.
 const GIT: &str = "git";
 
-/// The typed command as the run should be reported: git's name first, then what
-/// the user typed — which is exactly the text they typed, because a leading
-/// `git` is kept rather than doubled. Quoting survives untouched, since this is
-/// an echo and not an argv.
 pub fn echo_command(input: &str) -> String {
     let typed = input.trim();
     match tokenize(typed) {
@@ -361,9 +253,6 @@ pub fn echo_command(input: &str) -> String {
     }
 }
 
-/// Split typed text into words the way a shell would for the two quote
-/// characters, and nothing else: no escapes, no expansion, no `$`. `None` when
-/// a quote never closes.
 fn tokenize(input: &str) -> Option<Vec<String>> {
     let mut args: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -398,17 +287,6 @@ fn tokenize(input: &str) -> Option<Vec<String>> {
     Some(args)
 }
 
-/// Why a parsed command counts as destructive-looking and needs the extra
-/// confirmation before it may run across the fleet (`None` = ordinary
-/// command, one confirmation is enough). The subcommand decides: `reset`
-/// moves branches and can discard commits, `clean` deletes untracked files,
-/// `rebase`/`filter-branch`/`filter-repo` rewrite history, a `push` with a
-/// force flag rewrites the remote, and `branch -D` force-deletes branches.
-///
-/// That is a match on git's own subcommand names and flags, and the limit it
-/// puts on the app's safety model is stated once, on
-/// [`GitExecutor::run_raw`](turbogit_engine_api::GitExecutor::run_raw) — the
-/// port's one raw escape, which this is the only production caller of.
 pub fn destructive_reason(args: &[String]) -> Option<&'static str> {
     let first = args.first().map(String::as_str)?;
     let has_flag = |flags: &[&str]| args.iter().any(|a| flags.contains(&a.as_str()));
@@ -424,14 +302,6 @@ pub fn destructive_reason(args: &[String]) -> Option<&'static str> {
     }
 }
 
-/// Execute one root's part of a bulk operation — the per-root step the
-/// cascade engine dispatches on workers (issue 10) and [`run_bulk`] runs
-/// serially. Push resolves the root's upstream remote the way
-/// [`sync_service::push_all`] does and honors the protected-branch gate;
-/// stash parks the root's changes under a common message. A create-&-checkout
-/// step checks an existing matching branch out instead of recreating it and,
-/// under the apply-broadly policy, bases a missing branch on the upstream
-/// tip when the repo is behind.
 pub fn run_step(
     op: BulkOp,
     vcs: &dyn turbogit_engine_api::GitExecutor,
@@ -445,9 +315,6 @@ pub fn run_step(
     let command = plan.command.as_str();
     match op {
         BulkOp::FetchAll => super::sync_service::fetch(vcs, &root.path, None),
-        // The guarded seam, not the raw pull: a Retry-forced step lands here
-        // on a protected branch too, and only `pull_guarded` refuses it (a
-        // merge-mode step passes the guard by design — it rewrites nothing).
         BulkOp::PullAll => {
             let method = if rebase {
                 UpdateMethod::Rebase
@@ -468,11 +335,6 @@ pub fn run_step(
         }
         BulkOp::CreateBranch => run_branch_step(vcs, root, branch, rebase),
         BulkOp::Custom => {
-            // The execution-time half of the preflight's per-root refusal:
-            // a Retry forces a skipped row back through here, so the guard
-            // lives on the step, not only on the matrix. The reason names
-            // the branch, never the command; a detached HEAD has no branch
-            // to protect.
             if let Some(branch) = root.current_branch.as_deref()
                 && super::sync_service::is_protected(settings, branch)
             {
@@ -485,11 +347,6 @@ pub fn run_step(
                 .ok_or_else(|| TgError::Other("empty custom command".into()))?;
             vcs.run_raw(&root.path, &args).map(|_| ())
         }
-        // Cascade commit is dispatched through its own per-step closure
-        // (see `AppState::run_commit_across`); reaching this arm means a
-        // caller routed `BulkOp::Commit` through the generic bulk pipeline
-        // by mistake. Refuse loudly rather than silently no-op — `message`
-        // and `amend` are not in `BulkPlan`.
         BulkOp::Commit => Err(TgError::Other(
             "BulkOp::Commit must be dispatched through run_commit_across".into(),
         )),
@@ -508,11 +365,6 @@ pub fn run_step(
         }
     }
 }
-/// One repo's part of a cascade create-&-checkout run (issue 11): an
-/// existing local branch with the target name is checked out as-is; a
-/// missing one is created (with checkout) from the upstream tip when the
-/// apply-broadly policy is on and the current branch is behind it, and from
-/// HEAD otherwise.
 fn run_branch_step(
     vcs: &dyn turbogit_engine_api::GitExecutor,
     root: &Root,
@@ -549,8 +401,6 @@ fn run_branch_step(
     super::branch_service::create(vcs, &root.path, name, start_point.as_deref(), true)
 }
 
-/// Push one root's current branch through [`sync_service::push_remote`] — the
-/// one remote-resolution rule the whole fleet shares.
 fn push_root(
     vcs: &dyn turbogit_engine_api::GitExecutor,
     root: &Root,
@@ -560,58 +410,37 @@ fn push_root(
         .current_branch
         .as_deref()
         .ok_or_else(|| TgError::Other("no current branch to push".into()))?;
-    // The same rule the push dialog and the dry-run preview consult — not a
-    // fourth copy of a split.
     let remote = super::sync_service::push_remote(root);
     super::sync_service::push(
         vcs, &root.path, &remote, branch, false, false, false, false, None, settings,
     )
 }
 
-// -- Cascade create & checkout branch (issue 11, screen 02) ------------------
-
-/// The predicted per-repo action of a cascade create-&-checkout run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchAction {
-    /// A local branch with the target name already exists: check it out,
-    /// never recreate it.
     CheckoutExisting,
-    /// Clean and current: create the branch from HEAD and check it out.
     CreateFromHead,
-    /// Clean but behind its upstream: base the new branch on the upstream
-    /// tip (`from`) so it is not cut from stale code — the "Apply broadly"
-    /// policy.
     CreateFromUpstream { from: String },
-    /// Skipped before the run.
     Skip(SkipReason),
 }
 
-/// One row of the cascade create-&-checkout preflight matrix.
 #[derive(Debug, Clone)]
 pub struct BranchPreflightRow {
     pub root: RootId,
-    /// Repo display name (the directory's file name).
     pub name: String,
     pub branch: Option<String>,
-    /// Modified + unversioned paths.
     pub dirty: usize,
-    /// The branch every running repo lands on (the TARGET column).
     pub target: String,
     pub action: BranchAction,
 }
 
-/// The cascade create-&-checkout preflight matrix for one branch name over
-/// the selected roots.
 #[derive(Debug, Clone)]
 pub struct BranchPreflight {
-    /// The requested branch name, trimmed.
     pub name: String,
-    /// One row per selected root, in the caller's order.
     pub rows: Vec<BranchPreflightRow>,
 }
 
 impl BranchPreflight {
-    /// The header's "N of M will run" numerator.
     pub fn will_run(&self) -> usize {
         self.rows
             .iter()
@@ -619,13 +448,10 @@ impl BranchPreflight {
             .count()
     }
 
-    /// The matrix's row count (the "M" in "N of M").
     pub fn total(&self) -> usize {
         self.rows.len()
     }
 
-    /// Skipped rows totaled per reason, most frequent first — the same
-    /// header summary the bulk preflight paints.
     pub fn skip_totals(&self) -> Vec<(SkipReason, usize)> {
         tally_skips(self.rows.iter().filter_map(|r| match r.action {
             BranchAction::Skip(reason) => Some(reason),
@@ -633,7 +459,6 @@ impl BranchPreflight {
         }))
     }
 
-    /// The roots the run executes on — the non-skipped rows.
     pub fn plan_roots(&self) -> Vec<RootId> {
         self.rows
             .iter()
@@ -700,7 +525,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// A root with the given branch/tracking and dirty-file count.
     fn root(path: &str, branch: Option<&str>, tracking: Option<&str>, dirty: usize) -> Root {
         let id = RootId(PathBuf::from(path).into());
         let branches = match (branch, tracking) {
@@ -758,7 +582,6 @@ mod tests {
         }
     }
 
-    /// A four-repo fleet: clean+synced, dirty, diverged, no-upstream.
     fn fleet() -> Vec<Root> {
         vec![
             root("/w/alpha", Some("main"), Some("origin/main"), 0),
@@ -775,7 +598,6 @@ mod tests {
         }
     }
 
-    /// Assert the outcome pattern per row, by repo name.
     fn assert_outcomes(pf: &Preflight, expected: &[(&str, bool, Option<SkipReason>)]) {
         assert_eq!(pf.rows.len(), expected.len(), "one row per selected root");
         for (row, (name, runs, reason)) in pf.rows.iter().zip(expected) {
@@ -788,7 +610,6 @@ mod tests {
         }
     }
 
-    /// The shipped protection default: `main`/`master` are protected.
     fn settings() -> VcsSettings {
         VcsSettings::default()
     }
@@ -797,7 +618,6 @@ mod tests {
     fn preflight_classifies_every_selected_repo_per_operation() {
         let roots = fleet();
 
-        // Fetch never skips — not even on a protected branch.
         let pf = preflight(BulkOp::FetchAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
@@ -809,8 +629,6 @@ mod tests {
             ],
         );
 
-        // Pull in merge mode skips dirty, diverged, and no-upstream roots —
-        // a merge rewrites nothing, so a protected branch is not a skip here.
         let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
@@ -822,7 +640,6 @@ mod tests {
             ],
         );
 
-        // Push only needs an upstream; a dirty tree does not block it.
         let pf = preflight(BulkOp::PushAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
@@ -834,7 +651,6 @@ mod tests {
             ],
         );
 
-        // Stash is the inverse of pull: clean trees are skipped.
         let pf = preflight(BulkOp::StashAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
@@ -869,8 +685,6 @@ mod tests {
         let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
         assert_eq!(pf.will_run(), 1, "only alpha runs");
         assert_eq!(pf.total(), 4);
-        // Skip reasons totaled for the header line ("2 skipped (dirty
-        // worktree) · 1 skipped (diverged) · …"), most frequent first.
         let totals: Vec<(SkipReason, usize)> = pf.skip_totals();
         assert_eq!(
             totals,
@@ -881,18 +695,12 @@ mod tests {
             ]
         );
 
-        // A fleet where everything runs totals to nothing.
         let clean = vec![root("/w/alpha", Some("main"), Some("origin/main"), 0)];
         let pf = preflight(BulkOp::PullAll, &clean, &settings(), false, &|_| (0, 0));
         assert_eq!(pf.will_run(), 1);
         assert_eq!(pf.skip_totals().len(), 0);
     }
 
-    // -- Cascade create & checkout branch (issue 11) -------------------------
-
-    /// A five-repo fleet for the branch cascade: clean+synced, dirty,
-    /// diverged, a repo that already has the target branch locally, and a
-    /// repo behind its upstream.
     fn branch_fleet() -> Vec<Root> {
         let mut roots = vec![
             root("/w/app", Some("main"), Some("origin/main"), 0),
@@ -901,8 +709,6 @@ mod tests {
             root("/w/lib", Some("main"), Some("origin/main"), 0),
             root("/w/cli", Some("main"), Some("origin/main"), 0),
         ];
-        // lib already carries release/q3 locally — it must be checked out,
-        // never recreated.
         roots[3].branches.push(Branch {
             name: "release/q3".to_string(),
             kind: BranchKind::Local,
@@ -920,7 +726,6 @@ mod tests {
         roots
     }
 
-    /// engine is diverged; cli is behind its upstream; the rest are synced.
     fn branch_ab(root: &RootId) -> (usize, usize) {
         match root.0.to_str().unwrap() {
             "/w/engine" => (1, 2),
@@ -933,8 +738,6 @@ mod tests {
     fn branch_preflight_predicts_the_per_repo_action_for_the_cascade() {
         let roots = branch_fleet();
 
-        // Apply broadly (default): repos behind their upstream base the new
-        // branch on the upstream tip instead of stale HEAD.
         let pf = branch_preflight(&roots, "release/q3", true, &branch_ab);
         let actions: Vec<(&str, &BranchAction)> = pf
             .rows
@@ -959,9 +762,7 @@ mod tests {
 
         assert_eq!(pf.will_run(), 3, "app, lib, and cli run");
         assert_eq!(pf.total(), 5);
-        // Every row targets the same new branch (the TARGET column).
         assert!(pf.rows.iter().all(|r| r.target == "release/q3"));
-        // Skips are totaled for the header line.
         assert_eq!(
             pf.skip_totals(),
             vec![(SkipReason::DirtyWorktree, 1), (SkipReason::Diverged, 1)]
@@ -983,8 +784,6 @@ mod tests {
 
     #[test]
     fn custom_command_preflight_refuses_protected_roots_and_runs_on_the_rest() {
-        // A root on a protected branch is refused whatever the command was
-        // typed; the refusal is per root and the matrix's rows name it.
         let roots = fleet();
         let pf = preflight(BulkOp::Custom, &roots, &settings(), false, &ab);
         assert_outcomes(
@@ -998,8 +797,6 @@ mod tests {
         );
         assert_eq!(pf.will_run(), 2);
         assert_eq!(pf.skip_totals(), vec![(SkipReason::ProtectedBranch, 2)]);
-        // The rows carry the branch the refusal is about, so the reason text
-        // can name it.
         let alpha = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
         assert_eq!(alpha.branch.as_deref(), Some("main"));
     }
@@ -1007,31 +804,23 @@ mod tests {
     #[test]
     fn pull_all_preflight_skips_protected_roots_only_when_the_run_rebases() {
         let roots = fleet();
-        // Rebase mode: the run would rewrite the current branch, so a
-        // protected branch skips — before any per-tree condition.
         let pf = preflight(BulkOp::PullAll, &roots, &settings(), true, &ab);
         assert_outcomes(
             &pf,
             &[
                 ("alpha", false, Some(SkipReason::ProtectedBranch)),
-                // ui is dirty AND protected: the branch refusal dominates.
                 ("ui", false, Some(SkipReason::ProtectedBranch)),
                 ("engine", false, Some(SkipReason::Diverged)),
                 ("lib", false, Some(SkipReason::NoUpstream)),
             ],
         );
         assert_eq!(pf.will_run(), 0);
-        // Merge mode: nothing is rewritten, so protection skips nothing.
         let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
         assert_eq!(pf.will_run(), 1, "alpha runs in merge mode");
     }
 
-    // -- Custom command (issue 13) -------------------------------------------
-
     #[test]
     fn a_typed_command_parses_into_git_args_with_the_leading_git_dropped() {
-        // The executor always runs the git binary, so the leading "git" the
-        // user naturally types is dropped; the rest is verbatim.
         assert_eq!(
             parse_command("git gc"),
             Some(vec!["gc".to_string()]),
@@ -1085,11 +874,6 @@ mod tests {
         );
     }
 
-    /// The echo the run is reported with and the arguments it ran are decided by
-    /// one rule, so the text on screen re-parses to exactly the command that
-    /// went to git. The view layer used to re-derive the rule itself with
-    /// `starts_with("git ")`, which a quoted `"git status"` defeated: the echo
-    /// named a binary the parser then swallowed as an argument.
     #[test]
     fn an_echoed_command_re_parses_to_the_arguments_that_ran() {
         for typed in [
@@ -1121,7 +905,6 @@ mod tests {
                  not a second chance to say `git`: {echoed:?} from {typed:?}"
             );
         }
-        // Quoting is the user's, and an echo is not an argv: it survives.
         assert_eq!(
             echo_command("commit -m 'two words'"),
             "git commit -m 'two words'"

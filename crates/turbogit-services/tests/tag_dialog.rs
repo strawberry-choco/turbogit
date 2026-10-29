@@ -1,17 +1,9 @@
-//! Issue 31 — tag dialog upgrade (screen 16).
-//!
-//! The tag dialog's domain rules live in [`tag_service`]: live tag-name
-//! validation (the dialog's "✓ valid" / reason line), tag creation through
-//! the executor port, and the push-immediately outcome reporting.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{Remote, TagSpec};
 use turbogit_engine::fake::{Call, FakeExecutor};
 use turbogit_services::tag_service;
-
-// ------------------------------------------------------------ validate_name --
 
 #[test]
 fn a_well_formed_new_name_is_valid() {
@@ -37,7 +29,6 @@ fn a_duplicate_name_is_rejected() {
 
 #[test]
 fn illegal_names_are_rejected_with_the_offending_rule() {
-    // Spaces and git-forbidden characters.
     for bad in [
         "has space",
         "a~b",
@@ -51,8 +42,6 @@ fn illegal_names_are_rejected_with_the_offending_rule() {
         let err = tag_service::validate_name(bad, &[]).unwrap_err();
         assert!(!err.is_empty(), "'{bad}' should name the violated rule");
     }
-    // Structural rules: leading dot, "..", trailing dot, ".lock" suffix,
-    // "@{".
     for bad in [".hidden", "a..b", "trailing.", "v1.lock", "a@{b"] {
         assert!(
             tag_service::validate_name(bad, &[]).is_err(),
@@ -60,8 +49,6 @@ fn illegal_names_are_rejected_with_the_offending_rule() {
         );
     }
 }
-
-// --------------------------------------------------- create / push helpers ----
 
 fn fake_with_remote(root: &Path, name: &str) -> FakeExecutor {
     let mut v = FakeExecutor::new();
@@ -115,8 +102,6 @@ fn push_new_without_a_remote_is_a_clear_error() {
     let err = tag_service::push_new(&v, &root, "v0.9.0").unwrap_err();
     assert!(matches!(err, TgError::Other(ref m) if m.contains("remote")));
 }
-
-// --------------------------------------------------------------- signing key --
 
 #[test]
 fn signing_key_answers_the_configured_value_with_no_git() {

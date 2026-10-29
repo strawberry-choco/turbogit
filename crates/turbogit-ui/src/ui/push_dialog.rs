@@ -1,36 +1,3 @@
-//! Push dialog (issue #20): an aggregated outgoing-commit tree over every
-//! registered root, fed by [`turbogit_app::sync_service::outgoing_per_root`]
-//! behind the executor seam (ADR-0001).
-//!
-//! Issue #21 adds the safety layer: a Preview button running a REAL
-//! `git push --dry-run` through the engine seam with the report shown
-//! VERBATIM in-dialog, and protected-branch force-push blocking keyed off the
-//! exact Remote/Branch fields — a blocked push never reaches the engine
-//! instead of being silently downgraded.
-//!
-//! Issue #24 layers per-commit selection on top of the aggregated list.
-//!
-//! Issue #25 adds the PUSH SCOPE segmented control (This repo / Selected N /
-//! Project subtree / All M). The control replaces the old "Push current branch
-//! only" checkbox — `ThisRepo` keeps the explicit Remote/Branch target fields
-//! for the per-repo path, the other variants push every root the scope covers
-//! through [`turbogit_app::sync_service::push_roots`]. The dry-run
-//! preview runs once per root in scope and aggregates into a single
-//! "N commits → R remotes · X refs · Y rejected" line above the verbatim
-//! per-root reports. Protected branches in scope render as a remediation
-//! banner naming the protected repos and matching pattern, with a one-click
-//! "Remove N protected repos from scope" action that excludes them so the
-//! push can proceed for the rest.
-//!
-//! # The shape
-//!
-//! IntelliJ's Push Commits dialog puts the commits on the LEFT and the
-//! changed files on the RIGHT, the push target and the push options in bands
-//! below them, and one shared footer at the bottom. This dialog has that
-//! shape: the two-pane body is the dialog's primary content, the TARGET band
-//! sits directly above the OPTIONS band, and the footer is the app's shared
-//! one.
-
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::widgets;
@@ -43,20 +10,8 @@ use turbogit_domain::model::{
     SignatureState,
 };
 
-/// The height both pane bodies share, so the two panes read as one row and
-/// the divider between them spans both.
-///
-/// It is sized for the commit list the dialog is about: a commit row is 24 px
-/// (the ref chip sets the height), so a project node, two root nodes and four
-/// commits need 168 px of viewport, and the pane carries that plus its own
-/// 21 px of header. The commit list is the dialog's primary content and is
-/// the one region that grows.
 const PANE_BODY_H: f32 = 197.0;
 
-/// The scope variants in the order the control paints them.
-///
-/// The label array and the index mapping both come from this one table, so a
-/// segment can never be painted under another scope's name.
 const SCOPE_ORDER: [PushScope; 4] = [
     PushScope::ThisRepo,
     PushScope::Selection,
@@ -69,7 +24,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let mut open = true;
     // The window's height is capped to the screen. A body that grows past the
     // screen's bottom edge makes egui MOVE the window up, and a window that
-    // moves reflows every row under it — so the cap keeps the dialog's own
+    // moves reflows every row under it, so the cap keeps the dialog's own
     // rows where the user last saw them, and the report well scrolls inside
     // the dialog instead of pushing the footer off the screen.
     let max_height = ctx.input(|i| i.content_rect().height()) - 40.0;
@@ -81,31 +36,19 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             ensure_outgoing(state);
             ensure_target_defaults(state);
 
-            // Resolved scope: roots covered by the segmented control minus any
-            // remediation exclusions (issue #25).
             let scope = scope_roots(state);
             let scope_commits = scope_outgoing(state, &scope);
             let total = outgoing_total(&scope_commits);
 
-            // PUSH SCOPE control sits at the top (screen 10).
             push_scope_control(ui, state);
 
-            // Protected-branch remediation banner — names repos + pattern
-            // and offers a one-click exclusion (issue #25). The banner is
-            // skipped when the scope covers zero protected roots.
             let _protected_count = remediation_banner(ui, state, &scope);
 
-            // The two-pane body. Root-node clicks filter the changed-files
-            // PREVIEW only (ADR-0006), never the batch push.
             push_panes(ui, state);
 
-            // The subset state is the dialog's own reading of the commit
-            // selection: an unchecked older ancestor forces a full push.
             let subset = subset_push_state(state);
             state.ui.dlg.push_subset = subset.clone();
 
-            // Explicit target fields above the options section (ADR-0007).
-            // They only drive the `ThisRepo` scope path (issue #25).
             let scope_is_this_repo = state.ui.dlg.push_scope == PushScope::ThisRepo;
             let mut no_target = false;
             if scope_is_this_repo {
@@ -114,14 +57,10 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
             options_band(ui, state, scope_is_this_repo, &subset);
 
-            // Aggregated dry-run preview (issue #25): the summary line plus
-            // one verbatim report per root in scope.
             if let Some(preview) = state.ui.dlg.push_preview_output.as_ref() {
                 dry_run_well(ui, preview);
             }
 
-            // Footer: Cancel / Preview / Push. The Push button names the
-            // resolved scope (issue #25).
             let force_blocked_this_repo = scope_is_this_repo
                 && state.ui.dlg.force_push
                 && sync_service::is_protected(&state.settings, &state.ui.dlg.push_branch);
@@ -131,8 +70,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 action_label(&scope, total)
             };
             widgets::dialog_footer(ui, |ui| {
-                // The footer lays out right-to-left: call the primary action
-                // first so the visible order remains Cancel · Preview · Push.
                 let push = ui
                     .scope(|ui| {
                         if force_blocked_this_repo || no_target {
@@ -170,22 +107,9 @@ fn close(state: &mut AppState) {
     state.ui.dlg.push_remote_add_error = None;
 }
 
-/// The target half of the panel: the remote, the branch, and the **named state**
-/// of the ref the push would write.
-///
-/// Returns `true` when the panel has no target at all — a repository with no
-/// remote and no commits — which is what disables the footer's Push.
-///
-/// Three things a plain field pair cannot carry: it must never name a remote the
-/// repository does not have, it must offer a link where the reference offers a
-/// link, and it must state whether the push creates a ref or moves one that
-/// already exists rather than leaving that to be inferred from a branch name.
 fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
     widgets::group_title(ui, "TARGET");
 
-    // The root's facts are read once, owned: every arm below mutates
-    // `state.ui.dlg`, and a borrow of the manager held across one of those
-    // mutations is the compile error that would otherwise be a refactor.
     let root = state
         .selected_root
         .as_ref()
@@ -218,11 +142,6 @@ fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
     });
 
     if defining {
-        // The entry REPLACES the target rows rather than joining them. While
-        // the remote is undefined there is no push target to edit and no ref
-        // state to name, and a band that grew under the user would push the
-        // dialog's rows down the screen — and past the screen's bottom edge
-        // the window itself slides up, dragging every row above it with it.
         ui.horizontal(|ui| {
             ui.label("URL:");
             ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_url);
@@ -265,17 +184,11 @@ fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
     cannot_push
 }
 
-/// The `Define remote` link. Its ink is the style's own hyperlink token, which
-/// [`crate::theme::configure_style`] sets — naming a `Palette` constant here
-/// would put a second link colour in the tree, and this is the only slot in the
-/// app that is a link rather than a button.
 fn define_remote_link(ui: &mut Ui) -> egui::Response {
     let ink = ui.style().visuals.hyperlink_color;
     ui.add(egui::Button::new(RichText::new("Define remote").color(ink)).frame(false))
 }
 
-/// The severity a target state reads with: an empty repository is a caution,
-/// every other name is the plain fact it is.
 fn target_ink(target: sync_service::PushTargetState) -> egui::Color32 {
     match target {
         sync_service::PushTargetState::EmptyRepository => Palette::STATE_WARNING,
@@ -283,13 +196,6 @@ fn target_ink(target: sync_service::PushTargetState) -> egui::Color32 {
     }
 }
 
-/// The OPTIONS band: the four push flags, and the hint/warning strip under
-/// them.
-///
-/// The band sits DIRECTLY below the TARGET band, and that order is load-bearing:
-/// the target-state name the panel paints must be a galley strictly between the
-/// `Branch:` row and the `Force push (--force-with-lease)` row, which only
-/// holds while the two bands are neighbours in this order.
 fn options_band(
     ui: &mut Ui,
     state: &mut AppState,
@@ -321,9 +227,6 @@ fn options_band(
         );
     }
 
-    // Safety strip (issue #21): acknowledging force warns about
-    // history rewrite; naming a protected branch in the exact Branch
-    // field BLOCKS the ThisRepo path outright.
     if scope_is_this_repo {
         let branch = state.ui.dlg.push_branch.clone();
         let force_blocked =
@@ -346,7 +249,6 @@ fn options_band(
     }
 }
 
-/// The dry-run well: the aggregate line and the verbatim per-root reports.
 fn dry_run_well(ui: &mut Ui, preview: &PushPreview) {
     widgets::note(ui, None, |ui| {
         ui.label(
@@ -361,14 +263,10 @@ fn dry_run_well(ui: &mut Ui, preview: &PushPreview) {
     });
 }
 
-/// Resolved roots in the dialog's current PUSH SCOPE, minus the user's
-/// remediation exclusions (issue #25).
 fn scope_roots(state: &AppState) -> Vec<Root> {
     state.push_scope_roots()
 }
 
-/// Action button label (issue #25): "Push N commits to M repos", or bare
-/// "Push" when the scope is empty.
 fn action_label(scope: &[Root], total_commits: usize) -> String {
     let n = scope.len();
     if n == 0 {
@@ -394,19 +292,14 @@ fn scope_outgoing<'a>(state: &'a AppState, scope: &'a [Root]) -> Vec<(&'a Root, 
         .collect()
 }
 
-/// The scope's position in [`SCOPE_ORDER`].
 fn scope_index(scope: PushScope) -> usize {
     SCOPE_ORDER.iter().position(|s| *s == scope).unwrap_or(0)
 }
 
-/// The scope a segment index names.
 fn scope_from_index(index: usize) -> PushScope {
     SCOPE_ORDER.get(index).copied().unwrap_or(PushScope::All)
 }
 
-/// The four scope labels, in [`SCOPE_ORDER`] order, each carrying the count it
-/// would cover. One owner per count: the selection count, the subtree count and
-/// the all-roots count are read here and nowhere else.
 fn scope_labels(state: &AppState) -> [String; 4] {
     let selected = state.ui.repo_selection.len();
     let subtree = state
@@ -424,8 +317,6 @@ fn scope_labels(state: &AppState) -> [String; 4] {
     ]
 }
 
-/// Paint the PUSH SCOPE control (issue #25, screen 10): the four-way segmented
-/// picker, whose labels carry the counts each scope would cover.
 fn push_scope_control(ui: &mut Ui, state: &mut AppState) {
     let labels = scope_labels(state);
     let options: Vec<&str> = labels.iter().map(String::as_str).collect();
@@ -434,17 +325,11 @@ fn push_scope_control(ui: &mut Ui, state: &mut AppState) {
         let selected = scope_index(state.ui.dlg.push_scope);
         if let Some(index) = widgets::segmented_control(ui, &options, selected) {
             state.ui.dlg.push_scope = scope_from_index(index);
-            // The exclusions belonged to the scope the banner named; a new
-            // scope has none of them.
             state.ui.dlg.push_scope_excluded.clear();
         }
     });
 }
 
-/// Paint the protected-branch remediation banner (issue #25). Returns the
-/// number of in-scope protected roots after exclusions so callers can skip
-/// downstream handling. The banner names repos + matching pattern; the
-/// button excludes those repos and lets the push proceed for the rest.
 fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usize {
     let protected = sync_service::protected_roots(&state.settings, scope);
     if protected.is_empty() {
@@ -489,11 +374,6 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
     protected.len()
 }
 
-/// The two-pane body: COMMITS on the left, CHANGED FILES on the right.
-///
-/// The split is 55/45 — the file list needs less width than the commit
-/// subjects — and egui's `ui.columns` splits a row evenly, so the two panes
-/// are allocated explicitly here.
 fn push_panes(ui: &mut Ui, state: &mut AppState) {
     let row = ui.available_rect_before_wrap();
     let gap = ui.spacing().item_spacing.x;
@@ -523,8 +403,6 @@ fn push_panes(ui: &mut Ui, state: &mut AppState) {
     );
     changed_files_pane(&mut right, state);
 
-    // The divider between the panes, in the structural hairline: `RULE_CONTENT`
-    // aliases the surface the panes sit on, so a rule in that tone is not seen.
     let x = (left_rect.right() + right_rect.left()) / 2.0;
     widgets::edge_rule(
         ui.painter(),
@@ -537,8 +415,6 @@ fn push_panes(ui: &mut Ui, state: &mut AppState) {
     );
 }
 
-/// The COMMITS pane: the outgoing tree, its live selection counter, and the
-/// per-commit checkboxes.
 fn commits_pane(ui: &mut Ui, state: &mut AppState) {
     let snapshot = state
         .ui
@@ -552,9 +428,6 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState) {
         .map(|r| r.commits.as_ref().map_or(0, |c| c.len()))
         .sum();
     let selected_count = state.ui.dlg.push_selected_commits.len();
-    // The header is one row: the title on the left, the live count on the
-    // right, the way a list header carries its count. Two rows would spend a
-    // line of the dialog's height on a label.
     ui.horizontal(|ui| {
         widgets::group_title(ui, "COMMITS");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -619,16 +492,6 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// One commit row: the subject and its checkbox, the short ref and the
-/// metadata, all on one line.
-///
-/// The ref is a chip rather than a bare monospace label because the shared
-/// vocabulary owns the commit-reference mark, and the label it replaces spent
-/// the accent on a thing that is not an action.
-///
-/// The row is one line, not two: a two-line row measures 252 px for a four
-/// commit tree, and the pane body that would hold it does not fit a 600 px
-/// screen alongside the target, options and footer bands.
 fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
     let subject = c.subject();
     let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
@@ -648,7 +511,6 @@ fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
     });
 }
 
-/// Compact relative age for commit rows (display only).
 fn rel_time(epoch_secs: i64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -666,11 +528,7 @@ fn rel_time(epoch_secs: i64) -> String {
     }
 }
 
-/// The CHANGED FILES pane: the scope's changed files, filtered by the clicked
-/// root node ONLY (ADR-0006).
 fn changed_files_pane(ui: &mut Ui, state: &mut AppState) {
-    // One header row, like the COMMITS pane: the title on the left, what the
-    // preview is filtered to on the right.
     ui.horizontal(|ui| {
         widgets::group_title(ui, "CHANGED FILES");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -682,9 +540,6 @@ fn changed_files_pane(ui: &mut Ui, state: &mut AppState) {
         .id_salt("push_changed_files")
         .max_height(body_h)
         .show(ui, |ui| {
-            // The (root, commit) pairs are taken out first: the cache read wants
-            // the app state, and holding a borrow of `push_outgoing` across it
-            // would keep the two from coexisting.
             let wanted: Vec<(RootId, CommitId)> = state
                 .ui
                 .dlg
@@ -723,8 +578,6 @@ fn changed_files_pane(ui: &mut Ui, state: &mut AppState) {
         });
 }
 
-/// What the CHANGED FILES pane is showing: every root, or the one root the
-/// user clicked.
 fn preview_subject(state: &AppState) -> String {
     match &state.ui.dlg.push_preview_root {
         None => "All roots".to_string(),
@@ -750,8 +603,6 @@ fn change_letter(status: ChangeStatus) -> &'static str {
     }
 }
 
-/// The dialog's own reading of the commit selection: an unchecked older
-/// ancestor forces a full push.
 fn subset_push_state(state: &AppState) -> SubsetPushState {
     let outgoing_shas: Vec<String> = state
         .ui
@@ -768,7 +619,6 @@ fn subset_push_state(state: &AppState) -> SubsetPushState {
     sync_service::subset_push_state(&outgoing_shas, &state.ui.dlg.push_selected_commits)
 }
 
-/// Paint the verbatim per-root dry-run reports under the aggregate line
 fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
     let has_ok = preview.reports.iter().any(|(_, r)| r.is_ok());
     let has_err = preview.reports.iter().any(|(_, r)| r.is_err());
@@ -802,9 +652,6 @@ fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
         });
 }
 
-/// Run a REAL `git push --dry-run` per root in the resolved scope and store
-/// the aggregated preview. Verbatim per-root reports and a `N commits → R
-/// remotes · X refs · Y rejected` summary (issue #25).
 fn run_preview(state: &mut AppState) {
     let scope = scope_roots(state);
     let force = state.ui.dlg.force_push;
@@ -816,8 +663,6 @@ fn run_preview(state: &mut AppState) {
     let scope_commits = scope_outgoing(state, &scope);
     let total: usize = scope_commits.iter().map(|(_, cs)| cs.len()).sum();
 
-    // Single-root scope with the dialog's own Remote/Branch fields, or the
-    // per-root service for everything else — the engine work is the app's.
     let single = (scope.len() == 1 && state.ui.dlg.push_scope == PushScope::ThisRepo).then_some((
         state.ui.dlg.push_remote.as_str(),
         state.ui.dlg.push_branch.as_str(),
@@ -849,9 +694,6 @@ fn run_preview(state: &mut AppState) {
     });
 }
 
-/// Build the outgoing-commit snapshot once when the dialog opens. Seeds the
-/// commit-selection list with every outgoing SHA so an untouched dialog pushes
-/// everything ahead (issue #24).
 fn ensure_outgoing(state: &mut AppState) {
     if state.ui.dlg.push_outgoing.is_some() {
         return;
@@ -900,12 +742,6 @@ fn empty_signature() -> Signature {
     }
 }
 
-/// Prefill Remote/Branch from the selected root's tracking config. Only fills
-/// while a field is empty so user edits persist across redraws.
-///
-/// The remote half stays EMPTY for a repository that has no remote: a fabricated
-/// `origin` would paint a name the repository does not have, push at a remote
-/// nothing configured, and bury the one case the `Define remote` link exists for.
 fn ensure_target_defaults(state: &mut AppState) {
     let Some(id) = state.selected_root.clone() else {
         return;
@@ -931,15 +767,6 @@ fn ensure_target_defaults(state: &mut AppState) {
     }
 }
 
-/// Dispatch the push on a worker thread as a typed [`Operation::Push`], so a
-/// rejection can be classified and replayed.
-///
-/// The resolved scope drives the engine call — `push_roots` for multi-repo
-/// scopes (with each root's per-call remote resolution and protected-branch
-/// gating), and `push` for the single-repo `ThisRepo` path with explicit
-/// Remote/Branch fields. Subset selection narrows per root only when the
-/// selection is a suffix of the full outgoing list; a non-suffix selection falls
-/// back to a full push rather than pushing the wrong set.
 fn execute_push(state: &mut AppState) {
     let scope = scope_roots(state);
     let narrowed_sha: Option<String> = match &state.ui.dlg.push_subset {
@@ -952,9 +779,6 @@ fn execute_push(state: &mut AppState) {
     state.dispatch_push(request, None);
 }
 
-/// Build the [`PushRequest`] the resolved scope describes, or `None` when there
-/// is nothing to push. Shared with the no-dialog push verb, which
-/// runs the same request against the same scope rules.
 pub(crate) fn push_request(
     state: &AppState,
     scope: &[Root],

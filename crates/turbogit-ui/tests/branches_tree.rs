@@ -28,7 +28,6 @@ fn root_with_counts(id: &str, remote_count: usize, branch_count: usize) -> Root 
                 ahead: 0,
                 behind: 0,
                 gone: false,
-                // Old refs must count just like fresh ones in a long-lived repo.
                 last_touched: chrono::DateTime::from_timestamp(1_000, 0),
                 tip: None,
                 remote: Some(format!("remote-{}", i % remote_count.max(1))),
@@ -66,8 +65,6 @@ fn rollup_pluralizes_zero_one_and_many_remotes_and_branches() {
     }
 }
 
-/// The builder is asked per repository, so a rolled-up repo contributes no
-/// remote nodes while its neighbour's are built.
 #[test]
 fn the_reveal_predicate_is_asked_per_repository() {
     let roots = [

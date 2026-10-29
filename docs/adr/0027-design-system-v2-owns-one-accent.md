@@ -2,7 +2,7 @@
 
 The Local Changes redesign turned out to change more than one screen. The design it
 was drawn to removed nested card borders, collapsed several competing blues into one
-accent, and split the type ramp so hierarchy exists at all — and every one of those is
+accent, and split the type ramp so hierarchy exists at all, and every one of those is
 a **design-system** decision, not a Changes-screen decision. `theme.rs` and
 `docs/design-system-roles.md` are where they are owned.
 
@@ -25,28 +25,28 @@ was already had rather than re-derive it.
 
 These rules **amend** the design contract rather than replacing it. The dark-only
 palette (`ADR-0003`), the embedded data face (`ADR-0002`), the 24px minimum click
-target, "no shadows — separation comes from surface colour", and the
+target, "no shadows, separation comes from surface colour", and the
 monospace-for-data / proportional-for-chrome split all survive untouched, and the
 migrations that carry them name no change.
 
-### R1 — One accent
+### R1. One accent
 
 `Palette::BRAND #3574F0` may fill **only** the view's single primary action button, the
 active tab underline, and a selected row's 2px leading rail. It is never a fill behind
 running text, never a chip, never a state.
 
 This kills the solid `SELECTION`-filled branch pill, the solid `BRAND` "Current" pill,
-and the `Palette::BRAND` worktree branch label. The readable accent *inks* —
-`ACCENT_TEXT #8BB5F5` and `LINK #74A3E8` — are unaffected: R1 constrains fills, and ink
+and the `Palette::BRAND` worktree branch label. The readable accent *inks*,
+`ACCENT_TEXT #8BB5F5` and `LINK #74A3E8`, are unaffected: R1 constrains fills, and ink
 is how a colour is allowed to touch text.
 
 The number that settles the boundary is the accent's own contrast on the content
 surface: 3.6:1. That is what a rail is for and what a fill behind running text is not
 for. It is the same boundary the design-token suite asserts, and the current chip
-below is the one documented exception — "this is the current ref" is a fact about a
+below is the one documented exception, "this is the current ref" is a fact about a
 ref, not a call to action.
 
-**Rejected: one accent *family* — a small tinted ramp derived from `BRAND` (70% for
+**Rejected: one accent *family*, a small tinted ramp derived from `BRAND` (70% for
 pills, 40% for hovers, 20% for rails), so identity and state share a hue and nothing
 has to be grey.** Rejected because the moment the accent is three tints, the screen has
 three blue objects and none of them is "the thing you press". Tinting is the treatment
@@ -56,11 +56,11 @@ this migration is removing, not an alternative to it.
 Rejected for the same reason the borders went: a value stops carrying meaning the
 moment everything has one, and the eye parses the set before the content.
 
-### R2 — Cards are surfaces, not boxes
+### R2. Cards are surfaces, not boxes
 
 A content region is `CONTENT_BG #232529` at `CARD_RADIUS 8` with **no stroke**. Regions
 inside a card divide by spacing and at most one `DIVIDER #2B2D30` hairline. A 1px
-stroke means *this floats* — popovers, dialogs, menus, toasts — and nothing else.
+stroke means *this floats*, popovers, dialogs, menus, toasts, and nothing else.
 `widgets::window_stroke` already implements that half.
 
 Card padding is the panel padding and **does not change in this migration**; that is
@@ -72,7 +72,7 @@ change. The consequence that *is* a change is negative: removing a stroke must m
 pane's content, so each carded region's inner content rect ends up identical minus the
 stroke's two pixels, and that is asserted rather than eyeballed.)
 
-**Rejected: keep the card stroke but weaken it** — a 1px line at lower contrast, or at
+**Rejected: keep the card stroke but weaken it**, a 1px line at lower contrast, or at
 `RULE_CONTENT`'s tone rather than `LINE`. Rejected for the reason above, restated
 precisely: the stroke is not too strong, it is too *many*. Five nested borders is not a
 contrast problem.
@@ -82,16 +82,16 @@ ones per screen.** Rejected: that leaves the inner boxes to an argument per view
 is the argument this migration exists to end.
 
 **Rejected: a shadow or a lifted fill instead of the border.** Rejected as already
-settled — `ui::components`'s module contract ("no shadows anywhere, separation comes
-from surface colour") — and R2 applies the same principle to borders: separation is
+settled, `ui::components`'s module contract ("no shadows anywhere, separation comes
+from surface colour"), and R2 applies the same principle to borders: separation is
 carried by surface tone.
 
-**Rejected: a card with no stroke *and* no padding variation** — a flat sheet of colour
+**Rejected: a card with no stroke *and* no padding variation**, a flat sheet of colour
 with no internal structure. Rejected: the card's job is to be a region you can see, and
 R2's answer is that the region is carried by the fill and the padding, with at most one
 hairline inside it.
 
-### R3 — Ink is a four-step ramp
+### R3. Ink is a four-step ramp
 
 | Role | Token | On `CONTENT_BG` | Use |
 | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ token that is named for the restriction can be asserted.
 `INK_3`'s documented contract also **narrows**, and that is the part worth reading: it
 stops being legal everywhere. It is legal on the app background, the panel background
 and the content surface; on a *raised or selected* surface the caller steps up to
-`INK_2`. This is R5's insight applied to ink instead of fills — a value's legality
+`INK_2`. This is R5's insight applied to ink instead of fills, a value's legality
 depends on the surface it sits on.
 
 **Rejected: keep two muted steps and get hierarchy from size, weight and case alone.**
@@ -122,7 +122,7 @@ separate include a 9px column header and an 11px metadata value, and no amount o
 distinguishes an 11px label from an 11px value. Hierarchy needs a value.
 
 **Rejected: leave `INK_3` at `#AEB2BA` and add a new dim token underneath it.**
-Rejected because the current value is not illegible — it is *indistinguishable* from
+Rejected because the current value is not illegible, it is *indistinguishable* from
 `INK_2` (1.01:1 between them), which is the actual defect. Adding a fifth step below an
 undistinguished third step produces a five-step ramp with a hole in the middle.
 
@@ -131,14 +131,14 @@ roles in the table need, and a fifth is a token whose only argument for existing
 it exists.
 
 **Correction to the plan.** The plan's ticket for this ramp also listed replacing
-`#7E838C` literals. That literal no longer exists anywhere in the tree — the recent UI
-refactors removed it — so only the token change remains and the literal sweep is dropped
+`#7E838C` literals. That literal no longer exists anywhere in the tree, the recent UI
+refactors removed it, so only the token change remains and the literal sweep is dropped
 as already-done work.
 
-### R4 — Selection is a composite, not a saturated fill
+### R4. Selection is a composite, not a saturated fill
 
-A selected list row is `ROW_SELECTED #243456` — the opaque equivalent of the existing
-translucent `Palette::selection_bg()` composite — **plus** a 2px `Palette::BRAND` rail at
+A selected list row is `ROW_SELECTED #243456`, the opaque equivalent of the existing
+translucent `Palette::selection_bg()` composite, **plus** a 2px `Palette::BRAND` rail at
 the row's leading edge. Ink does not invert: a selected row's text is the colour an
 unselected row's text is, so selecting a row does not cost the user the ability to read
 it. `Palette::SELECTION #2E4369` is **not deleted**; its scope narrows to the heavier
@@ -157,8 +157,8 @@ duplicate of another and keeps the distinctions that carry meaning.
 **Rejected: a saturated brand fill for the selected row**, which is what
 `RowState::BrandSelected` and the `RowState::from_flags(selected, hovered)` constructor
 hand every hand-painted row today. Rejected because the loudest blue in the app would
-then be the default selection for hand-painted rows — it out-shouts the primary button
-and the accent stops meaning *press this* — and because it also forces the ink to invert
+then be the default selection for hand-painted rows, it out-shouts the primary button
+and the accent stops meaning *press this*, and because it also forces the ink to invert
 for legibility, which is a second cost bought for no gain.
 
 **Rejected: the flat `ROW_SELECTED` fill with no rail.** Rejected: at 1.24:1 against
@@ -171,7 +171,7 @@ Rejected: the current-ref band is a *fact about a ref*, and keeping the value wh
 narrowing its scope costs one documented line and migrates no call site. The row-fill
 decision asserts the narrowing where it is made rather than by a sweep.
 
-### R5 — Raised controls step up relative to their own surface
+### R5. Raised controls step up relative to their own surface
 
 | The surface the control sits on | Raised fill |
 | --- | --- |
@@ -182,7 +182,7 @@ A control that does not step up from the surface it actually sits on is invisibl
 this is currently decided per call site and drifts. The role is a **name** rather than a
 constant precisely so that R5 is a rule and not a per-call-site judgement.
 
-**Rejected: one raised token for the whole app** — keep `SURFACE` everywhere, or promote
+**Rejected: one raised token for the whole app**, keep `SURFACE` everywhere, or promote
 `SURFACE_2` everywhere. Rejected on the arithmetic: `SURFACE` on a `CONTENT_BG` card is
 almost the card, and `SURFACE_2` on the app background is a step the hover role already
 makes correctly. One value cannot be right on both surfaces, so the role is a mapping.
@@ -193,9 +193,9 @@ button vanishes into a card, and a document cannot assert.
 
 **Rejected: derive the raised fill automatically from whatever the widget is painted
 over.** Rejected: the surface a control sits on is a token the *caller* chose, so a
-widget cannot read it back — it has to be handed it, which is what the named role is.
+widget cannot read it back, it has to be handed it, which is what the named role is.
 
-### R6 — Ref chips are neutral; state is coloured
+### R6. Ref chips are neutral; state is coloured
 
 One `ref_chip()`: raised-on-card fill, `INK_2` text, `CHIP_RADIUS 3`, `TYPE_CHIP 10`,
 monospaced face, because it holds a ref name. Used by branch names, remote refs,
@@ -205,7 +205,7 @@ The chip vocabulary is **closed at three**: the ref chip above; the **current ch
 which is the selected-row fill with accent text and is the *only* chip permitted to
 carry the accent, because "this is the current ref" is a fact about a ref rather than a
 call to action; and the **count chip**, the raised fill with secondary monospaced ink,
-for the ad-hoc counters — including every counter that was borrowing the reserved
+for the ad-hoc counters, including every counter that was borrowing the reserved
 counter orange for something that was not a dirt or unpushed count.
 
 Semantic state is **not a chip**. `dirty`, `↓ 2 behind`, `Up to date` and
@@ -216,27 +216,27 @@ the branches screen.
 A ref chip that is a *label* does not gain a click plane: `widgets::hash_chip` is a
 label by decision (`ADR-0024` moved copying to the commit menu) and a ref chip inherits
 that. A chip that is a **control** is a different thing and says so in its own
-accessibility node — see the branches scope chip under *The two named reversals*.
+accessibility node, see the branches scope chip under *The two named reversals*.
 
-**Rejected: a status-coloured chip vocabulary — one chip per state, so the colour is a
+**Rejected: a status-coloured chip vocabulary, one chip per state, so the colour is a
 legend.** Rejected: a filled pill per state is the badge soup this migration removes,
 and the same fact is just as readable as coloured text at the same ink step. It also
 makes "a chip" mean five things, which is the v1 complaint restated.
 
 **Rejected: make the current-branch pill neutral like every other chip, and drop the
 distinction.** Rejected: the distinction is real (a current branch is a repository fact,
-not a pointer state) and the current chip carries it without introducing a second blue —
+not a pointer state) and the current chip carries it without introducing a second blue,
 the selected-row fill does the work.
 
-**Rejected: no chips at all — refs as bare monospaced text.** Rejected: the complaint is
+**Rejected: no chips at all, refs as bare monospaced text.** Rejected: the complaint is
 that four *different* chips existed, not that chips existed. The chip is what makes a
 ref scannable down a column, and the ref-chip role is what makes that one decision
 rather than five.
 
-### R7 — One pane-chrome vocabulary
+### R7. One pane-chrome vocabulary
 
-Every tool pane — the log's branches strip, worktrees, submodules, and the changes
-card — uses, in this order: a 9px tracked `INK_3` title, an optional count chip, a
+Every tool pane, the log's branches strip, worktrees, submodules, and the changes
+card, uses, in this order: a 9px tracked `INK_3` title, an optional count chip, a
 right-aligned action slot, one hairline, then content. Column-oriented panes (the log's
 commit table, worktrees, submodules) add one shared column-header row: 9px tracked
 `INK_3` over a `RULE_STRUCTURAL` underline. The header and the data rows derive their
@@ -263,8 +263,8 @@ grows a rail places it identically.
 virtualised: its own row allocation, its own measured pitch, its own eliding and its own
 paint helpers that bypass the shared vocabulary entirely. Routing it through a row shell
 that re-measures per row would be a rewrite of the hottest path in the app. So the row
-shell takes a variant that accepts an already-allocated rect — the log keeps its pitch
-and its virtualisation and shares the fills, the rail and the ink ramp — and log
+shell takes a variant that accepts an already-allocated rect, the log keeps its pitch
+and its virtualisation and shares the fills, the rail and the ink ramp, and log
 conformance lands last in the view phase for the same reason.
 
 **Rejected: fix each pane's header separately.** Rejected for the argument R1 and R2
@@ -276,7 +276,7 @@ it is a title/action strip with no count chip and no column-header row, and the 
 pane's title case is a fifth variant of the same idea. Promoting it would enshrine a
 shape that was never drawn at this size.
 
-**Rejected: a configurable pane header** — caller-supplied title, optional count,
+**Rejected: a configurable pane header**, caller-supplied title, optional count,
 optional action slot, optional second line. Rejected on the non-negotiable boundary this
 document already states: a configuration-heavy universal widget is how a chip becomes a
 row and an alert becomes a toast. The slots are fixed and the vocabulary is one.
@@ -300,15 +300,15 @@ plan and the tickets are the working documents and are gitignored, so this recor
 
 | Rule | Lands in |
 | --- | --- |
-| R1 | 05 (chip vocabulary), 07 (rail), and every view ticket — 09, 10, 12, 16, 17, 18, 19 |
+| R1 | 05 (chip vocabulary), 07 (rail), and every view ticket09, 10, 12, 16, 17, 18, 19 |
 | R2 | 04 (card), 19 (shell, sidebar, dialogs) |
 | R3 | 02 (tokens), then 06 (column ink) and every view ticket |
 | R4 | 03 (token, rail width, row-state narrowing), 07 (rail painter), 14 (log variant) |
 | R5 | 03 (raised-on-card role), 04 (card surface) |
 | R6 | 05 (chip vocabulary), 07 (state marks), 16, 17, 18 |
 | R7 | 06 (pane and column chrome), 07 (row shell), 13 (log chrome), 14, 16, 17, 18, 19 |
-| Reversal recorded and implemented | 16 (branches scope chip) — landed; the "not a chip" comment at the call site is replaced, not deleted, so the reversal is readable where the code is |
-| Rationale confirmed and implemented | 18 (submodules status text and its state dot) — landed; the "not a chip" comment survives byte-intact and the dot is a mark, not a chip |
+| Reversal recorded and implemented | 16 (branches scope chip), landed; the "not a chip" comment at the call site is replaced, not deleted, so the reversal is readable where the code is |
+| Rationale confirmed and implemented | 18 (submodules status text and its state dot), landed; the "not a chip" comment survives byte-intact and the dot is a mark, not a chip |
 
 All twenty-one tickets have landed. A rule in this table is **decided** and a call site
 it sweeps is conformed; `docs/design-system-roles.md` carries the same mapping next to
@@ -328,7 +328,7 @@ by reviewing the regenerated captures against the frames rather than by reading.
 is authoritative for composition, hierarchy, spacing and the *identity* of what a screen
 shows. It is **stale on any axis this ADR changed**, because it necessarily depicts the
 v1 treatment there. Where they disagree on such an axis, the frame is the artefact that
-is out of date — not the code.
+is out of date, not the code.
 
 This is not ADR 0016 being overridden. It is this ADR applying the same precedence
 principle to itself: the design system's own rules are the design system's authority,
@@ -337,7 +337,7 @@ are still worth regenerating: a capture compared against a stale frame produces 
 confusing diff, and saying which axis is stale is what makes the comparison honest.
 
 **The one axis where the frames are demonstrably stale today.** The Log frame (`3:333`)
-paints the selected commit row as a **solid saturated blue band with inverted text** —
+paints the selected commit row as a **solid saturated blue band with inverted text**,
 exactly the treatment R4 removes, and the reason R4 exists (it was, with the Commit
 button, one of the loudest things in the app). The shipped render paints the
 row-selected fill `#243456` plus a 2px `BRAND` rail at the leading edge, with the row's
@@ -347,7 +347,7 @@ selection; R4 is the decision, and the capture is the evidence.**
 **The one axis where the code is out of conformance, recorded rather than absorbed.**
 All five frames depict a **different shell** from the one that shipped: a 244 px sidebar
 (the code's is 280 px), tool panes drawn as separated rounded cards with 10 px gutters
-(the code draws them edge to edge with 1 px rules), and a `#1E2023` page background —
+(the code draws them edge to edge with 1 px rules), and a `#1E2023` page background,
 which is the `PANEL_BG` token this migration **deleted** in its dead-token sweep. That
 is a real and systematic divergence, not a nit, and it is **not** fixed here: the shell
 was out of scope for all twenty-one tickets, and a sweep that "conformed" the shell to a
@@ -365,20 +365,20 @@ Two decisions this repo already made **in writing** are affected, and both are r
 in full in `docs/design-system-roles.md`, which is where the argument lives because the
 two code comments that touch it are near-identical and cannot be told apart:
 
-- **`ui::branches::scope_label` — reversed.** The comment says it is "not a chip, and
+- **`ui::branches::scope_label`, reversed.** The comment says it is "not a chip, and
   deliberately not one", because a background would newly register an accessibility
   node for a piece of status text. **R7 overrode it**, and the reversal answers the
   argument rather than overruling it: under R7 the pane's scope is a **control**, not
-  status text — R7 gives every tool pane one chrome row with a right-aligned action slot,
+  status text. R7 gives every tool pane one chrome row with a right-aligned action slot,
   and a pane whose scope is a *filter* has to express that filter in that row as
   something you can act on. An accessibility node for a control that changes the
   repository filter is the affordance, not a side effect. Ticket 16 implements it and
   **must delete or rewrite the comment it reverses**; until then the comment and this
   record disagree, and this record is the one that says so.
-- **`ui::submodules::status_label` — kept.** The same comment, the same reason, and
+- **`ui::submodules::status_label`, kept.** The same comment, the same reason, and
   **no rule overrode it: R6 ratifies it**, because R6 says semantic state renders as
   coloured text or a dot and never as a filled pill. The leading state dot ticket 18
-  adds to that row is a **mark**, not a chip — a filled circle, no fill rect, no radius,
+  adds to that row is a **mark**, not a chip, a filled circle, no fill rect, no radius,
   no chip geometry, no node of its own. The comment stays, and it stays true of the code
   it describes.
 
@@ -388,12 +388,12 @@ two code comments that touch it are near-identical and cannot be told apart:
   and record the retirements and narrowings this ADR makes. The "similar names with
   different roles" catalogue is deliberately left intact: v2 narrows roles, it does not
   delete the vocabulary that keeps two similar names apart.
-- **Amends `ADR-0016`'s correction paragraph** — by amending that file, not by
+- **Amends `ADR-0016`'s correction paragraph**, by amending that file, not by
   superseding it. The five Ardot target frames (Local Changes `3:1`, Log `3:333`,
   Branches `3:664`, Worktrees `3:995`, Submodules `3:1326`, one design file) are the
   approved visuals for their five screens, so the acceptance captures for those screens
   become regenerated artefacts rather than the authority, and the captures re-render at
-  1440×900 — the size the design was drawn and validated at.
+  1440×900, the size the design was drawn and validated at.
 - **Extends `ADR-0003` (dark-only).** Still exactly one palette; R3 adds two steps to it
   and no mode returns.
 - **Extends `ADR-0002` (embedded JetBrains Mono).** R6's ref chip is monospaced *because*
@@ -408,7 +408,7 @@ two code comments that touch it are near-identical and cannot be told apart:
   and pane-chrome work is presentation only.
 - **Does not touch `ADR-0026`'s frame budget.** R7's log exception exists so that it
   does not.
-- **Does not touch the deferred architectural work** — executor injection, splitting
+- **Does not touch the deferred architectural work**, executor injection, splitting
   `GitExecutor`, decomposing UI state. None of it is a prerequisite, and none of it is
   scheduled here.
 
@@ -422,12 +422,12 @@ two code comments that touch it are near-identical and cannot be told apart:
   baselines that mix old and new chrome.
 - **Put the seven rules in the code comments at each call site.** Rejected: a rule
   enforced at twenty call sites is twenty rules that can drift, and the two "not a chip"
-  comments this migration reverses are the proof — a rule with no definition gets applied
+  comments this migration reverses are the proof, a rule with no definition gets applied
   by contradiction. One definition, in the token layer, asserted as maths and as painted
   output.
 - **Keep the rules in this ADR and delete `docs/design-system-roles.md` as the second
-  source of truth.** Rejected: the roles document answers a different question — which
-  similar names must stay apart, and who owns what — and that catalogue is what stops a
+  source of truth.** Rejected: the roles document answers a different question, which
+  similar names must stay apart, and who owns what, and that catalogue is what stops a
   future sweep from folding a chip into a row. Two documents, one rule set, each with
   one job.
 - **Make the acceptance captures continue to outrank the design, at 1280×800.** Rejected
@@ -455,7 +455,7 @@ the only durable place they survive.
   defect rather than an empty fixture. The capture currently ratifies a merge editor
   that displays no merge.
 - **`06-push-dialog` captures an empty push** ("No outgoing commits"), so no capture
-  observes the dialog's populated state — the state the dialog exists to show.
+  observes the dialog's populated state, the state the dialog exists to show.
 - **The status bar does not paint on any repo-backed page**, though all five frames show
   one. `show_status_bar` defaults to `true`, so something in the repo-backed layout is
   claiming the band.
@@ -475,7 +475,7 @@ the only durable place they survive.
   the link colour, the accent-text colour, every radius and every height stay exactly as
   they are. A ticket that changes a value not in that list is arguing with this ADR.
 - **The added accent is the one token whose contrast was measured and found failing on
-  the surfaces the palette audits** — 4.33:1 → 5.84:1 on `CONTENT_BG`, a real correction
+  the surfaces the palette audits**, 4.33:1 → 5.84:1 on `CONTENT_BG`, a real correction
   rather than a preference, and it is the same token as the added-file accent, which is
   why the diff pane's own palette is touched by exactly one value.
   *(The spec says 4.21:1 → 5.72:1 and calls this "the only token in the palette that
@@ -491,8 +491,8 @@ the only durable place they survive.
 - **A stroke in the app now means "this floats"**, and that is assertable at the sites a
   test enumerates: the default card paints no stroked rect, and every surface that does
   stroke is a popup, a dialog, a menu or a toast.
-- **Two rules are negative** — "no list row fills with the selection token", "no raised
-  control on a content card uses the wrong fill" — and a render seam can only prove those
+- **Two rules are negative**, "no list row fills with the selection token", "no raised
+  control on a content card uses the wrong fill", and a render seam can only prove those
   at the sites a suite enumerates. They are pinned at their **construction sites**
   instead: the row-fill decision, the raised-control role, the chip constructors.
 - **The capture set and the design set now have a written precedence per screen**, which

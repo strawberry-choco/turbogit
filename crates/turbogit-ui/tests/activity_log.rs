@@ -1,13 +1,3 @@
-//! Issue #04 — Activity log panel: the collapsible bottom-of-shell panel.
-//!
-//! Headless egui_kittest harness driving the production
-//! [`turbogit_ui::ui::render`] over a real temp git repository. Entries are
-//! planted through the public [`turbogit_app::activity::ActivityLog`] API
-//! (the same surface `AppState` appends through); the end-to-end test drives
-//! a real fetch from the command palette's `Fetch` action (the topbar button
-//! that once triggered it is gone). Assertions are on painted text and
-//! public state transitions — never on internals.
-
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -21,14 +11,6 @@ use test_support::harness::{
 use turbogit_app::activity::{ActivityEntry, ActivityKind, TimeWindow};
 use turbogit_app::state::AppState;
 
-// --- git fixture ---------------------------------------------------------------
-
-/// One bare local remote (`origin`) plus one local repo `alpha` on `main`
-/// with `origin` configured, so a palette Fetch is a real, valid operation.
-///
-/// Verbatim `repo_with_origin`'s shape, so the shared recipe owns it. The bare's path
-/// is a filesystem detail, not a remote name; the only name either version knows is
-/// `origin`, which is what the palette Fetch reads.
 fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -36,10 +18,6 @@ fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     (tmp, project, alpha)
 }
 
-// --- harness -------------------------------------------------------------------
-
-/// The shared `shell_harness_over`: dark tokens every frame, embedded fonts once,
-/// worker events drained every frame exactly as `src/app.rs` does.
 fn activity_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
@@ -53,9 +31,6 @@ fn entry(minutes_ago: i64, repo: Option<&str>, message: &str, kind: ActivityKind
     }
 }
 
-/// Plant entries through the public ActivityLog API, expand the panel (the
-/// same click a user performs — the panel defaults collapsed so short
-/// displays keep their tool-window space), and settle.
 fn plant(harness: &mut Harness<'_, turbogit_app::state::AppState>, entries: Vec<ActivityEntry>) {
     {
         let st = harness.state_mut();
@@ -67,11 +42,6 @@ fn plant(harness: &mut Harness<'_, turbogit_app::state::AppState>, entries: Vec<
     settle_quiet(harness);
 }
 
-// --- tests ---------------------------------------------------------------------
-
-/// Contract: the expanded panel paints each entry's timestamp, repo, and
-/// human-readable outcome; the header carries the LOG title and the
-/// filter/clear controls.
 #[test]
 fn panel_paints_entries_with_timestamp_repo_and_outcome() {
     let (_tmp, project, _alpha) = repo_project();
@@ -94,13 +64,10 @@ fn panel_paints_entries_with_timestamp_repo_and_outcome() {
     assert_painted(&harness, "Fetch from origin");
     assert_painted(&harness, "Push origin/main: rejected");
     assert_painted(&harness, "alpha");
-    // Filter + clear controls of the header.
     assert_painted(&harness, "All repos");
     assert_painted(&harness, "All time");
     assert_painted(&harness, "Clear feed");
 
-    // Severity mapping is a design-token contract: each activity kind
-    // paints with its STATE_* token.
     assert_eq!(
         turbogit_ui::ui::activity_panel::kind_color(ActivityKind::Success),
         turbogit_ui::theme::Palette::STATE_SUCCESS
@@ -115,8 +82,6 @@ fn panel_paints_entries_with_timestamp_repo_and_outcome() {
     );
 }
 
-/// Contract: an empty expanded feed shows a quiet empty hint, not a blank
-/// strip.
 #[test]
 fn empty_feed_paints_a_hint() {
     let (_tmp, project, _alpha) = repo_project();
@@ -127,8 +92,6 @@ fn empty_feed_paints_a_hint() {
     assert_painted(&harness, "No activity yet");
 }
 
-/// Contract: collapsing hides the entries but keeps them; expanding shows
-/// them again. The collapse/expand toggle is the "Activity log" control.
 #[test]
 fn collapse_and_expand_retain_entries() {
     let (_tmp, project, _alpha) = repo_project();
@@ -150,10 +113,8 @@ fn collapse_and_expand_retain_entries() {
     settle_quiet(&mut harness);
     assert!(!harness.state().ui.activity.expanded);
     assert_not_painted(&harness, "Fetch from origin");
-    // Collapsed header strip is still visible.
     assert_painted(&harness, "LOG");
 
-    // The entries survive the collapse (session-durable feed).
     assert_eq!(harness.state().ui.activity.entries.len(), 1);
 
     harness.get_by_label("Expand log").click();
@@ -162,8 +123,6 @@ fn collapse_and_expand_retain_entries() {
     assert_painted(&harness, "Fetch from origin");
 }
 
-/// Contract: Clear empties the feed — the painted entries disappear and the
-/// store is empty.
 #[test]
 fn clear_empties_the_feed() {
     let (_tmp, project, _alpha) = repo_project();
@@ -188,8 +147,6 @@ fn clear_empties_the_feed() {
     assert_painted(&harness, "No activity yet");
 }
 
-/// Contract: the repo filter cycles (All repos → alpha → …) and narrows the
-/// visible feed to the chosen repo's entries.
 #[test]
 fn repo_filter_narrows_the_painted_feed() {
     let (_tmp, project, _alpha) = repo_project();
@@ -208,8 +165,6 @@ fn repo_filter_narrows_the_painted_feed() {
     harness.get_by_label("All repos").click();
     settle_quiet(&mut harness);
 
-    // Cycled to the only registered root (alpha): alpha's entries stay,
-    // beta's disappear from the feed (the store still holds them).
     assert_eq!(
         harness.state().ui.activity.repo_filter.as_deref(),
         Some("alpha")
@@ -219,8 +174,6 @@ fn repo_filter_narrows_the_painted_feed() {
     assert_eq!(harness.state().ui.activity.entries.len(), 2);
 }
 
-/// Contract: the time-window filter cycles (All time → Last 30 min) and
-/// hides entries older than the window.
 #[test]
 fn time_window_filter_hides_old_entries() {
     let (_tmp, project, _alpha) = repo_project();
@@ -244,17 +197,6 @@ fn time_window_filter_hides_old_entries() {
     assert_not_painted(&harness, "old fetch");
 }
 
-/// Contract: the header's title chip is one interactive rect that *contains*
-/// its own painted chevron, and clicking the glyph toggles the panel.
-///
-/// Regression guard: the old toggle allocated the 16px click target and let
-/// `icons::icon` allocate its slot beside it, so the visible chevron was
-/// painted ~24px right of the hit rect — the control a user aims at was dead,
-/// and only an invisible box to its left answered. kittest clicks the a11y
-/// rect's centre, which sat in that invisible box, so the suite never
-/// noticed. Both halves of this test would fail on that layout: the glyph's
-/// bbox no longer intersects the hit rect, and the raw click at the glyph
-/// centre no longer toggles.
 #[test]
 fn toggle_hit_target_contains_the_painted_chevron() {
     let (_tmp, project, _alpha) = repo_project();
@@ -263,8 +205,6 @@ fn toggle_hit_target_contains_the_painted_chevron() {
 
     let hit = harness.get_by_label("Expand log").rect();
 
-    // The chevron is the only INK_2-stroked glyph near the toggle; require
-    // its painted bbox to sit inside the interactive rect, not beside it.
     let ink2 = turbogit_ui::theme::Palette::INK_2;
     let inside: Vec<_> = test_support::harness::painted_paths(&harness)
         .into_iter()
@@ -277,8 +217,6 @@ fn toggle_hit_target_contains_the_painted_chevron() {
          rect {hit:?}; INK_2 paths inside: {inside:?}"
     );
 
-    // Click where a human would — on the visible chevron — and the panel
-    // must open.
     let glyph = inside[0].0.center();
     harness.event(egui::Event::PointerMoved(glyph));
     for pressed in [true, false] {
@@ -330,26 +268,12 @@ fn corner_radius_at<S>(
     radii[0]
 }
 
-/// Contract (issue 06): the title control paints ONE corner radius for both
-/// its hover fill and its focus ring, so a control that is focused *and*
-/// hovered shows a ring that follows the shape of the fill inside it.
-///
-/// The ring's radius is the app-wide `focus_ring` contract
-/// (`CONTROL_RADIUS`), so the fill is the side that gets reconciled — every
-/// vocabulary button paints fill and ring at
-/// `CornerRadius::same(CONTROL_RADIUS)`. The control's other preserved traits
-/// (hover-only affordance, the deliberately shaped hit rect, the toggle, its
-/// id and a11y label) are guarded by
-/// `toggle_hit_target_contains_the_painted_chevron` and the collapse/expand
-/// tests above.
 #[test]
 fn title_control_hover_fill_and_focus_ring_share_one_radius() {
     let (_tmp, project, _alpha) = repo_project();
     let mut harness = activity_harness(project);
     settle_quiet(&mut harness);
 
-    // Focus, then hover, so the fill and the ring are both in one frame's
-    // painted output and can be read off the same `FullOutput`.
     harness.get_by_label("Expand log").focus();
     settle_quiet(&mut harness);
     let hit = harness.get_by_label("Expand log").rect();
@@ -359,8 +283,6 @@ fn title_control_hover_fill_and_focus_ring_share_one_radius() {
     let fill = corner_radius_at(&harness, hit, "title control hover fill", |rs| {
         rs.fill == turbogit_ui::theme::Palette::SURFACE_2
     });
-    // The ring is stroked 1px outside the control rect (StrokeKind::Outside
-    // on `response.rect.expand(1.0)`), so it lands one pixel out.
     let ring = corner_radius_at(
         &harness,
         hit.expand(1.0),
@@ -385,8 +307,6 @@ fn title_control_hover_fill_and_focus_ring_share_one_radius() {
     );
 }
 
-/// Contract (end to end): a real fetch dispatched from the command palette
-/// lands in the activity panel — the OpCompleted → entry → paint pipeline.
 #[test]
 fn real_fetch_lands_in_the_panel() {
     let (_tmp, project, _alpha) = repo_project();
@@ -395,17 +315,12 @@ fn real_fetch_lands_in_the_panel() {
 
     harness.state_mut().ui.activity.expanded = true;
     settle_quiet(&mut harness);
-    // The topbar's Fetch button is gone, so the palette's `Fetch` action is
-    // the sync entry point (same `Action` the frozen shortcuts and the VCS
-    // popup share).
     harness.state_mut().ui.command_palette = true;
     harness.state_mut().ui.command_query = "fetch".to_string();
     settle_quiet(&mut harness);
     harness.get_by_label("Fetch").click();
     settle_quiet(&mut harness);
 
-    // The palette dispatches the op labeled "Fetch"; the entry honestly names
-    // what the fetch changed (issue 13) — never a bare "Fetch" success.
     let mut landed = false;
     for _ in 0..300 {
         harness.step();
@@ -427,12 +342,6 @@ fn real_fetch_lands_in_the_panel() {
         "real fetch should be recorded as an activity entry; entries: {:?}",
         harness.state().ui.activity.entries
     );
-    // The new entry is visible in the painted feed: its repo label (alpha)
-    // and the outcome it reported sit on one painted row. This is asserted
-    // against the row rather than as a raw whole-frame occurrence count,
-    // because the two other surfaces that used to print a second `alpha` —
-    // the now-deleted repo header's breadcrumb and, at this width, the
-    // sidebar (off screen below `MIN_SIDEBAR_WINDOW_WIDTH`) — are gone.
     let galleys = painted_galleys(&harness);
     let outcome = galleys
         .iter()

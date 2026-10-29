@@ -1,11 +1,3 @@
-//! Contract tests for the shared menu item primitive (`ui::widgets::menu`).
-//!
-//! Everything is asserted through painted output and accessibility nodes —
-//! row geometry, token fills, ink, the data segment, the shortcut column,
-//! the rule, and the surface frame — never through private frame
-//! construction. The item takes plain data plus `&mut Ui` and returns a
-//! `Response`; that is the whole seam.
-
 use egui::{Color32, Pos2, Rect};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -14,28 +6,18 @@ use test_support::harness::{
 };
 use test_support::srcscan;
 use turbogit_ui::theme::{GROUP_ROW_HEIGHT, MENU_RADIUS, Palette};
+use turbogit_ui::ui::branch_menu::MenuItemState as BranchMenuItemState;
 use turbogit_ui::ui::icons::Icon;
+use turbogit_ui::ui::widgets::MenuItemState as WidgetMenuItemState;
 use turbogit_ui::ui::widgets::{
     MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface,
 };
-// Both of `MenuItemState`'s established import paths, pinned so neither can be
-// dropped without this file failing to compile: the widget façade's, and the
-// compat re-export `ui::branch_menu` has carried since the menus moved.
-use turbogit_ui::ui::branch_menu::MenuItemState as BranchMenuItemState;
-use turbogit_ui::ui::widgets::MenuItemState as WidgetMenuItemState;
 
-// --- harness -----------------------------------------------------------------
-
-/// Render one `menu_item` call per frame inside a column of the given width,
-/// and report the `Response` facts the surface would see.
 fn item_harness_at(
     width: f32,
     props: fn() -> MenuItemProps<'static>,
     clicked: std::rc::Rc<std::cell::Cell<bool>>,
 ) -> Harness<'static, ()> {
-    // `widget_harness` takes `Fn`, not `FnMut`: `props()` is a plain call and
-    // `Cell::set` takes `&self`, so the body stays `Fn`-compatible without a
-    // `RefCell`.
     let mut harness = widget_harness(egui::vec2(width, 240.0), move |ui| {
         let response = menu_item(ui, props());
         if response.clicked() {
@@ -64,15 +46,10 @@ fn props(label: &'static str) -> MenuItemProps<'static> {
     }
 }
 
-/// The row rect of the item, read from its accessibility node.
 fn item_rect(harness: &Harness<'_, ()>, label: &str) -> Rect {
     harness.get_by_label(label).rect()
 }
 
-// --- cycle 1: the row at rest --------------------------------------------------
-
-/// A menu item is a 26 px row: an 8 px gutter to a 14 px glyph slot painted
-/// in `INK_2`, then the label in the chrome face at `INK`.
 #[test]
 fn an_item_is_a_26px_row_with_glyph_slot_and_chrome_label() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -85,8 +62,6 @@ fn an_item_is_a_26px_row_with_glyph_slot_and_chrome_label() {
         "the row is exactly one GROUP_ROW_HEIGHT tall"
     );
 
-    // The glyph slot: 8 px of gutter, then a 14 px square the icon strokes
-    // stay inside, painted in the icon ink.
     let slot = Rect::from_min_size(
         Pos2::new(row.left() + 8.0, row.center().y - 7.0),
         egui::vec2(14.0, 14.0),
@@ -101,8 +76,6 @@ fn an_item_is_a_26px_row_with_glyph_slot_and_chrome_label() {
         "the glyph paints in the icon ink (INK_2)"
     );
 
-    // The label: chrome face (Proportional), full INK, starting 8 px after
-    // the glyph slot.
     let label = painted_galleys(&harness)
         .into_iter()
         .find(|g| g.text == "Checkout")
@@ -120,9 +93,6 @@ fn an_item_is_a_26px_row_with_glyph_slot_and_chrome_label() {
     );
 }
 
-// --- cycle 2: hover / pressed fills -------------------------------------------
-
-/// Every rect the last frame painted filled exactly `color`.
 fn fills(harness: &Harness<'_, ()>, color: Color32) -> Vec<Rect> {
     filled_rects(harness)
         .into_iter()
@@ -131,8 +101,6 @@ fn fills(harness: &Harness<'_, ()>, color: Color32) -> Vec<Rect> {
         .collect()
 }
 
-/// Every painted `Shape::Rect`, descending into the `Shape::Vec` groups a
-/// `Frame` paints (its shadow and border arrive as one compound shape).
 fn flattened_rects(harness: &Harness<'_, ()>) -> Vec<(Rect, Color32, Color32)> {
     fn walk(shape: &egui::Shape, out: &mut Vec<(Rect, Color32, Color32)>) {
         match shape {
@@ -168,9 +136,6 @@ fn assert_same_rect(a: Rect, b: Rect) {
     );
 }
 
-/// A resting row is transparent; hover fills `SURFACE_2` and a held press
-/// fills `SURFACE_3` — the same row-state ladder every row in the app takes.
-/// A completed press+release reports through the returned `Response`.
 #[test]
 fn a_row_fills_surface_2_on_hover_and_surface_3_while_pressed() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -202,11 +167,6 @@ fn a_row_fills_surface_2_on_hover_and_surface_3_while_pressed() {
     );
 }
 
-// --- cycle 3: primary and danger kinds ------------------------------------------
-
-/// The primary item carries the `KitButton::Primary` treatment the ⋯
-/// overflow already gives Checkout: solid BRAND fill, BRAND_INK glyph and
-/// label.
 #[test]
 fn a_primary_item_takes_the_brand_fill_and_ink() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -240,8 +200,6 @@ fn a_primary_item_takes_the_brand_fill_and_ink() {
     assert_eq!(glyph.1, Palette::BRAND_INK, "glyph ink on brand");
 }
 
-/// A danger item stays a plain row — no severity fill — and inks its glyph
-/// and label with the `DANGER` token.
 #[test]
 fn a_danger_item_is_inked_with_the_severity_token_on_a_plain_row() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -269,11 +227,6 @@ fn a_danger_item_is_inked_with_the_severity_token_on_a_plain_row() {
     assert_eq!(label.color, Palette::DANGER);
 }
 
-// --- cycle 4: the disabled row ---------------------------------------------------
-
-/// A blocked item is never hidden: the row stays rendered with its ink at
-/// 45 %, its click is swallowed, and the reason explains itself on hover —
-/// the `delete_gate` / `rename_gate` convention of this codebase.
 #[test]
 fn a_disabled_item_stays_rendered_at_45_percent_ink_and_swallows_its_click() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -304,12 +257,10 @@ fn a_disabled_item_stays_rendered_at_45_percent_ink_and_swallows_its_click() {
         "the accessibility node carries the disabled state"
     );
 
-    // The click is swallowed.
     harness.get_by_label("Pull").click();
     harness.step();
     assert!(!clicked.get(), "a disabled row never reports a click");
 
-    // The reason is reachable on hover.
     let row = item_rect(&harness, "Pull");
     harness.hover_at(row.center());
     let mut tooltip_painted = false;
@@ -329,11 +280,6 @@ fn a_disabled_item_stays_rendered_at_45_percent_ink_and_swallows_its_click() {
     );
 }
 
-// --- cycle 5: data segment and shortcut column --------------------------------
-
-/// The data segment paints in the data face after the prose label, and the
-/// shortcut column sits right-aligned in muted mono — a name never reads as
-/// a label, and an accelerator never collides with either.
 #[test]
 fn the_data_segment_paints_in_the_data_face_and_the_shortcut_hugs_the_right_edge() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -380,8 +326,6 @@ fn the_data_segment_paints_in_the_data_face_and_the_shortcut_hugs_the_right_edge
     );
 }
 
-/// Past the width where content no longer fits, the branch name
-/// middle-truncates — the identifying ends stay, nothing wraps inside a row.
 #[test]
 fn a_long_branch_name_middle_truncates_in_the_data_segment() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -410,8 +354,6 @@ fn a_long_branch_name_middle_truncates_in_the_data_segment() {
     );
 }
 
-/// A row too narrow for its label truncates the label; the shortcut column
-/// never moves out of the right edge and the content never crosses it.
 #[test]
 fn a_narrow_row_truncates_the_label_before_the_shortcut_moves() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -445,21 +387,13 @@ fn a_narrow_row_truncates_the_label_before_the_shortcut_moves() {
     );
 }
 
-// --- cycle 6: the rule, the surface, the focus ring -----------------------------
-
-/// Render an arbitrary composition through the primitive's seam.
 fn frame_harness(render: impl Fn(&mut egui::Ui) + 'static) -> Harness<'static, ()> {
     widget_harness(egui::vec2(320.0, 240.0), render)
 }
 
-/// The rule is a real decision, not `ui.separator()`: a 1 px
-/// `RULE_STRUCTURAL` (`LINE_SUBTLE`) hairline with 4 px of air either side.
-/// `RULE_CONTENT` aliases the menu fill itself, so the structural tone is
-/// the only one that reads inside a menu.
 #[test]
 fn the_menu_rule_paints_one_structural_hairline_with_air_either_side() {
     let mut harness = frame_harness(|ui| {
-        // A menu composes its rows flush; the rule's stated air is the gap.
         ui.spacing_mut().item_spacing.y = 0.0;
         menu_item(ui, props("Alpha"));
         menu_rule(ui);
@@ -492,16 +426,11 @@ fn the_menu_rule_paints_one_structural_hairline_with_air_either_side() {
     );
 }
 
-/// The surface helper is the one place a menu inherits its tokens:
-/// `Frame::popup(ui.style())` — SURFACE fill, LINE stroke, MENU_RADIUS —
-/// so no call site restates them.
 #[test]
 fn the_menu_surface_frame_is_the_token_mapped_popup_frame() {
     let checked = std::rc::Rc::new(std::cell::Cell::new(false));
     let checked_ui = checked.clone();
     let mut harness = frame_harness(move |ui| {
-        // The root Ui's style snapshot is only configured from the second
-        // frame on (configure_style runs inside the render closure).
         if ui.style().visuals.window_fill() == Palette::SURFACE {
             let frame = menu_surface(ui);
             assert_eq!(frame.fill, Palette::SURFACE);
@@ -524,8 +453,6 @@ fn the_menu_surface_frame_is_the_token_mapped_popup_frame() {
         checked.get(),
         "the configured popup style was never observed"
     );
-    // And it really paints: `Frame::paint` emits its shadow + border as one
-    // `Shape::Vec`, so the flattened frame rects carry the tokens.
     let frame_rects = flattened_rects(&harness);
     assert!(
         frame_rects
@@ -535,8 +462,6 @@ fn the_menu_surface_frame_is_the_token_mapped_popup_frame() {
     );
 }
 
-/// A keyboard-focused item takes the same brand focus ring as every other
-/// custom-drawn control in the vocabulary.
 #[test]
 fn a_focused_item_paints_the_brand_focus_ring() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -565,26 +490,12 @@ fn a_focused_item_paints_the_brand_focus_ring() {
     );
 }
 
-// --- the gate is one field, and the tree says so ---------------------------------
-
-/// The row's gate used to be two fields every caller kept coherent by hand —
-/// `enabled` and `disabled_reason` — which admitted two states no menu wants: a
-/// live item carrying a reason, and a blocked item with nothing to say. They
-/// are now one `MenuItemState`, so the mismatched pair is unconstructible.
-///
-/// The scan is the tree's, not a transcribed list: the failing fix is a
-/// re-opening anywhere under `src/ui/`, not only in the one file that used to
-/// spell it.
 #[test]
 fn no_file_under_ui_spells_the_gate_as_two_fields() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
     let offenders: Vec<String> = srcscan::rust_files(&root)
         .into_iter()
-        .filter(|path| {
-            // Comment-masked: a doc naming the retired spelling is prose, not a
-            // second opinion about the gate.
-            srcscan::code_only(&srcscan::read_source(path)).contains("disabled_reason")
-        })
+        .filter(|path| srcscan::code_only(&srcscan::read_source(path)).contains("disabled_reason"))
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
     assert!(
@@ -593,12 +504,6 @@ fn no_file_under_ui_spells_the_gate_as_two_fields() {
     );
 }
 
-/// `MenuItemProps` declares exactly one gate field, and it is the state type.
-///
-/// `srcscan` has no struct-field reader — `top_level_items` reads only column-0
-/// `fn`/`const` heads and `fn_code` panics on a struct — so the declaration is
-/// sliced out by hand and scanned in the comment-masked projection, where a doc
-/// paragraph cannot satisfy or defeat the claim.
 #[test]
 fn menu_item_props_declares_one_gate_field_of_the_state_type() {
     let menu = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/widgets/menu.rs");
@@ -624,9 +529,6 @@ fn menu_item_props_declares_one_gate_field_of_the_state_type() {
     }
 }
 
-/// The two `MenuItemState` import paths, pinned. See the aliases at the top of
-/// this file: the widget façade's own, and the compat re-export
-/// `ui::branch_menu` has carried since the menus moved into the widget layer.
 #[test]
 fn menu_item_state_resolves_from_both_the_widget_facade_and_the_branch_menu() {
     let _: Option<WidgetMenuItemState> = None;

@@ -1,14 +1,5 @@
-//! Lane A — pure patch composition for partial staging (ADR-0013).
-//!
-//! Every expected value below is an independent hand-written literal; nothing
-//! is computed by mirroring the code under test.
-
 use turbogit_services::partial::{HunkSelection, Selection, compose};
 
-/// Composition in the two text forms this lane asks about: git's diff in, the
-/// composed patch's bytes out. The selection happens on the patch **value**;
-/// the assertion is on the text `git apply` will be fed, which is what
-/// `ADR-0013` guarantees.
 fn compose_patch(text: &str, selection: &Selection) -> String {
     compose(
         &turbogit_engine_api::patch::parse_patch(text),
@@ -17,8 +8,6 @@ fn compose_patch(text: &str, selection: &Selection) -> String {
     )
     .to_string()
 }
-
-// --- fixtures (hand-written unified-diff text) -------------------------------
 
 const FILE_META: &str = r#"diff --git a/src/app.rs b/src/app.rs
 index 3e7a9c1..b2d41f7 100644
@@ -69,15 +58,11 @@ fn selected_lines(idx: usize, positions: &[usize]) -> Selection {
     }
 }
 
-// --- slice 1: whole-hunk selection -------------------------------------------
-
 #[test]
 fn whole_hunk_selection_keeps_meta_and_that_hunk_only() {
     let patch = compose_patch(&three_hunk_diff(), &whole_hunk(0));
     assert_eq!(patch, format!("{FILE_META}{HUNK_0}"));
 }
-
-// --- slice 2: mixed line selection within a hunk ------------------------------
 
 const NO_NEWLINE_DIFF: &str = r#"diff --git a/notes.txt b/notes.txt
 index 1111111..2222222 100644
@@ -117,33 +102,22 @@ index aaaaaaa..bbbbbbb 100644
 
 #[test]
 fn unselected_deletions_demote_to_context() {
-    // Changed lines: 0=`-bravo`, 1=`-charlie`, 2=`+charlie2`. Keeping only
-    // the charlie pair means bravo survives unchanged on both sides, so it
-    // must be emitted as a context line — removing it outright would leave
-    // the kept `-charlie` misaligned and the patch unappliable.
     let patch = compose_patch(MIXED_DEL_DROP_DIFF, &selected_lines(0, &[1, 2]));
     let expected = "diff --git a/todo.txt b/todo.txt\nindex aaaaaaa..bbbbbbb 100644\n--- a/todo.txt\n+++ b/todo.txt\n@@ -1,5 +1,5 @@\n alpha\n bravo\n-charlie\n+charlie2\n delta\n echo\n";
     assert_eq!(patch, expected);
 }
 
-// --- slice 3: all lines selected == original hunk text ------------------------
-
 #[test]
 fn selecting_every_changed_line_reproduces_original_hunk_text() {
-    // Hunk 2 has exactly two changed lines (one `-`, one `+`); the fixture
     let patch = compose_patch(&three_hunk_diff(), &selected_lines(2, &[0, 1]));
     assert_eq!(patch, format!("{FILE_META}{HUNK_2}"));
 }
-
-// --- slice 4: empty selection -------------------------------------------------
 
 #[test]
 fn empty_selection_yields_empty_patch() {
     let patch = compose_patch(&three_hunk_diff(), &Selection::default());
     assert_eq!(patch, "");
 }
-
-// --- slice 5: multiple hunks with unselected ones (incl. trailing) ------------
 
 fn whole_hunks(indices: &[usize]) -> Selection {
     Selection {
@@ -153,16 +127,12 @@ fn whole_hunks(indices: &[usize]) -> Selection {
 
 #[test]
 fn unselected_hunks_are_dropped_including_trailing() {
-    // Gap in the middle: hunks 0 and 2 selected, hunk 1 spliced out.
     let patch = compose_patch(&three_hunk_diff(), &whole_hunks(&[0, 2]));
     assert_eq!(patch, format!("{FILE_META}{HUNK_0}{HUNK_2}"));
 
-    // Trailing hunk dropped: hunks 0 and 1 selected, hunk 2 gone.
     let patch = compose_patch(&three_hunk_diff(), &whole_hunks(&[0, 1]));
     assert_eq!(patch, format!("{FILE_META}{HUNK_0}{HUNK_1}"));
 }
-
-// --- slice 6: hunk header recount -----------------------------------------
 
 /// A multi-change hunk where one change is dropped on the new side: the
 /// original header's new-side count no longer matches the body, so libgit2
@@ -170,17 +140,10 @@ fn unselected_hunks_are_dropped_including_trailing() {
 /// recount the new-count so the body and header agree.
 const RECOUNT_DIFF: &str = "diff --git a/code.rs b/code.rs\nindex 2d9efe4..0a173d3 100644\n--- a/code.rs\n+++ b/code.rs\n@@ -1,5 +1,5 @@\n fn main() {\n-    let alpha = 1;\n+    let ALPHA = 1;\n     let beta = 2;\n-    let gamma = 3;\n+    let GAMMA = 3;\n }\n";
 
-/// Selecting only the first deletion keeps `-alpha` and demotes `-gamma`
-/// to context, dropping `+GAMMA` entirely. Old side still references 5
-/// lines; new side drops to 4.
 const RECOUNT_KEEP_FIRST_DEL: &str = "diff --git a/code.rs b/code.rs\nindex 2d9efe4..0a173d3 100644\n--- a/code.rs\n+++ b/code.rs\n@@ -1,5 +1,4 @@\n fn main() {\n-    let alpha = 1;\n     let beta = 2;\n     let gamma = 3;\n }\n";
 
 #[test]
 fn dropped_addition_recounts_the_new_side_of_the_header() {
-    // Changed lines: 0=`-alpha`, 1=`+ALPHA`, 2=`-gamma`, 3=`+GAMMA`.
-    // Selecting ord 0 keeps the alpha deletion; ALPHA, -gamma, +GAMMA
-    // resolve to context / drop. The new side now references 4 lines, not
-    // 5, so the header must say `+1,4` instead of `+1,5`.
     let patch = compose_patch(RECOUNT_DIFF, &selected_lines(0, &[0]));
     assert_eq!(patch, RECOUNT_KEEP_FIRST_DEL);
 }

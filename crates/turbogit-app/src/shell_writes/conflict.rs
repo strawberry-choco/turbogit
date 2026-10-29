@@ -1,9 +1,3 @@
-//! The conflicts pane's and the two conflict windows' resolution writes.
-//!
-//! Four verbs, five sites: the merge editor's `Apply` and the resolver window's
-//! `Apply` are the same verb over the same worker, so they are one entry here
-//! rather than two copies a change can make disagree.
-
 use std::path::Path;
 
 use turbogit_domain::model::{RootId, RootStatus};
@@ -12,7 +6,6 @@ use turbogit_services::conflict;
 use crate::operation::Operation;
 use crate::root_caches::Affected;
 
-/// Take our side of `path`'s conflict and stage it.
 pub fn accept_ours(root: &RootId, path: &Path) -> Operation {
     let r = root.clone();
     let p = path.to_path_buf();
@@ -21,7 +14,6 @@ pub fn accept_ours(root: &RootId, path: &Path) -> Operation {
     })
 }
 
-/// Take their side of `path`'s conflict and stage it.
 pub fn accept_theirs(root: &RootId, path: &Path) -> Operation {
     let r = root.clone();
     let p = path.to_path_buf();
@@ -32,7 +24,6 @@ pub fn accept_theirs(root: &RootId, path: &Path) -> Operation {
 
 /// Stage every conflicted file both sides already agree on, and report the
 /// first one that could not be written rather than swallowing it.
-///
 /// `status` is the root's own snapshot rather than a re-read, because it is the
 /// set of paths this pass was promised to cover.
 pub fn resolve_simple(root: &RootId, status: &RootStatus) -> Operation {
@@ -42,8 +33,6 @@ pub fn resolve_simple(root: &RootId, status: &RootStatus) -> Operation {
         "Resolve simple conflicts",
         Affected::Root(r.clone()),
         move |v| {
-            // Every per-file outcome counts: a resolution that failed has
-            // to surface, not be discarded (issue #04's honest feed).
             let results = conflict::resolve_all_simple(v, r.as_path(), &status);
             match results.into_iter().find_map(|(_, res)| res.err()) {
                 Some(e) => Err(e),
@@ -53,8 +42,6 @@ pub fn resolve_simple(root: &RootId, status: &RootStatus) -> Operation {
     )
 }
 
-/// Write `content` into `path` and stage it as the resolution — the merge
-/// editor's `Apply` and the resolver window's `Apply`, one entry.
 pub fn apply_merge_resolution(root: &RootId, path: &Path, content: &str) -> Operation {
     let r = root.clone();
     let p = path.to_path_buf();

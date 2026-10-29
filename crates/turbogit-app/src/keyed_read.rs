@@ -1,21 +1,3 @@
-//! The keyed read — the diff surface's only way to reach cached Git data
-//! (ADR-0021).
-//!
-//! One rule, held here, with no storage of its own: the values stay in the
-//! [`crate::state::UiState`] fields they live in. A caller hands over a
-//! *target* and gets back a *verdict*; the key is derived inside, compared
-//! inside, and is not a thing a caller can name, format, or get subtly
-//! differently wrong. Asking is also admitting — `read` dispatches at most one
-//! fetch per frame and never a second while one is in flight — so no caller can
-//! forget a step of the rule, and `peek` answers without admitting, which is
-//! what a reader like the granular preview needs.
-//!
-//! Three kinds cross this interface: the diff's patch text, blame's lines, and
-//! one pane's bytes — the first two answering from a single entry, the third
-//! from a keyed map it keeps. Each states its target, its key derivation, the
-//! field that holds its value, its store policy, and the fetch it runs on the
-//! pump; the admission, lateness and failure rules are written once, here.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -31,18 +13,9 @@ use crate::granular;
 use crate::root_caches::StatsView;
 use crate::state::{AppState, BlameTarget, UiState};
 
-/// What one read answered.
-///
-/// `Fresh` carries an owned handle, not a borrow: one refcount bump per frame
-/// and none per row, so a painter keeps `&mut AppState` free to write the hunk
-/// cursor, the collapse set and its row state while holding the value
-/// (ADR-0021, closing what ADR-0020 deferred).
 pub enum Read<T> {
-    /// The value for exactly this target.
     Fresh(T),
-    /// Nothing to show yet, and a fetch is on the pump — or was, this frame.
     Waiting,
-    /// The answer is settled and there is nothing in it.
     Empty,
     /// This target's fetch failed. The message names what went wrong, and the
     /// verdict only ever reaches the target that failed, never whatever else
@@ -50,8 +23,6 @@ pub enum Read<T> {
     Failed(String),
 }
 
-/// Which read a kind is. Each one owns a slot: the key it has a fetch in
-/// flight for, and the failure it last answered for a key.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Diff,
@@ -59,7 +30,6 @@ pub enum Kind {
     Pane,
 }
 
-/// One kind's rule state. Neither half is a value — those stay in `UiState`.
 #[derive(Default)]
 pub(crate) struct Slot {
     in_flight: Option<String>,
@@ -67,8 +37,6 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
-    /// Take the slot for `key`, answering whether it was free. One fetch per
-    /// kind at a time is the whole of admission.
     fn take(&mut self, key: &str) -> bool {
         if self.in_flight.is_some() {
             return false;
@@ -77,8 +45,6 @@ impl Slot {
         true
     }
 
-    /// Free the slot — but only if this answer owns it. A late answer for a
-    /// key someone else has since taken must not free their admission.
     fn release(&mut self, key: &str) {
         if self.in_flight.as_deref() == Some(key) {
             self.in_flight = None;
@@ -95,7 +61,6 @@ impl Slot {
         }
     }
 
-    /// The message this slot failed for `key`, if it did.
     fn failure(&self, key: &str) -> Option<&str> {
         self.failed
             .as_ref()
@@ -108,9 +73,6 @@ impl Slot {
     }
 }
 
-/// The read's own state, held beside the values it governs. `refresh` clears
-/// it with them: an answer that no longer describes the worktree must not keep
-/// reporting itself, and a failure must not outlive the state that caused it.
 #[derive(Default)]
 pub(crate) struct Reads {
     diff: Slot,
@@ -141,9 +103,6 @@ impl Reads {
         self.pane = Slot::default();
     }
 
-    /// Whether any read still expects an answer — the repaint gate's question
-    /// (`ui/shell.rs`), which is allowed to say *a* surface is working but not
-    /// which.
     pub(crate) fn any_pending(&self) -> bool {
         [
             self.diff.in_flight.as_ref(),
@@ -156,37 +115,26 @@ impl Reads {
 }
 
 impl AppState {
-    /// Whether a keyed read is still waiting for its answer. The shell keeps
-    /// frames coming while one is, so a completion lands without waiting for
-    /// unrelated input.
     pub fn read_pending(&self) -> bool {
         self.reads.any_pending()
     }
 }
 
 mod private {
-    /// Sealed: a read kind can only be written inside this module, which is
-    /// what keeps the staleness rule from being re-written at a call site.
     pub trait Sealed {}
 }
 
-/// A cached Git value the surfaces read through [`AppState::read`].
 pub trait Keyed: private::Sealed + Sized {
-    /// The handle `Fresh` carries: owned, and cheap to clone.
     type Value;
 
-    /// The slot this kind's admission and failure live in.
     const KIND: Kind;
 
-    /// The cache key this target derives. Keys never reach a caller.
     fn key(&self) -> String;
 
-    /// The stored value for this target, applying this kind's store policy.
-    /// Takes the derived key so a frame asks for it once.
     fn answer(&self, state: &AppState, key: &str) -> Option<Self::Value>;
 
     /// Whether this kind's storage holds a settled answer for this target that
-    /// is empty rather than absent — which is `Empty`, not something to fetch.
+    /// is empty rather than absent, which is `Empty`, not something to fetch.
     /// Asked before [`Keyed::answer`] because a blank answer is also a stored
     /// one; only kinds whose values can be blank override it.
     fn settled_empty(&self, state: &AppState, key: &str) -> bool {
@@ -194,15 +142,9 @@ pub trait Keyed: private::Sealed + Sized {
         false
     }
 
-    /// Run this kind's fetch on the pump, taking the slot.
     fn fetch(&self, state: &mut AppState);
 }
 
-/// The one settlement body the typed completion events call: a success stores
-/// under its key and retires any failure for it; a failure records the error
-/// against the key that failed and drops a stored value that describes
-/// something else. `stored` names the field, which is the only per-kind
-/// difference between the arms this replaces.
 fn settle_single<V>(
     state: &mut AppState,
     kind: Kind,
@@ -226,12 +168,6 @@ fn settle_single<V>(
     }
 }
 
-/// Settle one [`AppEvent::DiffReady`].
-///
-/// The policies travel with the answer rather than being read off the live state:
-/// the model is folded under the policy the *request* was made under, so a policy
-/// change that landed while the load was in flight cannot store a model under the
-/// key of the one it replaced.
 pub(crate) fn settle_diff(
     state: &mut AppState,
     key: String,
@@ -247,20 +183,18 @@ pub(crate) fn settle_diff(
     );
 }
 
-/// Settle one [`AppEvent::BlameReady`].
 pub(crate) fn settle_blame(state: &mut AppState, key: String, result: TgResult<Vec<BlameLine>>) {
     settle_single(state, Kind::Blame, &key, result.map(Arc::from), |ui| {
         &mut ui.blame_cache
     });
 }
 
-/// Settle one [`AppEvent::FileBytesReady`] — the **keep** policy, deliberately
 /// unlike the other two kinds.
 ///
 /// The slot frees only for the key that owns it, so a late answer cannot free
 /// another pane's admission; the entry itself is stored whichever pane asked
 /// for it, because the map is keyed and that entry will be right when the pane
-/// comes back. Two store policies, one interface — do not unify them further.
+/// comes back. Two store policies, one interface, do not unify them further.
 pub(crate) fn settle_pane(
     state: &mut AppState,
     key: String,
@@ -275,26 +209,12 @@ pub(crate) fn settle_pane(
     state.ui.pane_bytes.store(key, Arc::new(entry));
 }
 
-// --- the diff ----------------------------------------------------------------
-
-/// A comparison's patch text for one file: everything the diff surface knows
-/// about what it wants, and nothing about how it is keyed.
-///
-/// `Hash` is for painting: the row painters salt their widget state with the
-/// target they are rendering, which needs a value that is stable per diff and
-/// different between diffs — not the cache key, which is this module's.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DiffTarget {
     pub root: PathBuf,
-    /// Explicit revision pair, when the target is commit-to-commit rather than
-    /// a working-tree comparison.
     pub left: Option<String>,
     pub right: Option<String>,
-    /// The viewer's two view policies. Part of what the read is keyed on: they
-    /// change the model, and a model built under another policy must never be
-    /// served for this target.
     pub policies: DiffPolicies,
-    /// The file, or `None` for the whole comparison.
     pub path: Option<PathBuf>,
 }
 
@@ -315,54 +235,18 @@ impl DiffTarget {
         }
     }
 
-    /// The commit preview's one fixed comparison: `HEAD ↔ worktree`.
-    ///
-    /// Which constructor a call site uses is how a reader tells the two kinds of
-    /// target apart, and it is the whole of the pin. This one is the working-tree
-    /// preview: it shows every changed line of the file, staged or not, and it is
-    /// byte-stable under the only action the pane offers, because staging a line
-    /// cannot change what the worktree differs from HEAD by. `new` is an explicit
-    /// revision pair — a history-window diff, a commit-to-commit comparison — and
-    /// those keep the revisions their caller named; a commit diff must not claim
-    /// `HEAD` as its left side.
-    ///
     /// In a repository nobody has committed in, this target has no answer and is
     /// not given one. The engine refuses a `HEAD` read on a root with no HEAD
     /// (`cli.rs`, `guard_unborn_head`, with the reason), and `read` hands the
-    /// pane `Read::Failed` with that sentence. The alternative, diffing against
-    /// the empty tree in HEAD's place, was built and then removed: it reports
-    /// every staged line as an addition relative to a baseline the repository
-    /// never had, which is a false answer about someone's first files.
+    /// pane `Read::Failed` with that sentence.
     pub fn working_tree(root: PathBuf, policies: DiffPolicies, path: Option<PathBuf>) -> Self {
         Self::new(root, Some("HEAD".to_owned()), None, policies, path)
     }
 
-    /// The sides this read actually diffs, exactly the pair the caller named.
-    /// `pane_sides` and `key` both read the pair here, so the patch bytes and
-    /// the pane's two sides can never be derived from different assumptions
-    /// about what the working tree is.
-    ///
-    /// The pin is NOT here: it is [`DiffTarget::working_tree`], because a
-    /// working-tree target and an explicit pair are different call sites, not
-    /// different shapes of one value, and a mapping in this function would also
-    /// rewrite commit-to-commit reads. A target with neither side named is still
-    /// expressible through `new`, and it still means plain `git diff`,
-    /// `index ↔ worktree`.
     fn sides(&self) -> (Option<String>, Option<String>) {
         (self.left.clone(), self.right.clone())
     }
 
-    /// Which root-wide [`StatsView`] this target displays, when a root-wide
-    /// read backs it at all.
-    ///
-    /// The three root views are exactly three pairs of sides, and a target is
-    /// one pair: `HEAD ↔ worktree` is the pinned preview (the `Repo` view), a
-    /// pair that names nothing is plain `git diff` (the `Local` view), and a
-    /// commit-to-commit pair names its own revisions, for which no root read
-    /// ever answered. That reports `None`, and a failed root read says
-    /// nothing about it. The `Staged` view is not displayable through a target
-    /// at all: `git diff --cached` is not a pair of named sides, and the chip
-    /// rail that shows it reads the record per view itself.
     pub fn root_view(&self) -> Option<StatsView> {
         match (self.left.as_deref(), self.right.as_deref()) {
             (Some("HEAD"), None) => Some(StatsView::Repo),
@@ -371,29 +255,10 @@ impl DiffTarget {
         }
     }
 
-    /// Whether the granular staging verbs may act on this comparison: staging
-    /// composes a row's stage against the index, which only the two
-    /// working-tree views have. A historical pair answers `false`.
     pub fn stages(&self) -> bool {
         self.root_view().is_some()
     }
 
-    /// The two byte sources for one of this target's file sections, deriving
-    /// which side is a rev, which is the worktree, and which is missing:
-    ///
-    /// | sides            | old side   | new side     |
-    /// |------------------|------------|--------------|
-    /// | no rev named     | index `:0` | worktree fs  |
-    /// | explicit l..r    | `<left>`   | `<right>`    |
-    /// | half-explicit l  | `<left>`   | worktree fs  |
-    ///
-    /// The pinned preview takes the third row, because
-    /// [`DiffTarget::working_tree`] names `HEAD` and nothing else.
-    ///
-    /// Index revs use git's stage syntax (`:<n>:<path>`), the same style the
-    /// conflict reader uses for `:1`/`:2`/`:3`. New files have no old side;
-    /// deleted files no new side. Paths are repo-relative and slash-separated,
-    /// because that is the form `git show` takes.
     fn pane_sides(&self, meta: &FileMeta) -> (PaneSideRequest, PaneSideRequest) {
         let (left, right) = self.sides();
         let rel = |p: &Option<String>| p.clone().unwrap_or_default();
@@ -456,22 +321,12 @@ impl Keyed for DiffTarget {
             .is_some_and(|(cached, value)| cached == key && value.is_blank())
     }
 
-    /// Admit one load of this target's patch text, with the per-diff
-    /// navigation state that described the outgoing content.
-    ///
-    /// An untracked preview never reaches `git diff`: its creation diff is
-    /// synthesized from the worktree and stored under the same key, with no
-    /// worker and no spinner — which is why the slot is taken only on the
-    /// dispatch path. A synthesized answer holds it open forever, and the
-    /// repaint gate would never stop asking for frames.
     fn fetch(&self, state: &mut AppState) {
         let key = self.key();
         if state.reads.slot_of(Self::KIND).in_flight().is_some() {
             return;
         }
         state.ui.diff_current_hunk = 0;
-        // Collapse state (issue 20) describes the outgoing diff's hunks; it
-        // dies with them, like the hunk navigation cursor above.
         state.ui.diff_collapsed.clear();
 
         if let Some(rel) = self.path.as_ref()
@@ -485,9 +340,6 @@ impl Keyed for DiffTarget {
 
         state.reads.slot(Self::KIND).take(&key);
         let (left, right) = self.sides();
-        // The engine is asked for the plain diff: the viewer's policies are view
-        // decisions folded into the model, never flags that change which bytes git
-        // answers with, because those bytes are what partial staging composes.
         let opts = DiffOpts {
             left,
             right,
@@ -496,10 +348,6 @@ impl Keyed for DiffTarget {
         };
         let root = self.root.clone();
         let policies = self.policies;
-        // Phase L1: when the setting asks for in-process diffs, the load
-        // computes the patch with `similar`; `diff_text` itself falls back to
-        // the same CLI call whenever the in-process path cannot produce it
-        // (multi-file targets, unreadable sides, non-UTF-8 content).
         let in_process = state.settings.in_process_diffs;
         state.pump_keyed_read(move |executor, tx| {
             let res = if in_process {
@@ -516,18 +364,13 @@ impl Keyed for DiffTarget {
     }
 }
 
-// --- blame -------------------------------------------------------------------
-
 impl private::Sealed for BlameTarget {}
 
 impl Keyed for BlameTarget {
-    /// The blamed lines behind one handle, so the view keeps its rows while the
-    /// painter writes state after the scroll pass ends.
     type Value = Arc<[BlameLine]>;
 
     const KIND: Kind = Kind::Blame;
 
-    /// root | revision | path.
     fn key(&self) -> String {
         format!(
             "{}|{}|{}",
@@ -542,10 +385,10 @@ impl Keyed for BlameTarget {
         (cached == key).then(|| Arc::clone(lines))
     }
 
-    /// Fetch this target's per-line attribution off the frame path (issue 18);
-    /// the answer lands as [`AppEvent::BlameReady`]. A file with nothing to
-    /// blame answers `Fresh` with no lines, exactly as the view rendered it
-    /// before — blame has no settled-empty state of its own to paint.
+    /// Fetch this target's per-line attribution off the frame path; the answer
+    /// lands as [`AppEvent::BlameReady`]. A file with nothing to blame answers
+    /// `Fresh` with no lines, exactly as the view rendered it before, blame has
+    /// no settled-empty state of its own to paint.
     fn fetch(&self, state: &mut AppState) {
         let key = self.key();
         if !state.reads.slot(Self::KIND).take(&key) {
@@ -564,25 +407,12 @@ impl Keyed for BlameTarget {
     }
 }
 
-// --- non-text pane bytes -----------------------------------------------------
-
-/// Which non-text pane of a comparison is wanted. A discriminator, not the
-/// model's [`crate::diff_model::PaneKind`]: a text section has no pane of its
-/// own, and a caller
-/// that wants bytes has already decided which kind it is painting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaneFlavour {
     Binary,
     Image,
 }
 
-/// One non-text pane: the comparison whose patch text named the section, the
-/// section's own facts, and whether its sides are wanted as pixels or only as
-/// lengths for the binary caption.
-///
-/// The caller hands over these facts; which side is a rev, which is the
-/// worktree, and which is missing are derived here, as is the map key the
-/// answer is stored under.
 #[derive(Clone)]
 pub struct PaneTarget {
     pub comparison: DiffTarget,
@@ -601,10 +431,6 @@ impl PaneTarget {
         }
     }
 
-    /// The identity the UI layer keys its GPU textures by. ADR-0021 records
-    /// that the texture cache stays in the UI crate on purpose, and it needs a
-    /// string stable per pane; this is that string, derived here so no caller
-    /// builds one from parts it should not be holding.
     pub fn texture_tag(&self) -> String {
         let suffix = match self.flavour {
             PaneFlavour::Binary => "#bin",
@@ -625,16 +451,10 @@ impl Keyed for PaneTarget {
         self.texture_tag()
     }
 
-    /// The keyed map's own lookup: an entry is wanted for its key alone, which is
-    /// what makes this kind's store policy the keep one — `settle_pane` stores
-    /// whatever arrives, and ADR-0021 says not to unify the two policies.
     fn answer(&self, state: &AppState, key: &str) -> Option<Self::Value> {
         state.ui.pane_bytes.get(key)
     }
 
-    /// Fetch both sides of the pane off the frame path (spec R8). One load is
-    /// in flight across the whole diff surface, not one per pane, so a second
-    /// pane asks and waits rather than spending a second worker.
     fn fetch(&self, state: &mut AppState) {
         let key = self.key();
         if !state.reads.slot(Self::KIND).take(&key) {
@@ -651,10 +471,8 @@ impl Keyed for PaneTarget {
 }
 
 impl AppState {
-    /// Ask for a cached Git value, and start getting it if it is not there.
-    ///
     /// Answers at most one verdict per call and dispatches at most one fetch
-    /// per frame for the kind — a second ask while one is in flight waits
+    /// per frame for the kind, a second ask while one is in flight waits
     /// rather than spending a second `git` run. A failure is what the surface
     /// sees until the target changes or a refresh retires it: asking again does
     /// not re-dispatch, which is what kept a failing comparison hammering the
@@ -677,9 +495,8 @@ impl AppState {
         Read::Waiting
     }
 
-    /// Answer without admitting: the value for this target if the store already
-    /// holds it, and nothing otherwise. Readers — the granular preview and the
-    /// palette verbs — must not turn a deliberate silent no-op into spent git
+    /// holds it, and nothing otherwise. Readers, the granular preview and the
+    /// palette verbs, must not turn a deliberate silent no-op into spent git
     /// work, so they ask this question instead.
     pub fn peek<K: Keyed>(&self, target: K) -> Option<K::Value> {
         target.answer(self, &target.key())
@@ -689,11 +506,6 @@ impl AppState {
     /// target displays is recorded as failed for its root, the **whole file
     /// counts as failed to read**. The pane shows the recorded message and
     /// shows no content, no rows, and no control a click could not honour.
-    /// This is what closes the window where the per-path read answers while the
-    /// root read died: the composition path already declines by name when a
-    /// retained section is absent, and a fully rendered diff whose every row
-    /// click does nothing is the defect the record exists to prevent.
-    ///
     /// Three clauses, each load-bearing. (1) Only a target that displays one
     /// of the three root views is a candidate ([`DiffTarget::root_view`]): a
     /// commit-to-commit diff names its own revisions. (2) An unversioned path
@@ -719,11 +531,6 @@ impl AppState {
             .map(str::to_owned)
     }
 
-    /// Whether a pane's bytes are still in the store, asked of the store's
-    /// owner. The UI layer holds the tags it keys GPU textures by (see
-    /// [`PaneTarget::texture_tag`]) and prunes the ones nobody caches any
-    /// more — which is the last thing presentation code needs to know about
-    /// the pane cache, and it never reads the cache itself (ADR-0021).
     pub fn pane_is_cached(&self, tag: &str) -> bool {
         self.ui.pane_bytes.contains(tag)
     }
@@ -748,19 +555,13 @@ mod tests {
         (old.spec, new.spec)
     }
 
-    /// The pane reads the same pair the patch text describes, which is what
-    /// makes the side table the read's business rather than the painter's.
     #[test]
     fn the_working_tree_addresses_index_and_worktree() {
         let plain = FileMeta::default();
-        // A target naming neither side is plain `git diff`, index↔worktree. It is
-        // not the pinned preview, which names `HEAD`; this row is what `pane_sides`
-        // still answers for it.
         assert_eq!(
             sides(None, None, &plain),
             (SideSpec::Index, SideSpec::Worktree)
         );
-        // Explicit commit-to-commit targets pass their revs through.
         assert_eq!(
             sides(Some("abc123"), Some("def456"), &plain),
             (
@@ -768,8 +569,6 @@ mod tests {
                 SideSpec::Rev("def456".to_owned())
             )
         );
-        // One rev named against the worktree is `git diff <rev>`, so only the
-        // side it names stops being the index.
         assert_eq!(
             sides(Some("HEAD"), None, &plain),
             (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
@@ -790,9 +589,6 @@ mod tests {
         assert_eq!(sides(None, None, &deleted).1, SideSpec::Missing);
     }
 
-    /// Paths arrive repo-relative and slash-separated because the patch value
-    /// holds them that way — there is no prefix left here for a caller to
-    /// strip, which is what `git show` wants.
     #[test]
     fn pane_paths_are_repo_relative_because_the_value_says_so() {
         let renamed = crate::diff_model::files_from(&turbogit_engine_api::patch::parse_patch(
@@ -811,9 +607,6 @@ mod tests {
         );
     }
 
-    /// Each pane flavour addresses its own entry, and a different pair of sides
-    /// is a different entry — the target is the only thing either side of the
-    /// interface gets to address by.
     #[test]
     fn a_pane_is_addressed_per_flavour_and_per_pair_of_sides() {
         let file = FileMeta::default();
@@ -840,9 +633,6 @@ mod tests {
         );
     }
 
-    /// The axis is gone from the key, so one file under one policy has exactly
-    /// one working-tree key: nothing a viewer can do to a file without changing
-    /// it can produce a second entry for it.
     #[test]
     fn the_working_tree_key_names_no_axis() {
         let working_tree = target(None, None);
@@ -866,22 +656,12 @@ mod tests {
         assert_ne!(working_tree.key(), other_file.key());
     }
 
-    // --- lateness, at the internal scripted seam (ADR-0021) -------------------
-    //
-    // Everything below runs against `FakeExecutor` and a temp directory, so no
-    // git binary is involved: holding a dispatch is the only way to make an
-    // answer arrive late or out of order, and lateness is the only window in
-    // which the staleness and ownership rules below mean anything.
-
     use std::path::Path;
 
     use turbogit_domain::model::RootId;
     use turbogit_engine::fake::FakeExecutor;
     use turbogit_engine_api::GitExecutor;
 
-    /// A 2×3 png called `name`, on disk for the worktree side and staged in the
-    /// fake for the rev side, so every pane below has two resolvable sides
-    /// without a git binary.
     fn seed_image(dir: &Path, name: &str, exec: &FakeExecutor) {
         let img = image::DynamicImage::new_rgb8(2, 3);
         let mut buf = std::io::Cursor::new(Vec::new());
@@ -894,8 +674,6 @@ mod tests {
             .insert(PathBuf::from(name), png);
     }
 
-    /// A state with no roots — nothing to snapshot — holding every keyed-read
-    /// dispatch instead of running it, against a fake that answers without git.
     fn held_state(dir: &Path, names: &[&str]) -> AppState {
         let exec = std::sync::Arc::new(FakeExecutor::new());
         for name in names {
@@ -920,10 +698,6 @@ mod tests {
         PaneTarget::new(comparison, PaneFlavour::Image, file, true)
     }
 
-    /// The pane map's **keep** policy, and the slot-ownership rule that goes
-    /// with it: an answer that arrives after its pane stopped being the live
-    /// one still stores its entry, and still does not free whoever holds the
-    /// slot now.
     #[test]
     fn a_late_pane_answer_never_frees_another_panes_admission() {
         let dir = tempfile::tempdir().unwrap();
@@ -934,16 +708,11 @@ mod tests {
         assert!(matches!(state.read(first.clone()), Read::Waiting));
         assert_eq!(state.held_reads(), 1, "one dispatch admitted");
 
-        // A refresh retires the map and the read's slots together, so a second
-        // pane can be admitted while the first answer is still outstanding —
-        // which is exactly the window a real worker can land in.
         state.refresh(crate::root_caches::Affected::All);
         let second = pane(dir.path(), "cover.png");
         assert!(matches!(state.read(second.clone()), Read::Waiting));
         assert_eq!(state.held_reads(), 2, "the first answer is still owed");
 
-        // Answer the *older* one first. Its release must not touch the slot the
-        // newer answer owns.
         state.release_held_read(0);
         state.drain_events();
         assert!(
@@ -965,9 +734,6 @@ mod tests {
         );
     }
 
-    /// One load is in flight across the whole diff surface, not one per pane:
-    /// asking for a second pane while the first is outstanding spends no second
-    /// worker.
     #[test]
     fn one_pane_load_is_in_flight_across_the_surface() {
         let dir = tempfile::tempdir().unwrap();
@@ -991,9 +757,6 @@ mod tests {
         assert_eq!(state.held_reads(), 1, "now it is the other pane's turn");
     }
 
-    /// The single-entry reads do the opposite of the map: an answer for one key
-    /// leaves nothing answerable for the key before it. Deliberate — two store
-    /// policies, one interface; do not unify them further.
     #[test]
     fn a_single_entry_read_keeps_only_the_answer_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
@@ -1035,8 +798,6 @@ mod tests {
         );
     }
 
-    /// Blame's answer for one revision is gone the moment another one's
-    /// arrives — the same single-entry rule, on the other kind.
     #[test]
     fn blame_answers_one_target_at_a_time() {
         let dir = tempfile::tempdir().unwrap();

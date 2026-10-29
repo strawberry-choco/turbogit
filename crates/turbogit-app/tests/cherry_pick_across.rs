@@ -1,12 +1,3 @@
-//! Issue 16 — Cherry-pick across repositories, app seam: the dialog's
-//! default targets over the current multi-repo selection and the run itself,
-//! dispatched through the cascade pool and reported through the run
-//! monitor, with conflicts held and never auto-resolved.
-//!
-//! Headless tests over real temporary repositories through the production
-//! registration path ([`AppState::for_roots`]), events pumped through the
-//! real drain loop.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -28,9 +19,6 @@ fn init_repo(repo: &Path) {
     git(repo, &["config", "user.name", "t"]);
 }
 
-/// A three-repo project: `alpha` carries c1..c3, `beta` is a clean target,
-/// `gamma` diverged on `b.txt` so picking c2 into it conflicts. Returns
-/// (guard, project, alpha, beta, gamma, [c1, c2, c3]).
 #[allow(clippy::type_complexity)]
 fn project(
     tag: &str,
@@ -62,7 +50,6 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
     turbogit_domain::model::RootId(path.to_path_buf().into())
 }
 
-/// Step the event pump until every cherry-run monitor row is terminal.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -96,8 +83,6 @@ fn the_dialog_defaults_to_the_current_multi_repo_selection_as_targets() {
     assert!(dlg.cherry_stop_on_conflict, "the policy defaults to on");
 }
 
-// -- The run --------------------------------------------------------------------
-
 #[test]
 fn running_applies_the_commits_in_order_to_every_target_and_reports_through_the_monitor() {
     let (_tmp, project, alpha, beta, _gamma, commits) = project("cpa-run");
@@ -117,7 +102,6 @@ fn running_applies_the_commits_in_order_to_every_target_and_reports_through_the_
         subjects.contains("c2") && subjects.contains("c3"),
         "{beta:?} received both picks"
     );
-    // Applied in order: c3's copy sits on c2's copy.
     let subjects: Vec<&str> = subjects.lines().collect();
     let c2_pos = subjects.iter().position(|s| *s == "c2").unwrap();
     let c3_pos = subjects.iter().position(|s| *s == "c3").unwrap();
@@ -154,7 +138,6 @@ fn a_conflicted_target_is_marked_failed_and_left_held_for_manual_resolution() {
         "other targets are unaffected"
     );
 
-    // Held, never auto-resolved: the conflict is still open in gamma.
     assert!(
         turbogit_services::integrate_service::in_progress(&gamma),
         "the conflicted pick must stay held"

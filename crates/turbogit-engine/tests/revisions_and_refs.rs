@@ -1,12 +1,3 @@
-//! Issue 07 (deepen-git-engine) — revisions and refs as answers.
-//!
-//! Two questions the app used to ask by assembling a git command line: how many
-//! commits a branch carries that another does not, and what commit a name
-//! resolves to. Plus the reference transaction the history editor ran as three
-//! raw calls against a path it had to guess. Each is answered here twice — once
-//! through the substitutable adapter with no `git` binary, and once against real
-//! git, because a mutation's acceptance is that the reference moved.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,17 +9,12 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::fake::FakeExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 
-// `ahead_repo` stays local, deliberately NOT `repo_with_origin`: the recipe publishes
-// `main` once, while this fixture's whole subject is `origin/main` left two commits
-// behind. No recipe produces a known non-zero divergence.
-
 fn cli() -> CliExecutor {
     CliExecutor {
         settings: VcsSettings::default(),
     }
 }
 
-/// `main` plus three commits, with `origin/main` left two behind.
 fn ahead_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -55,8 +41,6 @@ fn ahead_repo() -> (tempfile::TempDir, PathBuf) {
     }
     (tmp, repo)
 }
-
-// ---- through the substitutable adapter: no git binary -------------------------
 
 #[test]
 fn the_substitutable_adapter_answers_a_count_question() {
@@ -95,13 +79,6 @@ fn the_substitutable_adapter_names_its_own_backup_ref() {
     );
 }
 
-// ---- against real git: the numbers are git's and the ref really moves --------
-
-/// `git rev-parse --verify --quiet <rev>`, asserting the ref is ABSENT.
-///
-/// Not `test_support::git_seed::git`, which asserts success: here the non-zero exit is
-/// the answer — git reports a missing ref by failing quietly — so a success-asserting
-/// helper would panic on the very thing being tested.
 fn git_rev_must_be_absent(repo: &Path, rev: &str) {
     let gone = Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", rev])
@@ -206,8 +183,6 @@ fn the_composed_adapter_answers_the_same_questions_as_the_cli_one() {
 
 #[test]
 fn no_adapter_selects_a_range_by_accident() {
-    // The two production adapters are the only places a dot range may appear;
-    // both answer the same count question alike.
     let (_tmp, repo) = ahead_repo();
     for engine in [
         Arc::new(CliExecutor {

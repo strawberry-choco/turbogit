@@ -1,22 +1,3 @@
-//! Issue 30 — interactive rebase editor rework (screen 17).
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories, asserting painted labels, public `AppState`
-//! transitions, and the calls recorded at the executor boundary.
-//!
-//! Covered behaviors:
-//! - the Plan / Preview / Log tab strip and the plan rows with action chips
-//!   and move buttons
-//! - the ⇧↑/⇧↓ and p/s/f/d keyboard shortcuts on the selected row
-//! - the RESULT PREVIEW tab: post-plan sequence, N → M counts, fold/drop
-//!   summaries
-//! - the Log tab: the raw REBASE-TODO edits re-parse back into the plan
-//! - the right rail: CAUTIONS, AFFECTED REPOS, RECOVERY naming the backup ref
-//! - the footer: time estimate, and Start rebase writing the backup ref at
-//!   the pre-rebase HEAD before the plan replays
-//! - the body-to-footer rule: the shared `RULE_FOOTER` tone plus the 1px
-//!   full-width geometry, which no acceptance capture covers
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -38,9 +19,6 @@ use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_ui::theme::Palette;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
     let mut body = std::fs::read_to_string(&file).unwrap_or_default();
@@ -49,8 +27,6 @@ fn commit(dir: &Path, name: &str, text: &str) {
     git_seed_commit(dir, name, &body, text);
 }
 
-/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
-/// `base.txt`, and `plan_repo` names those commits when it opens the editor.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -61,8 +37,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// One repo on `main` (one base commit) with a local `feature` branch three
-/// commits ahead, checked out — the interactive-editing subject.
 fn plan_repo(parent: &Path, name: &str) -> PathBuf {
     let repo = temp_repo(parent, name);
     git(&repo, &["checkout", "-q", "-b", "feature"]);
@@ -72,7 +46,6 @@ fn plan_repo(parent: &Path, name: &str) -> PathBuf {
     repo
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -83,22 +56,10 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
     (state, exec)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// Unstyled, and all three differences are load-bearing: `max_steps` is 1024
-/// because `open_editor` drives the suite through `Harness::run()`, which PANICS
-/// past the budget kittest defaults to 4; no `configure_style`, because `rule_tone`
-/// documents the egui default `noninteractive.bg_stroke` this frame shows instead
-/// of the production token set; and no `install_fonts`, because the embedded font
-/// changes the glyph metrics the geometry assertions measure.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    // The editor window is wider than kittest's 800×600 default; the
-    // right-aligned footer button needs the viewport to contain it.
     shell_harness_over_unstyled(state, egui::vec2(1400.0, 900.0), 1024)
 }
 
-/// Open the interactive rebase editor on the oldest commit past `main` —
-/// the whole feature range becomes the plan.
 fn open_editor(h: &mut Harness<'_, AppState>, root: &Path) {
     let log = git(root, &["log", "main..HEAD", "--format=%H"]);
     let oldest = log.lines().last().expect("a commit past main").trim();
@@ -108,8 +69,6 @@ fn open_editor(h: &mut Harness<'_, AppState>, root: &Path) {
     h.run();
 }
 
-/// The node labeled `label` nearest to `anchor`'s rect — per-row controls
-/// repeat labels across rows, so pick by proximity to the row's subject.
 fn nearest<'h>(h: &'h Harness<'_, AppState>, label: &'h str, anchor: &str) -> Node<'h> {
     let anchor = h
         .query_all_by_label(anchor)
@@ -126,7 +85,6 @@ fn nearest<'h>(h: &'h Harness<'_, AppState>, label: &'h str, anchor: &str) -> No
     best.expect("no node with the label").1
 }
 
-/// The interactive plans recorded at the executor boundary.
 fn recorded_plans(exec: &RecordingExecutor) -> Vec<Vec<turbogit_domain::model::RebasePlanEntry>> {
     exec.recorded()
         .iter()
@@ -137,8 +95,6 @@ fn recorded_plans(exec: &RecordingExecutor) -> Vec<Vec<turbogit_domain::model::R
         .collect()
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn the_editor_paints_tabs_and_plan_rows_with_chips_and_moves() {
     let tmp = tempfile::tempdir().unwrap();
@@ -147,8 +103,6 @@ fn the_editor_paints_tabs_and_plan_rows_with_chips_and_moves() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Screen 17: the tab strip, the title, every plan row (oldest first),
-    // the action chips, and the move buttons.
     for tab in ["Plan", "Preview", "Log"] {
         assert_painted(&h, tab);
     }
@@ -179,7 +133,6 @@ fn chips_retarget_their_row_and_the_move_buttons_reorder() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Squash the oldest commit via its row's chip.
     nearest(&h, "squash", "feature-1").click();
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
@@ -189,14 +142,12 @@ fn chips_retarget_their_row_and_the_move_buttons_reorder() {
         "full plan: {plan:?}"
     );
 
-    // Move it down one slot with the row's ↓ button.
     nearest(&h, "↓", "feature-1").click();
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
     let subjects: Vec<&str> = plan.iter().map(|e| e.subject.as_str()).collect();
     assert_eq!(subjects, ["feature-2", "feature-1", "feature-3"]);
 
-    // And back up with ↑.
     nearest(&h, "↑", "feature-1").click();
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
@@ -212,8 +163,6 @@ fn dragging_a_row_onto_another_reorders_the_plan() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Drag the feature-1 row down onto the feature-3 row: press, move the
-    // pointer over the target (the plan reorders live), release.
     let from = nearest(&h, "feature-1", "feature-1").rect();
     let to = nearest(&h, "feature-3", "feature-3").rect();
     h.drag_at(from.center());
@@ -239,18 +188,15 @@ fn keyboard_shortcuts_move_and_retarget_the_selected_row() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Click the oldest row to focus it.
     nearest(&h, "feature-1", "feature-1").click();
     h.run();
 
-    // ⇧↓ moves the selected row down; the selection follows it.
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowDown);
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
     let subjects: Vec<&str> = plan.iter().map(|e| e.subject.as_str()).collect();
     assert_eq!(subjects, ["feature-2", "feature-1", "feature-3"]);
 
-    // p/s/f/d retarget the selected row's action: squash feature-1.
     h.key_press(egui::Key::S);
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
@@ -260,7 +206,6 @@ fn keyboard_shortcuts_move_and_retarget_the_selected_row() {
         "the selection followed the move, so 's' squashes feature-1"
     );
 
-    // ⇧↑ moves it back up.
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowUp);
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
@@ -272,7 +217,6 @@ fn keyboard_shortcuts_move_and_retarget_the_selected_row() {
         "the action stays with its commit"
     );
 
-    // And "d" drops the selected (moved-back) row.
     h.key_press(egui::Key::D);
     h.run();
     let plan = h.state().ui.dlg.rebase_plan.clone().expect("plan");
@@ -283,9 +227,6 @@ fn keyboard_shortcuts_move_and_retarget_the_selected_row() {
     );
 }
 
-/// The two most common edits finally have keys: `r` rewords and `e` edits the
-/// selected row; `u` marks it Update Ref. Each retargets exactly the selected
-/// row — the neighbours' actions are untouched.
 #[test]
 fn reword_edit_and_update_ref_shortcuts_retarget_the_selected_row() {
     let tmp = tempfile::tempdir().unwrap();
@@ -351,8 +292,6 @@ fn the_preview_tab_shows_the_result_sequence_counts_and_folds() {
     let repo = plan_repo(tmp.path(), "repo");
     let (mut state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     use turbogit_domain::model::RebaseAction::{Drop, Fixup, Pick, Squash};
-    // Preset the plan so no repository rebuild overwrites the fold shape:
-    // pick A, fixup B, squash C, drop D, pick E → 5 → 2 commits.
     state.ui.dlg.rebase_plan = Some(vec![
         plan_entry(Pick, "a91c3f7aaa", "feat: dry-run mode"),
         plan_entry(Fixup, "f7c1d08bbb", "wip: trim checks"),
@@ -371,7 +310,6 @@ fn the_preview_tab_shows_the_result_sequence_counts_and_folds() {
     assert_painted(&h, "5 → 2 COMMITS");
     assert_painted(&h, "f7c1d08 + 3a90be2 folded into a91c3f7");
     assert_painted(&h, "1 commit dropped");
-    // The post-plan sequence names the survivors in replay order.
     assert_painted(&h, "feat: dry-run mode");
     assert_painted(&h, "refactor: split");
     assert_not_painted(&h, "test: redundant case");
@@ -408,7 +346,6 @@ fn editing_the_raw_todo_reparses_into_the_plan() {
     nearest(&h, "Log", "Plan").click();
     h.run();
 
-    // The generated REBASE-TODO is in the buffer: one line per plan entry.
     let todo = h.state().ui.dlg.rebase_todo.clone();
     assert_eq!(
         todo.lines().count(),
@@ -416,7 +353,6 @@ fn editing_the_raw_todo_reparses_into_the_plan() {
         "one line per planned commit: {todo}"
     );
 
-    // Append a line as if hand-editing; it must parse back into the plan.
     h.get_by_role_and_label(Role::TextInput, "REBASE-TODO")
         .focus();
     h.run();
@@ -435,8 +371,6 @@ fn editing_the_raw_todo_reparses_into_the_plan() {
 fn the_rail_names_computed_cautions_and_the_recovery_ref() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = plan_repo(tmp.path(), "repo");
-    // A fourth commit re-edits a.txt (conflict risk) authored by a second
-    // identity (mixed committers).
     git(&repo, &["config", "user.name", "Other"]);
     commit(&repo, "a.txt", "feature-4");
 
@@ -447,7 +381,6 @@ fn the_rail_names_computed_cautions_and_the_recovery_ref() {
     assert_painted(&h, "CAUTIONS");
     assert_painted(&h, "Conflicts likely on 1 file");
     assert_painted(&h, "Mixed committer identities (2 authors)");
-    // RECOVERY names the backup ref that restores the pre-rebase state.
     assert_painted(&h, "RECOVERY");
     assert_painted(&h, "refs/turbogit/preflight-backup");
 }
@@ -455,8 +388,6 @@ fn the_rail_names_computed_cautions_and_the_recovery_ref() {
 #[test]
 fn the_rail_lists_the_affected_repos() {
     let tmp = tempfile::tempdir().unwrap();
-    // Two repos of one project with feature checked out: the rewrite
-    // affects both.
     let focused = plan_repo(tmp.path(), "focused");
     let sibling = plan_repo(tmp.path(), "sibling");
     let (state, _exec) = app_state_recording(tmp.path(), &[focused.clone(), sibling.clone()]);
@@ -476,14 +407,11 @@ fn the_footer_estimates_and_start_dispatches_the_backup_backed_plan() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Three replayed commits at ~3s each.
     assert_painted(&h, "Ready to rebase 3 commits");
     assert_painted(&h, "~9s estimated");
 
     let pre_head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     h.get_by_label("Start rebase").click();
-    // Advance frames while polling: the dispatch runs on a worker thread
-    // and the queued click events may need more than one run loop.
     let ok = wait_until(5_000, || {
         h.run();
         !recorded_plans(&exec).is_empty()
@@ -491,8 +419,6 @@ fn the_footer_estimates_and_start_dispatches_the_backup_backed_plan() {
     assert!(ok, "no plan was dispatched");
     h.run();
 
-    // Exactly the editor's plan reached the boundary, and the backup ref
-    // was written at the pre-rebase HEAD before the first replay.
     let plans = recorded_plans(&exec);
     assert_eq!(plans.len(), 1);
     assert_eq!(plans[0].len(), 3);
@@ -501,19 +427,10 @@ fn the_footer_estimates_and_start_dispatches_the_backup_backed_plan() {
         pre_head,
         "the backup ref names the pre-rebase state"
     );
-    // The editor closed itself after dispatching.
     assert_eq!(h.state().ui.dialog, None);
     assert_eq!(h.state().ui.dlg.rebase_plan, None);
 }
 
-// --- the seven plan verbs -----------------------------------------------------
-//
-// The three verification assertions. All row claims are scoped by
-// the row's own `Node::rect()` — every plan row is a labeled node ("plan row
-// <subject>") — because verb words repeat across rows AND in the SHORTCUTS
-// legend, so unscoped painted-text claims would collide with both.
-
-/// The verb chips a row offers, painted once per row.
 const CHIP_LABELS: [&str; 7] = [
     "pick",
     "edit",
@@ -524,7 +441,6 @@ const CHIP_LABELS: [&str; 7] = [
     "update-ref",
 ];
 
-/// The plan row carrying `subject`, as a labeled node.
 fn row_rect(h: &Harness<'_, AppState>, subject: &str) -> Rect {
     let label = format!("plan row {subject}");
     h.query_by_label(&label)
@@ -532,17 +448,12 @@ fn row_rect(h: &Harness<'_, AppState>, subject: &str) -> Rect {
         .rect()
 }
 
-/// The chip labeled `label` painted inside `row`'s rect.
 fn chip_in_row<'h>(h: &'h Harness<'_, AppState>, label: &'h str, row: Rect) -> Node<'h> {
     h.query_all_by_label(label)
         .find(|n| row.contains(n.rect().center()))
         .unwrap_or_else(|| panic!("no {label} chip inside the row at {row:?}"))
 }
 
-/// Whether `chip`'s row currently marks that chip as the row's action: the
-/// selected chip is the one egui paints a fill behind, roughly the chip's own
-/// size (the row's background fill spans the whole row and is excluded by the
-/// width bound).
 fn chip_is_selected(h: &Harness<'_, AppState>, chip: &Node<'_>, row: Rect) -> bool {
     let chip_rect = chip.rect();
     filled_rects(h).iter().any(|(r, _)| {
@@ -552,8 +463,6 @@ fn chip_is_selected(h: &Harness<'_, AppState>, chip: &Node<'_>, row: Rect) -> bo
     })
 }
 
-/// How many chip-label galleys paint inside each row — the "chip count per
-/// row" the no-reflow assertion is made of.
 fn chip_galley_count(h: &Harness<'_, AppState>, row: Rect) -> usize {
     painted_galleys(h)
         .iter()
@@ -561,8 +470,6 @@ fn chip_galley_count(h: &Harness<'_, AppState>, row: Rect) -> usize {
         .count()
 }
 
-/// The row's marked action, as (chip label, galley origin): the chip whose
-/// painted galley sits behind the selected chip's fill.
 fn selected_chip_galley(h: &Harness<'_, AppState>, row: Rect) -> (String, Pos2) {
     let fills = filled_rects(h);
     let galleys = painted_galleys(h);
@@ -580,10 +487,6 @@ fn selected_chip_galley(h: &Harness<'_, AppState>, row: Rect) -> (String, Pos2) 
     }
 }
 
-/// Verification 1 — a parsed REBASE-TODO containing `edit` and `pick` paints
-/// an `Edit` chip on the first row and a `Pick` chip on the second, with no
-/// shortcut-hint collisions: the SHORTCUTS legend names all three new keys,
-/// and the row-scoped chip claims still hold beside it.
 #[test]
 fn a_parsed_todo_paints_the_edit_chip_on_its_row_and_pick_on_the_next() {
     let tmp = tempfile::tempdir().unwrap();
@@ -597,9 +500,6 @@ fn a_parsed_todo_paints_the_edit_chip_on_its_row_and_pick_on_the_next() {
     h.get_by_role_and_label(Role::TextInput, "REBASE-TODO")
         .focus();
     h.run();
-    // The parsed lines join the generated todo (the suite's established
-    // Log-tab flow): one edit row, one pick row, with subjects distinct from
-    // the generated ones so the rows stay uniquely addressable.
     h.get_by_role_and_label(Role::TextInput, "REBASE-TODO")
         .type_text("edit 9b2e440a stop-to-edit\npick a91c3f7c keep-as-is");
     h.run();
@@ -626,9 +526,6 @@ fn a_parsed_todo_paints_the_edit_chip_on_its_row_and_pick_on_the_next() {
         "the parsed pick row must not read as an Edit"
     );
 
-    // The shortcut hints for the new keys paint in the rail — and none of
-    // them collides with the row-scoped claims above, which are scoped by the
-    // rows' own rects precisely because "Edit" is a word the legend also has.
     assert_painted(&h, "R     Reword · change the message");
     assert_painted(&h, "E     Edit · stop to amend the commit");
     assert_painted(&h, "U     Update Ref · follow the rewrite");
@@ -638,10 +535,6 @@ fn a_parsed_todo_paints_the_edit_chip_on_its_row_and_pick_on_the_next() {
     );
 }
 
-/// Verification 2 — `Pick` resets a modified row (the chip claim moves back to
-/// pick and squash stops being painted as the row's action), and a REBASE-TODO
-/// line with an unrecognised verb paints `Unknown`, **not** `Pick`: coercing
-/// it to pick would produce a valid-looking wrong plan.
 #[test]
 fn pick_resets_a_modified_row_and_an_unrecognised_verb_paints_unknown() {
     let tmp = tempfile::tempdir().unwrap();
@@ -650,7 +543,6 @@ fn pick_resets_a_modified_row_and_an_unrecognised_verb_paints_unknown() {
     let mut h = harness(state);
     open_editor(&mut h, &repo);
 
-    // Squash the first row, then take it back with Pick.
     nearest(&h, "squash", "feature-1").click();
     h.run();
     let first = row_rect(&h, "feature-1");
@@ -671,7 +563,6 @@ fn pick_resets_a_modified_row_and_an_unrecognised_verb_paints_unknown() {
         "the row no longer reads as a Squash"
     );
 
-    // An unrecognised todo verb survives as its own row — rendered Unknown.
     nearest(&h, "Log", "Plan").click();
     h.run();
     h.get_by_role_and_label(Role::TextInput, "REBASE-TODO")
@@ -704,11 +595,6 @@ fn pick_resets_a_modified_row_and_an_unrecognised_verb_paints_unknown() {
     );
 }
 
-/// Verification 3 — `galley_origin`: selecting a row and pressing `e` does not
-/// move any other row's origin and the chip count per row is unchanged, while
-/// setting `Edit` does change the affected row's own selected-chip galley
-/// origin (from the pick chip's to the edit chip's). This pins "the shortcut
-/// retargets one row" rather than "the shortcut re-flows the list".
 #[test]
 fn the_edit_shortcut_retargets_one_row_without_reflowing_the_plan() {
     let tmp = tempfile::tempdir().unwrap();
@@ -733,7 +619,6 @@ fn the_edit_shortcut_retargets_one_row_without_reflowing_the_plan() {
     h.key_press(egui::Key::E);
     h.run();
 
-    // No other row moved: every subject galley is exactly where it was.
     for (subject, before) in rows.iter().zip(&subject_before) {
         let origin =
             galley_origin(&h, subject).unwrap_or_else(|| panic!("{subject} is still painted"));
@@ -743,22 +628,18 @@ fn the_edit_shortcut_retargets_one_row_without_reflowing_the_plan() {
             "pressing `e` must not move {subject}'s galley"
         );
     }
-    // No row re-rendered its chips: same chip count per row.
     let rects_after: Vec<_> = rows.iter().map(|r| row_rect(&h, r)).collect();
     let chip_counts_after: Vec<_> = rects_after
         .iter()
         .map(|r| chip_galley_count(&h, *r))
         .collect();
     assert_eq!(chip_counts_after, chip_counts_before, "chip count per row");
-    // The affected row's own chip galley origin DID move: its marked action
-    // switched from the pick chip to the edit chip.
     let (edit_label, edit_origin) = selected_chip_galley(&h, rects_after[0]);
     assert_eq!(edit_label, "edit", "`e` sets Edit on the selected row");
     assert_ne!(
         edit_origin, picked_origin,
         "the selected chip's galley origin moved from pick to edit"
     );
-    // And the untouched rows still mark pick, at the same galley origins.
     for i in 1..rows.len() {
         let (label, origin) = selected_chip_galley(&h, rects_after[i]);
         assert_eq!(label, "pick", "row {} is untouched", i + 1);
@@ -767,24 +648,6 @@ fn the_edit_shortcut_retargets_one_row_without_reflowing_the_plan() {
     }
 }
 
-// --- The body-to-footer rule wears the shared footer-rule tone (ticket 09) --
-//
-// The interactive rebase editor is NOT one of the acceptance-capture pages, so
-// nothing downstream would notice a spacing regression on its body-to-footer
-// rule. These two tests are the substitute evidence: one pins the tone, one pins
-// the geometry. Between them they say what `ui.separator()` used to produce and
-// what the shared footer rule produces, so the change can be reviewed as
-// tone-only rather than taken on trust.
-
-/// One full-width 1px horizontal band the editor painted, with the solid colour
-/// it carries — the fill of a filled band, or the stroke colour of a stroked
-/// one.
-///
-/// Deliberately primitive-agnostic. `ui.separator()` stroked a 1px line through
-/// the middle of a 6px band; the shared footer rule fills a 1px band. Reading
-/// both as "a 1px full-width band and its colour" is what lets the same helper
-/// measure the rule before and after the change, so the geometry assertion below
-/// compares like with like.
 fn full_width_hairlines(h: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
     fn collect(shape: &egui::Shape, out: &mut Vec<(Rect, Color32)>) {
         match shape {
@@ -800,8 +663,6 @@ fn full_width_hairlines(h: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
                     && (stroke.width - 1.0).abs() < f32::EPSILON
                     && (points[1].x - points[0].x).abs() > 500.0 =>
             {
-                // The painted extent of a 1px stroke: one pixel tall, centred on
-                // the segment — the same box a 1px fill covers.
                 let mid = egui::pos2(
                     (points[0].x + points[1].x) / 2.0,
                     (points[0].y + points[1].y) / 2.0,
@@ -822,10 +683,6 @@ fn full_width_hairlines(h: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
     out
 }
 
-/// The editor's body-to-footer rule: the lowest full-width hairline that still
-/// sits above the footer row's own text. The tab-strip rule (the other
-/// `ui.separator()` in this editor, deliberately out of scope) is higher up, so
-/// "lowest above the footer text" picks the body-to-footer rule and not it.
 fn body_footer_rule(h: &Harness<'_, AppState>) -> (Rect, Color32) {
     let footer_top = galley_origin(h, "Ready to rebase 3 commits")
         .expect("the footer row paints its estimate")
@@ -837,14 +694,6 @@ fn body_footer_rule(h: &Harness<'_, AppState>) -> (Rect, Color32) {
         .expect("the editor must rule its body off from its footer")
 }
 
-/// The editor's other full-content-width hairline: the tab-strip rule, which
-/// `ui.separator()` lays out in the same content `Ui` as the footer rule and is
-/// therefore the editor's own answer to "how wide is the available width here".
-///
-/// Matched on x-range, which is what distinguishes the editor's own rules from
-/// the shell's status-bar edge line (wider still) and from the two
-/// columns' internal rules (narrower) — both of which are painted in the same
-/// frame, overlapping the window.
 fn tab_strip_rule(h: &Harness<'_, AppState>, rule: Rect) -> Rect {
     full_width_hairlines(h)
         .into_iter()
@@ -867,12 +716,6 @@ fn the_body_to_footer_rule_paints_the_shared_footer_rule_tone() {
     open_editor(&mut h, &repo);
 
     let (_rect, color) = body_footer_rule(&h);
-    // Before the change this band was egui's default `ui.separator()` line: a
-    // 1px stroke in the *unowned* default-separator tone, which production
-    // re-points at the `INK_2` text token. (This harness drives `ui::render`
-    // without the production `configure_style`, so it shows egui's own raw
-    // default `noninteractive.bg_stroke` of `Color32::from_gray(60)`.) Either
-    // way it is a text token wearing a hairline's job, not the footer rule.
     assert_eq!(
         color,
         Palette::RULE_FOOTER,
@@ -894,12 +737,7 @@ fn the_body_to_footer_rule_keeps_the_separator_s_geometry() {
         .expect("the footer row paints its estimate")
         .y;
 
-    // A 1px rule — not a 2px band, not a rounded card edge.
     assert_eq!(rule.height(), 1.0, "the footer rule is a 1px hairline");
-    // Spans the editor's content width. The tab-strip rule above it is laid out
-    // by the same `Ui` at the same available width, so equalling it is a
-    // self-calibrating statement of "the full available width" that never
-    // hard-codes the window's size.
     let tab_strip = tab_strip_rule(&h, rule);
     assert_eq!(
         rule.width(),
@@ -910,7 +748,6 @@ fn the_body_to_footer_rule_keeps_the_separator_s_geometry() {
         rule.left() >= tab_strip.left() && rule.right() <= tab_strip.right(),
         "the footer rule must not overhang the editor's content box"
     );
-    // Still a body-to-footer rule: below the tab strip, above the footer row.
     assert!(
         rule.center().y > tab_strip.center().y && rule.bottom() <= footer_top,
         "the rule must separate the body from the footer row, not sit inside one"

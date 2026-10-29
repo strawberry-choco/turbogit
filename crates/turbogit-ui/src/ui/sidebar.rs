@@ -1,18 +1,6 @@
-//! Workspace tree sidebar (issue #05, screen 01): the left rail listing
-//! every discovered repository root as a recursive project tree
-//! (sidebar-project-tree issue 01).
-//!
-//! The model is pure presentation logic living in [`super::project_tree`]:
-//! folder and repo nodes, the collapse rule, path labels, and the
-//! re-collapsing live / smart-group filters. This module paints that tree,
-//! the smart-group rows, pinned views, and the selection bar; the shell
-//! owns the left-rail geometry.
-
 use std::path::PathBuf;
 
 use super::project_tree::DotState;
-
-// --- Rendering ---------------------------------------------------------------
 
 use egui::{
     Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui,
@@ -33,85 +21,10 @@ use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
 use turbogit_domain::model::{DisplayName, forward_slash_path};
 
-/// Left rail width (screen 01); also used by the shell's geometry.
 pub const SIDEBAR_WIDTH: f32 = 280.0;
 
-/// Right zone of a rule row reserved for its edit/delete affordances;
-/// the row's click target shrinks by the same amount.
 const RULE_BUTTONS_ZONE: f32 = 56.0;
 
-/// The sidebar tree's active-row band: the full-bleed focus fill plus the
-/// accent rule at its leading edge, which carries the state without relying on
-/// colour alone.
-///
-/// Three row kinds paint it identically — smart group, smart rule, project
-/// folder — so the band lives here (conformance issue 08), and its fill now
-/// comes from the one row-state decision rather than a direct `selection_bg()`.
-/// The **hover** fill deliberately stays at each call site: the two rule rows
-/// round a hover at `CONTROL_RADIUS` while a project row keeps the band
-/// full-bleed. That asymmetry is what the sidebar has always painted; unifying
-/// it is a visible change and needs a decision, not a cleanup.
-///
-/// **Why [`RowState::FocusSelected`] and not [`RowState::RowSelected`], given
-/// R4 says a selected list row is `ROW_SELECTED` plus a rail. Settled, and the
-/// answer is to keep the focus band.** Three reasons, in the order they matter:
-///
-/// 1. **It is not a list row.** R4's row is a row *of a list*: a branch in a
-///    branch list, a commit in the commit table, a file in a file list — one
-///    value out of a column of like values, and the fill has to be legible
-///    against a surface that recurs on the next line. What the left rail paints
-///    on its active row is a **full-bleed tree selection** spanning a workspace
-///    tree: a band that runs from the rail's own left edge to its right edge,
-///    with `CornerRadius::ZERO`, holding a smart group, a smart rule or a
-///    project folder. It is a *region* that is chosen, not a row that is picked
-///    out of many. The `ZERO` radius is the tell: the one deliberate geometry
-///    difference from the shared row shell, and it exists because this band is
-///    the rail's, not a row's.
-/// 2. **The two fills are, on this surface, the same object.** Composited
-///    over the app background, `selection_bg()` is `#233455`; `ROW_SELECTED` is
-///    `#243456` — one unit per channel on two channels and none on the third.
-///    Over the left rail's own surface, which is a shade darker, it is `#213252`
-///    against the same `#243456`: three, two and four. Both are inside a rounding
-///    step of the same colour, so the choice cannot be justified by legibility —
-///    it is justified by *which role* the band is claiming, and the honest reading
-///    of a translucent composite on a dark surface is "a region is focused", not
-///    "this row is selected". Swapping it would change the token the band is read
-///    from and nothing the user can see, which is the worst kind of change: all
-///    ceremony, no difference.
-///    `tests/branch_component_kit.rs` pins the decision and both measurements
-///    together, so a future reader who wants to revisit it starts from the
-///    numbers rather than from a preference.
-/// 3. **The band is not local either way.** It is `components::row_fill`, so the
-///    decision about *which* fill the focus role holds is made once, in the row
-///    grammar, and the sidebar cannot drift from it.
-///
-/// The two files that own that decision — `components.rs`'s `RowState` docs,
-/// which name "the log table, the sidebar tree and blame" as the focus band's
-/// consumers, and `tests/branch_component_kit.rs`, which reads the sidebar's
-/// band through `row_fill(RowState::FocusSelected)` in three painted ratchets —
-/// agree with it, which is the point of keeping the fill at its construction
-/// site.
-///
-/// The pitfall this closes is the one that matters either way: **the band is
-/// the one row-fill decision's answer, not a second treatment.** It used to be
-/// a direct `selection_bg()` call in this module; it now reaches the composite
-/// through `components::row_fill`, so the sidebar cannot drift from the
-/// grammar the way a hand-spelled token would. What is on a selected sidebar
-/// row is the fill and the rail, and both are shared: there is no local
-/// selection vocabulary left to disagree with the rest of the app.
-///
-/// The **band** keeps `CornerRadius::ZERO` rather than the shared control
-/// radius, because a band that runs to the rail's own edges is a real geometry
-/// difference and flattening it would move every row's ink. It is the *fill*
-/// and the *rail* that are shared, not the rectangle.
-///
-/// The accent rule itself is no longer local (ticket 07): it used to be a
-/// 2 px stroke inset 1 px from the leading edge, spelled as its own literal,
-/// and it is now the one shared rail painter — which sits **flush** at the
-/// leading edge, where the diff pane's rail already was, so every row in the app
-/// that grows a rail places it identically. It is still paint: the row's
-/// content does not move, so a focused row's label starts at the same x an
-/// unfocused row's does.
 fn paint_active_band(painter: &egui::Painter, row: Rect) {
     painter.rect_filled(
         row,
@@ -120,44 +33,16 @@ fn paint_active_band(painter: &egui::Painter, row: Rect) {
     );
     components::paint_rail(painter, row);
 }
-/// Height of the bottom selection bar (issue #08), shown only while a
-/// selection is live.
 const SELECTION_BAR_HEIGHT: f32 = 36.0;
 
-// --- Project-tree left column -------------------------------------------
-// The checkbox column ends at 21.5; the 12px expander takes 22..34 and the
-// 14px folder icon follows immediately, so a folder's label hangs at 54 and a
-// repo's (no icon column) at 44. Every offset below is from the row's left
-// edge plus the depth indent.
-
-/// Center of the 12px expand/collapse chevron.
 const EXPANDER_X: f32 = 28.0;
-/// Center of the 14px folder glyph.
 const FOLDER_ICON_X: f32 = 42.0;
-/// Leading x of a folder row's name.
 const FOLDER_NAME_X: f32 = 54.0;
-/// Leading x of a repo row's label, with or without an expander.
 const REPO_NAME_X: f32 = 44.0;
 
-/// Center x of a repository row's **state dot** — the one mark that says what
-/// state the repository is in (R6: state is coloured text or a dot, never a
-/// filled chip).
-///
-/// It sits in the rail's fixed status gutter, to the right of the 12px expander
-/// and left of [`REPO_NAME_X`], so it is a **column** down the tree rather than
-/// something that travels with the name: a nested repository's dot stays on the
-/// same vertical line as its siblings' instead of stepping right with every
-/// depth level, which is what makes a scan for "which of these is diverged"
-/// possible at all. It also keeps the two leading marks from colliding — the
-/// expander glyph ends at 34 and the dot starts there, with three points of air
-/// before the name at 44.
 const REPO_STATE_DOT_X: f32 = 37.5;
-/// The state dot's radius, the same 3.5 the smart-group rows' dots use, so the
-/// rail carries one dot size.
 const REPO_STATE_DOT_R: f32 = 3.5;
 
-/// The square a row's selection checkbox occupies (screen 04's leading
-/// checkbox column).
 fn checkbox_rect(row: Rect) -> Rect {
     Rect::from_center_size(
         Pos2::new(row.left() + 15.0, row.center().y),
@@ -165,9 +50,6 @@ fn checkbox_rect(row: Rect) -> Rect {
     )
 }
 
-/// Tri-state selection checkbox (issue #08, screen 04): checked = brand
-/// fill + check, partial = brand fill + dash, unchecked = outline. Owns
-/// its interact id so the click never reaches the row behind it.
 fn tri_state_checkbox(
     ui: &mut Ui,
     rect: Rect,
@@ -219,8 +101,6 @@ fn tri_state_checkbox(
     response
 }
 
-/// One chip per pinned view (issue #08): clicking restores the saved
-/// selection filtered to the roots still registered.
 fn render_pinned_views(ui: &mut Ui, state: &mut AppState) {
     if state.ui.pinned_views.is_empty() {
         return;
@@ -256,15 +136,10 @@ fn render_pinned_views(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The bottom selection bar (screen 04): "N selected / total" on the left,
-/// the quick Fetch / Pull / Branch… actions and Clear on the right. Rendered
-/// only while a selection is live (the caller reserves the height).
 fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
     painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-    // Structural tone: this is the selected band's own edge, not a division
-    // inside one surface.
     widgets::edge_rule(
         ui.painter(),
         rect,
@@ -316,7 +191,6 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     }
 }
 
-/// `git fetch` on every selected root, one operation (issue #08).
 fn fetch_selection(state: &mut AppState) {
     let roots: Vec<_> = state.ui.repo_selection.iter().cloned().collect();
     if roots.is_empty() {
@@ -325,10 +199,6 @@ fn fetch_selection(state: &mut AppState) {
     state.dispatch(Operation::Fetch { roots });
 }
 
-/// `git pull` on every selected root, one operation (issue #08).
-///
-/// The fleet verb: merge-only by construction and scoped to every root, because
-/// the caller is choosing the selection. Both facts live at the entry.
 fn pull_selection(state: &mut AppState) {
     let paths: Vec<PathBuf> = state
         .ui
@@ -342,36 +212,10 @@ fn pull_selection(state: &mut AppState) {
     state.dispatch(shell_writes::pull::selection(paths));
 }
 
-/// The STATE-family token a row's dot paints with. Conflict shares the
-/// error red with diverged (the domain STATUS_* aliases); the row's badges
-/// and the rest of the shell disambiguate.
-///
-/// The identity with [`DotState::color`] is the point: this function is what
-/// every state mark in the rail calls, so a repository's dot, a folder's dirty
-/// count and a smart group's dot cannot each reach for a token of their own and
-/// call it a state. `tests/design_tokens.rs` pins the map; the painted
-/// ratchets in `tests/workspace_sidebar.rs` pin that the rail's dots are this
-/// function's answer.
 pub fn dot_color(dot: DotState) -> Color32 {
     dot.color()
 }
 
-/// The one counter the rail paints: a **count chip** — the raised surface with
-/// secondary monospaced ink, at the chip radius and the chip type size
-/// (ticket 05's third and last chip).
-///
-/// The rows that carry a counter are hand-laid-out: their content is placed at
-/// measured offsets and their fills are painted into rects the caller
-/// allocated, so the chip cannot go through `widgets::count_chip` (which
-/// allocates its own slot in a `Ui` flow). What it *can* do — and what this
-/// function exists to avoid restating — is the chip's geometry and its colour
-/// pair, both read from the shared vocabulary rather than spelled here. So a
-/// number in the rail is the count chip by construction, and a fourth badge
-/// cannot appear beside it without failing `the_sidebar_counters_are_count_
-/// chips`, which asserts these two values on painted output.
-///
-/// Returns the width it consumed, so a row laying several marks out right to
-/// left can advance its own cursor by the chip's real size.
 fn count_chip_at(painter: &egui::Painter, right_edge: f32, cy: f32, text: &str) -> f32 {
     let geometry = widgets::COMPACT_CHIP_GEOMETRY;
     let galley = painter.layout_no_wrap(
@@ -390,21 +234,9 @@ fn count_chip_at(painter: &egui::Painter, right_edge: f32, cy: f32, text: &str) 
     size.x
 }
 
-/// Air between two adjacent marks in a row's right cluster.
 const BADGE_GAP: f32 = 6.0;
-/// The rail's one inset, public because the rail's geometry contract reads it:
-/// a row's badge cluster stops this far from the row's right edge, the
-/// workspace header and the selection bar keep this far from the rail's edges,
-/// and every non-row content item (the filter field, the section titles, the
-/// pinned-view chips) steps in by it on both edges. Rows, their bands and the
-/// section rules are the exemption — they run full-bleed on purpose.
 pub const RAIL_INSET: f32 = 12.0;
 
-/// One non-row content item in the rail's flow — the filter field, the
-/// pinned-view chips — run in a column stepped in by [`RAIL_INSET`] on both
-/// edges, after which the caller's cursor continues below it. The rows, their
-/// bands and the section rules stay full-bleed; only the things that would
-/// otherwise touch the border go through here.
 fn inset_column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let rail = ui.max_rect();
     let column = Rect::from_min_max(
@@ -421,16 +253,8 @@ fn inset_column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// reserved left rail (see `shell::render`).
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
-    // The rail's own surface, not the app background: `SIDEBAR` is darker than
-    // `BG` by exactly the step that makes the left rail read as a surface the
-    // content is *beside* rather than as an unlabelled gap in it. Everything
-    // painted inside the rail then steps up from it — hover fills, the
-    // selection band, the bottom bar's `SURFACE` fill — so the raised ladder
-    // holds against the rail as well as against the app background.
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SIDEBAR);
-    // `LINE`, not `LINE_SUBTLE`: this edge separates the rail from the content
-    // column beside it.
     widgets::edge_rule(ui.painter(), rect, widgets::Edge::Right, Palette::LINE);
 
     let mut col = ui.new_child(
@@ -446,31 +270,16 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     });
     col.add_space(12.0);
 
-    // Snapshot the tree so the rows borrow nothing while clicks mutate
-    // `selected_root` / collapsed state.
     let full_tree = project_tree::build_tree(&state.project_dir, &state.multi.roots, &|id| {
         state.caches.ahead_behind(id)
     });
     render_smart_groups(&mut col, state, &full_tree);
     col.add_space(12.0);
-    // Pinned views (issue #08): always reachable, including with an empty
-    // selection — recall is the only way back into a saved view.
     render_pinned_views(&mut col, state);
     col.add_space(12.0);
 
-    // The two group sections below (SMART GROUPS and PROJECTS) wear the shared
-    // pane header, so the rail's section titles are the same mark as the log's,
-    // the worktrees pane's and the submodules pane's — same 9px tracked muted
-    // type, same one structural hairline, same 28px band. The rail used to
-    // hand-roll both titles at `TYPE_CONTROL`, which is a *body*-size label
-    // rather than a section label, and gave them no rule at all, so the left
-    // rail's two sections and every pane to the right of it disagreed about
-    // what a section looks like.
     widgets::pane_header_inset(&mut col, "PROJECTS", None, RAIL_INSET, |_ui| {});
 
-    // Both filters narrow the recursive tree and re-collapse the survivors
-    // with the same path labels (sidebar-project-tree issue 01), so no view
-    // ever shows a folder with a single child.
     let tree = smart_groups::filter_to(
         &state.project_dir,
         &full_tree,
@@ -478,8 +287,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     );
     let tree = project_tree::filter_tree(&state.project_dir, &tree, &state.ui.sidebar_filter);
 
-    // The bottom selection bar (issue #08) claims a strip of the rail while
-    // a selection is live; the tree scrolls in the space above it.
     let bar_h = if state.ui.repo_selection.is_empty() {
         0.0
     } else {
@@ -521,32 +328,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The header row's tooltip and accessible name — the one place the sidebar
-/// names the workspace switch in words, for anyone who has not found the
-/// keyboard route yet.
 const WORKSPACE_SWITCH_HINT: &str = "Switch workspace";
 
-/// Workspace header row: folder icon + project basename + right-aligned
-/// total repo count badge (screen 01's "37") — and, as of issue #34's follow
-/// up, the mouse trigger for the workspace picker that already exists
-/// (`popups::workspace_picker`).
-///
-/// The row reads as one control, so the whole band is the hit target: the
-/// layout below shrinks to the icon / name / count / chevron cluster, and the
-/// rect is widened back out to the rail before the click is registered, so
-/// aiming at the chevron or at the empty space beside the project name both
-/// land. The composition itself is untouched — same icons, same type ramp, same
-/// 12px insets.
-///
-/// The one thing that is deferred is the chevron's *ink*: its slot is
-/// allocated in the layout (so nothing moves) but painted after the
-/// interaction exists, because the hover state it answers to is only known
-/// once the row has a click target.
 fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
     let name = state.project_dir.display_name_or("<workspace>");
     let total = state.multi.roots.len().to_string();
     let rail_width = ui.available_width();
-    // The chevron's size is both the slot it occupies and the stroke scale.
     let chevron = 12.0;
     let mut chevron_slot = None;
     let painted = ui.horizontal(|ui| {
@@ -561,9 +348,6 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(12.0);
-            // The workspace's repository count is a count chip, like every
-            // other number in the rail — it is not a fourth badge, and it is
-            // certainly not a repository state, so it wears no state colour.
             let count_galley = ui.painter().layout_no_wrap(
                 total,
                 crate::theme::data_font(crate::theme::TYPE_CHIP),
@@ -603,8 +387,6 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if let Some(slot) = chevron_slot {
-        // One step up the ink ramp on hover, so the affordance reads as live
-        // without competing with the workspace name's primary ink.
         icons::paint_icon(
             ui.painter(),
             slot.min,
@@ -619,27 +401,12 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
     }
     if response.clicked() {
         state.ui.workspace_picker_open = true;
-        // The dropdown hangs from the row's bottom-left (ADR-0017), clear of
-        // the band it came from.
         state.ui.workspace_picker_anchor =
             Some((row.left(), row.bottom() + crate::theme::ITEM_SPACING.y));
     }
 }
 
-/// The SMART GROUPS section (issue #06, screens 01/04; user rules are
-/// issue #07): the section title with the "+ New rule" trigger, then one
-/// dot + label + count row per non-empty built-in group followed by one
-/// row per user-defined rule. Built-in membership is recomputed from live
-/// repo state each frame, so it follows refreshes without manual action;
-/// user rules always render (they are persisted configuration — hiding a
-/// zero-member rule would strand its editor), with their live count.
 fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &project_tree::ProjectTree) {
-    // The shared pane header, with the rail's one trailing action in the slot
-    // the shared chrome reserves for exactly this. The header's own band
-    // registers no click plane, so the `+` keeps its own hit target and a click
-    // on the title is a click on nothing rather than a click on the button.
-    // The widget insets the title's leading edge; the `+`'s trailing inset
-    // stays the action slot's own.
     widgets::pane_header_inset(ui, "SMART GROUPS", None, RAIL_INSET, |ui| {
         ui.add_space(RAIL_INSET);
         let plus = ui.add(egui::Button::new(RichText::new("+").color(Palette::INK_3)));
@@ -658,7 +425,6 @@ fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &project_tree::P
     }
 }
 
-/// One smart-group row: colored dot + label, right-aligned member count.
 fn render_smart_group_row(
     ui: &mut Ui,
     state: &mut AppState,
@@ -710,9 +476,6 @@ fn render_smart_group_row(
         label_galley,
         Palette::INK,
     );
-    // The member count is a number, so it is the count chip — not a fourth
-    // badge. It sits at the row's right inset, exactly where the label it
-    // counts used to end.
     count_chip_at(
         &painter,
         row.right() - RAIL_INSET,
@@ -721,36 +484,10 @@ fn render_smart_group_row(
     );
 }
 
-/// The semantic token a group's dot paints with (issue 02).
-///
-/// A **pure re-spelling of the one repository-state map**, and that is the whole
-/// point of the function existing: a smart group's name and a repository's
-/// state are the same vocabulary, so the group row that says "2 diverged"
-/// carries a dot in the exact colour the two diverged repositories carry beside
-/// their own names. It used to spell three of the five answers out as bare
-/// tokens (`STATUS_DIVERGED`, `STATE_ERROR`, `COUNTER`) and only route two
-/// through the map, which meant the map and this table could drift apart
-/// silently — a fourth state added to one and not the other, and the rail
-/// answering in two colours for the same fact. It then carried a five-arm table
-/// naming each group's state *again*, beside the declarations that already name
-/// it; the group states which state it stands for and this asks it.
-///
-/// The **reserved counter orange is the reason two of them are orange at all**,
-/// and it is worth naming: `Unpulled` and `Dirty` are exactly the two states the
-/// reservation is about. They are dots, not counters — a dot is a mark — so they
-/// are outside the counter rule, and they are inside the *state* rule that says
-/// orange means dirt and unpushed and nothing else. Every other group keeps its
-/// semantic token, so a `Diverged` and a `Conflicted` dot are the same error red
-/// by design (the domain `STATUS_*` aliases) and the row's own label is what
-/// tells them apart.
 fn smart_group_color(group: smart_groups::SmartGroup) -> Color32 {
     dot_color(group.state())
 }
 
-/// One user-defined rule's row (issue #07): the same dot + label + count
-/// anatomy as the built-ins, in the info-blue family, clickable to filter
-/// the tree to the rule's members. Rules render even at count zero —
-/// they are persisted configuration, not computed views.
 fn render_rule_group_row(
     ui: &mut Ui,
     state: &mut AppState,
@@ -767,8 +504,6 @@ fn render_rule_group_row(
         Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
         Sense::hover(),
     );
-    // The click target excludes the affordances zone so the pencil/trash
-    // buttons never fight the row's own filter toggle.
     let clickable = Rect::from_min_max(
         row.min,
         Pos2::new(
@@ -810,9 +545,6 @@ fn render_rule_group_row(
         Palette::INK,
     );
     let count = smart_groups::rule_count(tree, rule);
-    // The count chip, in the rule row's own right zone — the same chip the
-    // built-in group rows use, so a user rule and a built-in group are one
-    // anatomy rather than two.
     count_chip_at(
         &painter,
         row.right() - RULE_BUTTONS_ZONE,
@@ -820,8 +552,6 @@ fn render_rule_group_row(
         &count.to_string(),
     );
 
-    // Edit/delete affordances (issue #07), right-aligned in the reserved
-    // zone. Registered after the row's interact so they take the click.
     let buttons = Rect::from_min_max(
         Pos2::new(row.right() - RULE_BUTTONS_ZONE, row.top()),
         Pos2::new(row.right(), row.bottom()),
@@ -857,8 +587,6 @@ fn render_rule_group_row(
     }
 }
 
-/// Remove a rule (issue #07): drop it from live state + the workspace's
-/// `ui.ron`, and clear the active filter if it pointed at the rule.
 fn delete_rule(state: &mut AppState, ix: usize) {
     if let Some(rule) = state.ui.smart_group_rules.get(ix)
         && state.ui.sidebar_smart_group.as_deref() == Some(rule.label.as_str())
@@ -870,14 +598,10 @@ fn delete_rule(state: &mut AppState, ix: usize) {
     state.ui.toast = Some(Toast::info("Smart group rule deleted"));
 }
 
-/// The active smart-group filter, if a group row is toggled on: the
-/// stored label resolves to a built-in predicate or a user-defined rule
-/// (issue #07); unknown labels — e.g. from a stale session — deactivate.
 fn is_smart_group_active(state: &AppState, label: &str) -> bool {
     state.ui.sidebar_smart_group.as_deref() == Some(label)
 }
 
-/// Resolve the stored active-group label back to its filter.
 fn active_group_filter(state: &AppState) -> Option<GroupFilter> {
     let label = state.ui.sidebar_smart_group.as_deref()?;
     if let Some(group) = smart_groups::SmartGroup::BUILTINS
@@ -895,8 +619,6 @@ fn active_group_filter(state: &AppState) -> Option<GroupFilter> {
         .map(|r| GroupFilter::Custom(r.clone()))
 }
 
-/// Clicking a group filters the tree to its members; clicking it again
-/// (or another group) clears / replaces the filter.
 fn toggle_smart_group(state: &mut AppState, group: smart_groups::SmartGroup) {
     toggle_group_filter(state, group.label());
 }
@@ -909,9 +631,6 @@ fn toggle_group_filter(state: &mut AppState, label: &str) {
     }
 }
 
-/// One folder or repo node of the recursive project tree. `node_path` is
-/// the node's real path (collapse state keys by its relative path); `depth`
-/// indents children so the tree mirrors the directory structure.
 fn render_node(
     ui: &mut Ui,
     state: &mut AppState,
@@ -926,10 +645,6 @@ fn render_node(
     }
 }
 
-/// One folder row: a tri-state selection checkbox, then a clickable header
-/// (chevron + folder + name + subtree dirty badge + repo count) and, when
-/// expanded, its children at the next depth. Collapse state keys by the
-/// folder's relative path (sidebar-project-tree issue 03).
 fn render_folder_row(
     ui: &mut Ui,
     state: &mut AppState,
@@ -955,8 +670,6 @@ fn render_folder_row(
         state.save_durable_ui();
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, folder.name.as_str()));
-    // The checkbox interacts after the header so it sits above it and
-    // takes the click (the rule-row precedent).
     let checkbox = tri_state_checkbox(
         ui,
         checkbox_rect(header),
@@ -1014,16 +727,6 @@ fn render_folder_row(
         name_galley,
         Palette::INK,
     );
-    // Right cluster: the subtree's dirty count, then its repository count.
-    //
-    // The two are different kinds of fact and are marked differently, which is
-    // the whole point of the reservation. **The repository count is a number**,
-    // so it is the count chip. **The dirty count is a repository state** — it
-    // says how many of the subtree's repositories are dirty — so it stays
-    // coloured text in the one state map's dirty colour, which *is* the
-    // reserved counter orange. That is the only reason orange appears on this
-    // surface at all, and it is why turning the dirty count into a chip (the
-    // obvious "make them all the same" move) would be wrong rather than tidy.
     let mut right = header.right() - RAIL_INSET;
     if folder.dirty > 0 {
         let galley = ui.painter().layout_no_wrap(
@@ -1051,12 +754,6 @@ fn render_folder_row(
     }
 }
 
-/// One repository row: tri-state selection checkbox, status dot + label,
-/// right-aligned ahead/behind badges and branch label. Clicking the row
-/// focuses the repo everywhere; clicking the checkbox toggles selection
-/// independently of any nested repos. A repo with nested repos renders an
-/// expander (expanded by default) whose state keys by the repo's relative
-/// path.
 fn render_repo_node(
     ui: &mut Ui,
     state: &mut AppState,
@@ -1083,8 +780,6 @@ fn render_repo_node(
         state.selected_root = Some(repo.id.clone());
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, repo.name.as_str()));
-    // The checkbox interacts after the row so it sits above it and takes
-    // the click (the rule-row precedent).
     let checkbox = tri_state_checkbox(
         ui,
         checkbox_rect(row),
@@ -1102,8 +797,6 @@ fn render_repo_node(
 
     let has_children = !repo.children.is_empty();
     let rel = relative_key(&repo.path, project_dir);
-    // A repo-with-children is expanded by default; the expander chevron
-    // toggles only the collapse, the row itself keeps focusing the repo.
     let expanded = !has_children || !state.ui.sidebar_collapsed.contains(&rel);
     let indent = depth as f32 * two_space_indent(ui);
     if has_children {
@@ -1158,33 +851,14 @@ fn render_repo_node(
             Palette::INK_3,
         );
     }
-    // The repository's state, as a **dot** in the rail's fixed status gutter,
-    // coloured from the one repository-state map.
-    //
-    // This is the whole of R6 for this surface: a state is a mark, so it is a
-    // dot beside the name rather than a filled chip on the row. The dot is
-    // paint, not layout — the name's column is measured from `REPO_NAME_X`
-    // whether or not a state paints, so a diverged repository and a clean one
-    // have their names on the same x and the only difference between the two
-    // rows is a 3.5px circle. It is also why the dot is not the ahead/behind
-    // badge: those are counts *of a state* and stay coloured text.
     painter.circle_filled(
         Pos2::new(row.left() + REPO_STATE_DOT_X, cy),
         REPO_STATE_DOT_R,
         dot_color(repo.dot),
     );
-    // Keep controls and a minimum name column even when counters are huge.
     let left = (row.left() + REPO_NAME_X + indent).min(row.right());
     let mut right = row.right() - RAIL_INSET;
     let badge_left = left + ((right - left).max(0.0) * 0.52).max(24.0);
-    // The ahead / behind badges are **state**, not counts: they say which way
-    // this repository has drifted, so they are coloured text from the one map
-    // and never a chip. `↓` is unpulled and keeps the reserved counter orange
-    // for exactly that reason; `↑` is unpushed and takes the ahead green.
-    //
-    // The galley is laid out in the *same* colour it is painted with. Laying it
-    // out in one token and overriding to another is a two-token statement about
-    // one mark, and the layout colour is the one a reader of the source sees.
     if repo.behind > 0 {
         let ink = dot_color(DotState::Unpulled);
         let galley = painter.layout_no_wrap(
@@ -1222,7 +896,6 @@ fn render_repo_node(
         .clone()
         .unwrap_or_else(|| "<detached>".to_owned());
     let available = (right - left - 8.0).max(0.0);
-    // Reserve a stable name column before fitting the branch into the remainder.
     let name_width = available * 0.52;
     let branch_width = (available - name_width - 8.0).max(0.0);
     paint_row_label(
@@ -1261,7 +934,6 @@ fn render_repo_node(
     }
 }
 
-/// Paint a single-line label inside its reserved column and row clip.
 #[allow(clippy::too_many_arguments)]
 fn paint_row_label(ui: &Ui, row: Rect, text: &str, x: f32, width: f32, size: f32, ink: Color32) {
     let font = crate::theme::chrome_font(size);
@@ -1280,7 +952,6 @@ fn paint_row_label(ui: &Ui, row: Rect, text: &str, x: f32, width: f32, size: f32
         );
 }
 
-/// Reserve one full-width row inside the scroll area and return its rect.
 fn group_header_rect(ui: &mut Ui) -> egui::Rect {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(
@@ -1359,9 +1030,6 @@ mod tests {
 
     #[test]
     fn smart_group_color_reserves_orange_for_unpulled_and_dirty() {
-        // Issue 02 (design doc §6-7): the reserved counter orange paints the
-        // unpulled + dirty smart-group dots exactly; every other group keeps
-        // its semantic token — orange is never a general accent here.
         for group in smart_groups::SmartGroup::BUILTINS {
             let is_counter = matches!(
                 group,

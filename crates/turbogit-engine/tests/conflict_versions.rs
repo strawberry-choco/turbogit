@@ -1,10 +1,3 @@
-//! Issue 04 (deepen-git-engine) — `conflict_versions` over real git.
-//!
-//! The sides come out of a genuine merge conflict in a temporary repository, so
-//! this is the half that proves the adapter's stage numbering matches git's own;
-//! the half that proves the *port* answers sides rather than revs runs through
-//! the substitutable adapter in `turbogit-services/tests/conflict_versions.rs`.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,13 +5,6 @@ use test_support::git_seed::git;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 
-// `conflicting_repo` stays local, deliberately NOT `repo_with_conflict`: this one is
-// parameterised over `(ours, theirs, ancestor)` and its `None` arm is an add/add
-// conflict, which the recipe cannot express — its base is a real commit.
-
-/// `git merge <args>` expected to CONFLICT: the non-zero exit is the fixture, so this
-/// is the inverse of `test_support::git_seed::git`, which asserts success. The two
-/// `GIT_AUTHOR_*` vars it sets are inert: a conflicting merge writes no commit.
 fn git_merge_that_must_conflict(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)
@@ -39,7 +25,6 @@ fn exec() -> std::sync::Arc<dyn GitExecutor> {
     })
 }
 
-/// A repo whose `merged.txt` is mid-conflict with all three sides distinct.
 fn conflicting_repo(
     ours: &str,
     theirs: &str,
@@ -58,7 +43,6 @@ fn conflicting_repo(
             git(&repo, &["add", "merged.txt"]);
             git(&repo, &["commit", "-q", "-m", "ancestor"]);
         }
-        // Add/add: the file exists on neither side of the merge base.
         None => {
             std::fs::write(repo.join("other.txt"), "x\n").unwrap();
             git(&repo, &["add", "other.txt"]);
@@ -76,7 +60,6 @@ fn conflicting_repo(
     git(&repo, &["add", "merged.txt"]);
     git(&repo, &["commit", "-q", "-m", "ours"]);
 
-    // The merge must fail — that is the state under test.
     git_merge_that_must_conflict(&repo, &["merge", "theirs"]);
     (tmp, repo)
 }

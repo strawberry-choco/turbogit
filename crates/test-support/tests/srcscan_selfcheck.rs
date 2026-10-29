@@ -1,35 +1,7 @@
-//! The source scanner's own self-check.
-//!
-//! The ratchets `srcscan` exists for are almost all `assert!(!scan.contains(x))`
-//! or `assert_eq!(items.len(), 1)` over a set the scanner produced. **An empty
-//! set satisfies every one of them.** A stripper with a bug that blanks a whole
-//! file therefore produces a green run, and a green run is the *dangerous*
-//! outcome here rather than the reassuring one: the mutation that motivated this
-//! module replaced `CommitTable::ROW_HEIGHT` with a literal `20.0` while the file
-//! stayed full of prose naming it, and the broken scan passed the ratchet meant
-//! to catch exactly that.
-//!
-//! So this suite is deliberately two-sided:
-//!
-//! - **The positive halves** name a symbol that exists *right now* in a file that
-//!   exists *right now*, and fail if the scanner cannot see it. These are the
-//!   halves that catch a broken stripper; a scanner that matches nothing is red
-//!   here, which is the whole point.
-//! - **The negative half** names a symbol that was never declared, so the
-//!   positive halves cannot be satisfied by a scan that returns everything.
-//!
-//! The hard-input cases are pinned to **real lines in this repository**, not to
-//! an invented fixture: a synthetic one is easier than the thing that broke the
-//! parser, which is the whole reason the four private copies this module
-//! replaced each made different trade-offs. Where the tree has no occurrence the
-//! test says so rather than pretending otherwise — see
-//! [`a_lifetime_beside_a_comment_is_not_a_char_literal`].
-
 use std::path::{Path, PathBuf};
 
 use test_support::srcscan::{self, Strings};
 
-/// The UI crate's `src` tree — what the structural ratchets read.
 fn ui_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../turbogit-ui/src")
 }
@@ -38,8 +10,6 @@ fn ui_source(rel: &str) -> String {
     srcscan::read_source(ui_src().join(rel))
 }
 
-/// The 1-based line `rel` really is, so a test that names a line fails loudly
-/// when the file moves instead of silently scanning something else.
 fn real_line(rel: &str, needle: &str) -> usize {
     let src = ui_source(rel);
     src.lines()
@@ -48,16 +18,8 @@ fn real_line(rel: &str, needle: &str) -> usize {
         + 1
 }
 
-// --- the positive half: a named symbol in a named file ------------------------
-
-/// **The half that catches a broken stripper.** `paint_row` is the shared row
-/// module's one public primitive and `row_shell` is the one painter the log's
-/// rows and `paint_row` share; both exist today, and the structural ratchets in
-/// `branch_component_kit.rs` name both. A scanner that cannot find them is
-/// broken, whatever its negative assertions say.
 #[test]
 fn it_finds_a_named_symbol_in_a_named_file() {
-    // 1. The declaration, read out of the module that owns it.
     let rows = ui_source("ui/widgets/rows.rs");
     let declared = srcscan::declared_fns(&rows);
     assert!(
@@ -66,7 +28,6 @@ fn it_finds_a_named_symbol_in_a_named_file() {
          {declared:?}"
     );
 
-    // 2. The same fact, per line, against the real declaration line.
     let at = real_line("ui/widgets/rows.rs", "pub fn paint_row(");
     let line = rows.lines().nth(at - 1).expect("the declaration line");
     assert!(
@@ -78,8 +39,6 @@ fn it_finds_a_named_symbol_in_a_named_file() {
         "`paint_rail` is not declared on ui/widgets/rows.rs's `paint_row` line"
     );
 
-    // 3. A function body, brace-counted from its declaration — the seam the
-    //    "the row shell never measures a rect" ratchet is made against.
     let body = srcscan::fn_code(&ui_source("ui/components.rs"), "row_shell");
     assert!(
         body.contains("rect: egui::Rect"),
@@ -91,16 +50,11 @@ fn it_finds_a_named_symbol_in_a_named_file() {
         "`row_shell`'s body was read to its closing brace:\n{body}"
     );
 
-    // 4. The façade's re-export — a `pub use`, which is neither a `pub fn` head
-    //    nor a `const` head, so the item walk cannot see it; the whole-identifier
-    //    query is what reads a re-export list.
     assert!(
         !srcscan::word_offsets(&ui_source("ui/widgets/mod.rs"), "paint_row").is_empty(),
         "ui/widgets/mod.rs re-exports `paint_row`"
     );
 
-    // 5. The call sites, over the whole tree — the query the "at least two
-    //    screens" rule is written in.
     let sites = srcscan::call_sites(ui_src(), "paint_row");
     assert!(
         sites.len() >= 2,
@@ -112,12 +66,6 @@ fn it_finds_a_named_symbol_in_a_named_file() {
     );
 }
 
-// --- the negative half: a name that was never declared -----------------------
-
-/// **The half that stops the positive halves from being satisfied by a scan that
-/// returns everything.** A name that does not exist anywhere in the workspace
-/// must come back empty; if it does not, every "exactly one function produces
-/// this" ratchet built on this module is measuring nothing.
 #[test]
 fn it_does_not_find_a_name_that_was_never_declared() {
     let never = "turbogit_git_paint_row_that_was_never_written";
@@ -140,26 +88,12 @@ fn it_does_not_find_a_name_that_was_never_declared() {
         srcscan::call_sites(ui_src(), never).is_empty(),
         "a name that was never declared matched a call site"
     );
-    // `row_shell` really does exist — in `ui/components.rs`, not in the row
-    // module — so this is a scoping assertion rather than a global one.
     assert!(
         !srcscan::declared_fns(&rows).contains(&"row_shell".to_owned()),
         "`row_shell` belongs to ui/components.rs, not to the row module"
     );
 }
 
-// --- the column-preservation promise ------------------------------------------
-
-/// **The projection is the same length as its input, in both modes.** This is the
-/// invariant the whole column story rests on — a masked byte becomes a space, so
-/// a line number and a column offset in a scan's output are the caller's to
-/// report — and it is the one thing no `contains` assertion can see.
-///
-/// It earns its place by having been false: a version of this module copied the
-/// whole tail of the file after every string literal, which every "does it
-/// contain" assertion in the tree was perfectly happy with and which silently
-/// duplicated the colour-literal table a ratchet counts. A length check is the
-/// cheapest possible detector of that class.
 #[test]
 fn the_projection_preserves_every_line_and_every_column() {
     for rel in [
@@ -190,22 +124,12 @@ fn the_projection_preserves_every_line_and_every_column() {
     }
 }
 
-// --- the stripper's hardest real inputs ---------------------------------------
-
-/// **`"release/*"` — a block-comment opener with no closer, inside a string
-/// literal.** `ui/settings_modal.rs` really does carry
-/// `.hint_text("release/*")`, and a stripper that opens a block comment there
-/// blanks the remaining 250 lines of the file: every declaration after it
-/// disappears, and every negative assertion over the file becomes true for the
-/// uninteresting reason that nothing is in it. This is the single most
-/// destructive thing the module has to get right.
 #[test]
 fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
     let rel = "ui/settings_modal.rs";
     let at = real_line(rel, r#""release/*""#);
     let src = ui_source(rel);
 
-    // The declaration after it, by name, from the same file.
     let later = real_line(rel, "fn pattern_chip(");
     assert!(
         later > at,
@@ -217,7 +141,6 @@ fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
         "`pattern_chip` is declared at {rel}:{later} and the scanner still sees it \
          although ui/settings_modal.rs:{at} holds `\"release/*\"`"
     );
-    // And the projection both ways: neither mode may eat the tail of the file.
     for (mode, what) in [
         (Strings::Keep, "code_with_literals"),
         (Strings::Blank, "code_only"),
@@ -231,11 +154,6 @@ fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
     }
 }
 
-/// **`"https://…"` — a line-comment opener inside a string literal**, in
-/// `ui/remotes_dialog.rs`. Weaker than the case above (a stray line comment only
-/// eats the tail of one line) but it is the shape that hides a closing quote,
-/// and with a string-oblivious stripper the literal is left unterminated, so
-/// everything *after* it on that line is masked too.
 #[test]
 fn a_line_comment_opener_inside_a_string_literal_is_not_one() {
     let rel = "ui/remotes_dialog.rs";
@@ -252,13 +170,6 @@ fn a_line_comment_opener_inside_a_string_literal_is_not_one() {
     );
 }
 
-/// **`&TreeProps<'_>` is a lifetime, not a char literal.** `ui/branch_tree_view.rs`
-/// carries `'_` on the signature of `pub fn branch_tree` (line 170) and `<'a>` on
-/// `pub fn keyboard_order` (line 1353). `'_` is *syntactically* a char literal,
-/// so a scanner that decides on the opening quote alone and then scans for a
-/// closing one would treat everything between them as literal content — and a
-/// mode that blanks literal content would then blank 1,200 lines of real code.
-/// Both late declarations have to survive the blanking for that to be caught.
 #[test]
 fn a_lifetime_is_not_a_char_literal() {
     let rel = "ui/branch_tree_view.rs";
@@ -283,8 +194,6 @@ fn a_lifetime_is_not_a_char_literal() {
              {rel}:{at}; a lifetime must not open a char literal"
         );
     }
-    // The char literal that *is* one, four hundred lines down, is still code
-    // rather than the start of a string: `once('…')` in the same file.
     let ch = real_line(rel, "std::iter::once(");
     assert!(
         blanked[ch - 1].contains("std::iter::once("),
@@ -292,10 +201,6 @@ fn a_lifetime_is_not_a_char_literal() {
     );
 }
 
-/// **`b'\0'` and `b'M' => b'L'` in `ui/icons.rs`.** Byte char literals with an
-/// escape and a run of plain ones, interleaved with `//` comments. A scanner
-/// that mistakes a `'` for a string opener loses the rest of the file to the
-/// next `"`, and this is the file in the tree where that would happen.
 #[test]
 fn a_byte_char_literal_is_not_a_comment_or_a_string() {
     let rel = "ui/icons.rs";
@@ -314,19 +219,12 @@ fn a_byte_char_literal_is_not_a_comment_or_a_string() {
              {rel}:{at}"
         );
     }
-    // The mapping arms are a run of four char literals on four lines; a scanner
-    // that loses track of them loses the arm they belong to.
     assert!(
         srcscan::code_only(&src).contains("b'M' => b'L',"),
         "the implicit-repetition arm survived blanking"
     );
 }
 
-/// **A raw string whose body is not Rust.** `crates/turbogit-ui/tests/design_tokens.rs`
-/// carries a real `r#"…"#` literal — a `state.ron` document, full of quotes of
-/// its own — and the code that reads it starts on the very next line. A scanner
-/// that does not know `r#"` opens a string at its `"` and then pairs the
-/// remaining quotes off by accident, so what has to be checked is the tail.
 #[test]
 fn a_raw_string_body_is_not_scanned() {
     let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("../turbogit-ui/tests/design_tokens.rs");
@@ -357,10 +255,6 @@ fn a_raw_string_body_is_not_scanned() {
         );
     }
 
-    // The destructive shape, which the tree has no occurrence of: an odd number
-    // of `"` inside the raw body, plus comment-looking text the scanner must not
-    // act on. Spelled out rather than invented into a file, because the point is
-    // the stripper's behaviour and not where the bytes came from.
     const FIXTURE: &str = r####"
 const BODY: &str = r#"a "quoted" // not a comment
 /* not a comment either */ still " code "#
@@ -384,12 +278,6 @@ pub fn declared_after_the_raw_string() -> u8 { 7 }
     );
 }
 
-/// **A lifetime beside a comment on one line.** The tree has no line that puts
-/// both — every `&'a` in `crates/turbogit-ui/src` is followed by code, not by a
-/// `//` — so this one case is spelled out rather than pinned, and the only
-/// reason to include it is that it is the combination a lifetime/char-literal
-/// bug produces: a scanner that consumed the `//` as literal content, or opened
-/// a comment on a `'`.
 #[test]
 fn a_lifetime_beside_a_comment_is_not_a_char_literal() {
     const FIXTURE: &str = "\
@@ -423,8 +311,6 @@ pub fn after_the_comment() -> u8 {
         !lines[0].contains("takes a lifetime"),
         "the doc comment is blanked"
     );
-    // The item walk reads heads by prefix, so it names both declarations and
-    // spans the first through its column-0 `}`.
     let names: Vec<String> = srcscan::top_level_items(FIXTURE)
         .into_iter()
         .map(|item| item.name)

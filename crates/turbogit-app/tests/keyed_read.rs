@@ -1,12 +1,3 @@
-//! The keyed read at its own interface (ADR-0021): a target goes in, a verdict
-//! comes back, and asking is also what starts getting the answer.
-//!
-//! Nothing here reaches into a cache field or names a key — the point of the
-//! read is that the staleness rule is only written in one place, so it is only
-//! ever tested in one place too. The headless harness runs git work inline, so
-//! a fetch's answer is already in the channel when the read returns and one
-//! `drain_events` settles it; no thread and no deadline is involved.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -15,7 +6,6 @@ use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::{Patch, PatchHeaderLine, PatchLineKind};
 
-/// Every body line the patch holds, whatever side it belongs to.
 fn body_lines(patch: &Patch) -> impl Iterator<Item = &turbogit_domain::model::PatchLine> {
     patch
         .files
@@ -24,11 +14,6 @@ fn body_lines(patch: &Patch) -> impl Iterator<Item = &turbogit_domain::model::Pa
         .flat_map(|h| &h.lines)
 }
 
-/// One committed `README.md`, optionally left with an unstaged edit.
-///
-/// On `git_seed`, which configures the identity on the repository. That is why
-/// the old `GIT_AUTHOR_*` env is gone: these fixtures set no identity of their
-/// own, so env was the only source and commits would take a machine-global one.
 fn repo(dir: &Path, dirty: bool) -> PathBuf {
     let work = test_support::git_seed::repo_with_one_commit(dir, "work");
     if dirty {
@@ -37,13 +22,6 @@ fn repo(dir: &Path, dirty: bool) -> PathBuf {
     work
 }
 
-/// A `README.md` with a staged edit *and* a further unstaged one on top, so the
-/// pinned read and the two pairs it replaced have genuinely different answers.
-///
-/// HEAD holds `x`, the index holds `TWO`, the worktree holds `TWO` plus `three`.
-/// The staged edit is **staged, not committed**, and that is the whole
-/// precondition: committing it would put `TWO` in HEAD too and every pair would
-/// answer the same thing.
 fn repo_with_staged_and_unstaged(dir: &Path) -> PathBuf {
     let work = test_support::git_seed::repo_with_one_commit(dir, "both");
     std::fs::write(work.join("README.md"), "TWO\n").unwrap();
@@ -52,9 +30,6 @@ fn repo_with_staged_and_unstaged(dir: &Path) -> PathBuf {
     work
 }
 
-/// The neither-named working-tree shape: plain `git diff`, index ↔ worktree. The
-/// preview itself asks [`DiffTarget::working_tree`] and reads `HEAD` against the
-/// worktree; this target is kept because a key must distinguish the two.
 fn working_tree_read(work: &Path) -> DiffTarget {
     DiffTarget::new(
         work.to_path_buf(),
@@ -65,11 +40,6 @@ fn working_tree_read(work: &Path) -> DiffTarget {
     )
 }
 
-/// Settle everything the launch queued, so an event count below means exactly
-/// what one read put there.
-///
-/// Not a `test_support::harness` settle: this drains the event channel on a
-/// state predicate, which is the question `state.drain_events()` below asks.
 fn settle_first(state: &mut AppState) {
     while state.drain_events() > 0 {}
 }
@@ -166,9 +136,6 @@ fn the_pinned_read_answers_with_git_diffs_content() {
         "index vs worktree reaches the unstaged edit:\n{}",
         diff.patch
     );
-    // The two pairs the axis used to offer each hold a line this one cannot
-    // name: HEAD's `x` only ever appears in a HEAD-relative diff, and the staged
-    // `TWO` only ever appears as the *added* side of `git diff --cached`.
     assert!(
         body_lines(&diff.patch).all(|l| l.text != "x"),
         "HEAD's line belongs to a HEAD-relative pair, so its absence is what says \
@@ -183,8 +150,6 @@ fn the_pinned_read_answers_with_git_diffs_content() {
         diff.patch
     );
 
-    // And git itself says the same thing, which is the whole claim: the pane is
-    // `git diff` and nothing else.
     let plain = git(&work, &["diff", "--", "README.md"]);
     let staged = git(&work, &["diff", "--cached", "--", "README.md"]);
     assert!(
@@ -193,9 +158,6 @@ fn the_pinned_read_answers_with_git_diffs_content() {
     );
 }
 
-/// The axis left the key, so nothing a viewer does to a file without changing
-/// it can produce a second entry for it: one read per file per refresh, where
-/// the chip path allowed three.
 #[test]
 fn one_read_per_file_while_nothing_about_it_changes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -224,9 +186,6 @@ fn one_read_per_file_while_nothing_about_it_changes() {
     }
 }
 
-/// The third kind: one pane's bytes, from a real repository, answered with both
-/// sides resolved — and kept in the keyed map after another pane takes over,
-/// which is the policy the single-entry reads above do not share.
 #[test]
 fn a_pane_answers_with_both_sides_and_keeps_them() {
     let tmp = tempfile::tempdir().unwrap();
@@ -235,8 +194,6 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
     std::fs::write(work.join("art.png"), &png).unwrap();
     git(&work, &["add", "."]);
     git(&work, &["commit", "-q", "-m", "art"]);
-    // A bigger second version, so the two sides differ by length as well as by
-    // existence.
     std::fs::write(work.join("art.png"), [png.clone(), vec![0u8; 64]].concat()).unwrap();
 
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
@@ -250,8 +207,6 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
         Some(PathBuf::from("art.png")),
     );
     let file = FileMeta {
-        // Repo-relative, as the patch value answers it — the pane read no
-        // longer strips a `b/` off somebody else's string.
         old_path: Some("art.png".into()),
         new_path: Some("art.png".into()),
         binary: true,
@@ -275,8 +230,6 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
     );
     assert_eq!(after, png.len() as u64 + 64, "the worktree side grew");
 
-    // A different pane of the same comparison is a different entry, and the
-    // first is still answerable afterwards — the keep policy.
     let image = PaneTarget::new(comparison, PaneFlavour::Image, file, true);
     assert!(matches!(state.read(image.clone()), Read::Waiting));
     state.drain_events();
@@ -318,9 +271,6 @@ fn peek_answers_without_admitting() {
     assert_eq!(peeked.model.hunk_count(), 1);
 }
 
-/// The untracked preview is answered without a worker — which must not leave
-/// the read holding its slot, or the shell keeps asking for frames forever and
-/// the surface never settles.
 #[test]
 fn a_synthesized_answer_leaves_nothing_pending() {
     let tmp = tempfile::tempdir().unwrap();
@@ -354,8 +304,6 @@ fn a_synthesized_answer_leaves_nothing_pending() {
     );
 }
 
-/// Blame crosses the same interface with its own kind: a `Fresh` for one
-/// target never answers another, and the second one waits for its own fetch.
 #[test]
 fn a_blame_answer_is_not_another_revisions_answer() {
     let tmp = tempfile::tempdir().unwrap();

@@ -1,10 +1,3 @@
-//! Issue 33 — Manage remotes surface, services seam.
-//!
-//! The manager applies a remote change across a selection of roots and
-//! reports per-repo outcomes. These tests pin `remote_service::apply_to_selection`
-//! (and the manager refresh) against the real CLI engine over temporary
-//! repositories.
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{MultiRootManager, Remote, RootId};
@@ -14,11 +7,6 @@ use turbogit_services::remote_service::{RemoteChange, apply_to_selection};
 
 use test_support::git_seed::{git as run_git, repo_with_one_commit as fresh_repo};
 
-// Only the seeded commit differs (`README.md` = "x\n" rather than `seed.txt`), and
-// nothing in this file reads it: every assertion is about the remote `origin`, the
-// per-repo outcomes, or which roots were touched.
-
-/// A registered manager over `repos`, through the production registration path.
 fn manager(engine: &CliExecutor, repos: &[PathBuf]) -> MultiRootManager {
     let mut mgr = MultiRootManager::default();
     for repo in repos {
@@ -31,7 +19,6 @@ fn id(repo: &Path) -> RootId {
     RootId(repo.into())
 }
 
-/// The remotes recorded on the manager's root for `rid`.
 fn manager_remotes<'a>(mgr: &'a MultiRootManager, rid: &RootId) -> &'a [Remote] {
     &mgr.by_id(rid).expect("root registered").remotes
 }
@@ -63,7 +50,6 @@ fn apply_add_remote_across_the_selection_reports_per_repo_outcomes() {
         "both roots take the change: {outcomes:?}"
     );
 
-    // The manager refreshed each root's remotes so the list renders the add.
     for rid in &selected {
         let remotes = manager_remotes(&mgr, rid);
         assert_eq!(remotes.len(), 1, "root {rid:?} lists the new remote");
@@ -80,7 +66,6 @@ fn apply_add_continues_after_a_repo_fails_and_reports_the_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let alpha = fresh_repo(tmp.path(), "alpha");
     let beta = fresh_repo(tmp.path(), "beta");
-    // A remote named `origin` already exists on alpha, so its add must fail.
     run_git(
         &alpha,
         &["remote", "add", "origin", "https://old.git/repo.git"],
@@ -114,7 +99,6 @@ fn apply_add_continues_after_a_repo_fails_and_reports_the_error() {
     let (_, beta_out) = outcomes.iter().find(|(rid, _)| rid == &id(&beta)).unwrap();
     assert!(beta_out.is_ok(), "the other root still takes the change");
 
-    // The failing root's manager entry is untouched; the success is refreshed.
     assert_eq!(
         manager_remotes(&mgr, &id(&alpha)).len(),
         1,
@@ -216,7 +200,5 @@ fn apply_skips_roots_that_are_not_registered_in_the_manager() {
         },
     );
 
-    // The selection always comes from the manager, so an unknown root is a
-    // caller bug: it is skipped the way run_bulk skips unregistered roots.
     assert!(outcomes.is_empty(), "no registered root, no outcome");
 }

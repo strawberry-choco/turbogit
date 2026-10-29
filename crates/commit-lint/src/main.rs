@@ -1,8 +1,3 @@
-//! Validates one commit-message file with cocogitto's parser — the same
-//! implementation `cog verify` runs, so the repo's commit spec has exactly one
-//! parser (ADR-0028 D2). Tooling, not a layer: nothing in the crate stack may
-//! depend on it.
-
 use std::process::ExitCode;
 
 // ADR-0028 D5: the lint tools skip merge and fixup commits by default, and git
@@ -12,7 +7,7 @@ const IGNORE_FIXUP_COMMITS: bool = true;
 
 fn main() -> ExitCode {
     // cocogitto 7.0.0 panics on any settings access when the config path was
-    // never set — `get_config_path` unwraps its `OnceLock` outside tests, and
+    // never set, `get_config_path` unwraps its `OnceLock` outside tests, and
     // only the real `cog` binary sets it (from `--config`). Set the default
     // before anything touches `SETTINGS`; `Settings::get` then resolves it
     // against the discovered repo root, falling back to defaults when no

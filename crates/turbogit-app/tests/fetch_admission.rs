@@ -1,10 +1,3 @@
-//! In-flight fetch admission — the one rule behind every fetch kind (ticket 02).
-//!
-//! The seven per-kind guards are one owner now, so its contract is asserted once
-//! here rather than seven times: a second admit for a key already in flight is a
-//! no-op, and a release — the settlement arm's one call, made before it matches
-//! on the outcome — frees the slot for the next ask, Ok and Err alike.
-
 use std::path::PathBuf;
 
 use turbogit_app::fetch_admission::{FetchAdmission, InflightFetch};
@@ -27,8 +20,6 @@ fn one_fetch_in_flight_per_key_and_a_release_frees_the_slot() {
         "one fetch in flight per key: a second admit for the same key is a no-op"
     );
 
-    // The key is per fetch kind, not a bare root, so the same root's other
-    // kinds take their own slots.
     assert!(
         admission.admit(InflightFetch::ScopedLog(
             alpha.clone(),
@@ -37,14 +28,11 @@ fn one_fetch_in_flight_per_key_and_a_release_frees_the_slot() {
         "a different fetch kind for the same root is a separate slot"
     );
 
-    // The settlement arm releases before it matches on the outcome, so this one
-    // call covers an Ok settlement …
     admission.release(log.clone());
     assert!(
         admission.admit(log.clone()),
         "an Ok settlement frees the slot"
     );
-    // … and an Err settlement alike.
     admission.release(log.clone());
     assert!(
         admission.admit(log.clone()),
@@ -67,8 +55,6 @@ fn an_incoming_poll_key_admits_once_and_frees_on_release() {
         "a root already polling is not admitted a second time"
     );
 
-    // The key is per root, like the other kinds: the same root's other fetch
-    // kinds take their own slots.
     assert!(
         admission.admit(InflightFetch::Log(alpha.clone())),
         "the same root's other fetch kind is a separate slot"

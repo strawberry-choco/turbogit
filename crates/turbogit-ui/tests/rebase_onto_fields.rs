@@ -1,25 +1,3 @@
-//! `--onto` in the Rebase dialog as **two ordered fields**.
-//!
-//! The reference's rebase dialog bundles name four fields
-//! (`rebase.dialog.target`, `rebase.dialog.new.base`, `rebase.dialog.old.base`,
-//! `rebase.dialog.branch.field`), and `--onto` is the pair of them that no single
-//! "base" field can express: new base first, old base second, each validated in
-//! its own right. This suite drives the real `turbogit_ui::ui::render()` through
-//! `egui_kittest` over temporary git repositories and asserts three structural
-//! facts:
-//!
-//! 1. **order** — the `NEW BASE` label's galley origin is strictly above the
-//!    `OLD BASE` label's, which presence alone cannot show;
-//! 2. **per-field validation** — an error paints inside the field it belongs to
-//!    and no other field's error paints anywhere, so the two fields cannot share
-//!    one error region;
-//! 3. **the confirm control's own fill** — measured at the confirm node's rect,
-//!    because the two base fields are filled controls too and an unscoped rect
-//!    count cannot tell them apart.
-//!
-//! The dispatch side is asserted at the executor boundary: both bases reach
-//! `git rebase --onto <new base> <old base>`.
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -39,9 +17,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
     let mut body = std::fs::read_to_string(&file).unwrap_or_default();
@@ -50,8 +25,6 @@ fn commit(dir: &Path, name: &str, text: &str) {
     git_seed_commit(dir, name, &body, text);
 }
 
-/// One repo on `main` (one base commit) with a local `feature` branch two
-/// commits ahead, checked out — the rebase subject.
 fn rebase_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -65,7 +38,6 @@ fn rebase_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -80,7 +52,6 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Open the Rebase dialog in Standard mode with `--onto` showing its two fields.
 fn open_onto(h: &mut Harness<'_, AppState>, root: &Path) {
     h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
     h.state_mut().ui.dlg.rebase_mode = RebaseMode::Standard;
@@ -89,8 +60,6 @@ fn open_onto(h: &mut Harness<'_, AppState>, root: &Path) {
     h.run();
 }
 
-/// The node labeled `label` nearest the dialog's "Change…" anchor: the shell
-/// paints other nodes with the same labels, so the proximity scopes the query.
 fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     let anchor = h
         .query_all_by_label("Change…")
@@ -107,10 +76,6 @@ fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     best.expect("no in-dialog node with the label").1
 }
 
-/// The painted band a field owns: from its own group title down to the next
-/// field's title (or the bottom of the frame for the last field). Every
-/// per-field assertion is scoped by it, because both error sentences are short
-/// and an unscoped `assert_painted` would pass on either field's text.
 fn field_band(h: &Harness<'_, AppState>, title: &str, next: Option<&str>) -> Rect {
     let galleys = painted_galleys(h);
     let top = galleys
@@ -130,18 +95,12 @@ fn field_band(h: &Harness<'_, AppState>, title: &str, next: Option<&str>) -> Rec
     Rect::from_min_max(egui::pos2(0.0, top), egui::pos2(f32::INFINITY, bottom))
 }
 
-/// Does the frame paint `text` inside `band`?
 fn painted_in(h: &Harness<'_, AppState>, text: &str, band: Rect) -> bool {
     painted_galleys(h)
         .iter()
         .any(|g| g.text.contains(text) && band.contains(g.rect.center()))
 }
 
-/// The fill painted at the confirm control's own rect.
-///
-/// `None` means the frame painted no fill there at all. Reading the fill AT that
-/// rect — rather than counting fills in the frame — is what separates the confirm
-/// from the two base fields, which are filled controls as well.
 fn confirm_fill(h: &Harness<'_, AppState>, label: &str) -> Option<Color32> {
     let rect = dialog_node(h, label).rect();
     filled_rect_at(h, rect)
@@ -154,13 +113,10 @@ fn filled_rect_at(h: &Harness<'_, AppState>, rect: Rect) -> Option<Color32> {
         .map(|(_, fill)| fill)
 }
 
-/// A control the user can act on wears an opaque fill; a withheld one does not.
 fn armed(fill: Option<Color32>) -> bool {
     fill.is_some_and(|fill| fill.a() == 255)
 }
 
-/// The rebase calls recorded at the executor boundary as
-/// `(positional upstream, --onto value)`.
 fn recorded_rebases(exec: &RecordingExecutor) -> Vec<(String, Option<String>)> {
     exec.recorded()
         .iter()
@@ -173,10 +129,6 @@ fn recorded_rebases(exec: &RecordingExecutor) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-// ------------------------------------------------------------------ tests --
-
-/// The two fields are hidden until the option that reveals them is on — the
-/// reference's `Modify options → --onto` reading — and both appear together.
 #[test]
 fn the_two_bases_hide_until_onto_is_enabled() {
     let tmp = tempfile::tempdir().unwrap();
@@ -196,13 +148,9 @@ fn the_two_bases_hide_until_onto_is_enabled() {
 
     assert_painted(&h, "NEW BASE");
     assert_painted(&h, "OLD BASE");
-    // The plain target is superseded while the two bases are in charge, and the
-    // dialog says so rather than letting a filled target read as a live field.
     assert_painted(&h, "superseded by the two base fields");
 }
 
-/// Order is the requirement, not presence: `new base` before `old base`, proven
-/// by the first label's galley origin being strictly above the second's.
 #[test]
 fn the_new_base_paints_strictly_above_the_old_base() {
     let tmp = tempfile::tempdir().unwrap();
@@ -219,9 +167,6 @@ fn the_new_base_paints_strictly_above_the_old_base() {
     );
 }
 
-/// With the new base empty and the old base filled, only the new base's own
-/// error paints, and it paints inside the new base's band — the two fields must
-/// not share one error region.
 #[test]
 fn an_empty_new_base_errors_in_its_own_field_and_nowhere_else() {
     let tmp = tempfile::tempdir().unwrap();
@@ -241,7 +186,6 @@ fn an_empty_new_base_errors_in_its_own_field_and_nowhere_else() {
     assert_not_painted(&h, "Select an old base");
 }
 
-/// The mirror: an empty old base errors in the old base's band only.
 #[test]
 fn an_empty_old_base_errors_in_its_own_field_and_nowhere_else() {
     let tmp = tempfile::tempdir().unwrap();
@@ -259,9 +203,6 @@ fn an_empty_old_base_errors_in_its_own_field_and_nowhere_else() {
     assert_not_painted(&h, "Select a new base");
 }
 
-/// A base that names nothing in this root is refused by name, per field — the
-/// reference's `There is no such branch or tag` reading, which is a second
-/// message rather than a re-statement of the empty one.
 #[test]
 fn a_base_that_names_nothing_errors_with_the_missing_ref_message() {
     let tmp = tempfile::tempdir().unwrap();
@@ -280,9 +221,6 @@ fn a_base_that_names_nothing_errors_with_the_missing_ref_message() {
     assert_not_painted(&h, "Select an old base");
 }
 
-/// The confirm control is withheld while either base is empty and armed once
-/// both carry a usable value — measured at the confirm's own rect, never as a
-/// frame-wide fill count.
 #[test]
 fn the_confirm_is_withheld_until_both_bases_carry_a_usable_value() {
     let tmp = tempfile::tempdir().unwrap();
@@ -292,14 +230,12 @@ fn the_confirm_is_withheld_until_both_bases_carry_a_usable_value() {
     let mut h = harness(state);
     open_onto(&mut h, &repo);
 
-    // New base filled, old base empty: withheld.
     let withheld = confirm_fill(&h, "Start rebase");
     assert!(
         !armed(withheld),
         "an empty old base must withhold the confirm, and the withheld fill was {withheld:?}"
     );
 
-    // An unresolvable new base is no better than an empty one.
     h.state_mut().ui.dlg.rebase_old_base = "main".to_string();
     h.state_mut().ui.dlg.rebase_new_base = "no-such-branch-or-hash".to_string();
     h.run();
@@ -309,7 +245,6 @@ fn the_confirm_is_withheld_until_both_bases_carry_a_usable_value() {
         "an unresolvable base must withhold the confirm, and the withheld fill was {withheld:?}"
     );
 
-    // Both bases usable: armed.
     h.state_mut().ui.dlg.rebase_new_base = "main".to_string();
     h.run();
     let armed_fill = confirm_fill(&h, "Start rebase");
@@ -350,20 +285,14 @@ fn the_dispatch_passes_both_bases_in_git_own_order() {
     );
 }
 
-/// `--onto` moves only the sequence after the cutoff: the commits at or below
-/// the old base stay where they are and the ones above it land on the new base.
-/// Proven against real git through the dialog's own dispatch path.
 #[test]
 fn onto_moves_only_the_commits_after_the_old_base() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = rebase_repo(tmp.path(), "repo");
-    // `side` branches off the base commit and carries its own commit, so it is a
-    // destination that is neither `main` nor `feature`.
     git(&repo, &["checkout", "-q", "main"]);
     git(&repo, &["checkout", "-q", "-b", "side"]);
     commit(&repo, "s.txt", "side-1");
     git(&repo, &["checkout", "-q", "feature"]);
-    // The cutoff is `feature-1` itself: everything above it moves, it does not.
     let cutoff = git(&repo, &["rev-parse", "HEAD~1"]).trim().to_string();
     assert_eq!(
         git(&repo, &["log", "-1", "--format=%s", &cutoff]).trim(),
@@ -376,8 +305,6 @@ fn onto_moves_only_the_commits_after_the_old_base() {
     state.ui.dlg.rebase_old_base = cutoff.clone();
     let mut h = harness(state);
     open_onto(&mut h, &repo);
-    // [`open_onto`] writes the dialog state too, so the bases are set last and
-    // one more frame validates them.
     h.state_mut().ui.dlg.rebase_new_base = "side".to_string();
     h.state_mut().ui.dlg.rebase_old_base = cutoff.clone();
     h.run();

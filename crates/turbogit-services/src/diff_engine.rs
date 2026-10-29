@@ -1,21 +1,3 @@
-//! In-process diff engine (library-migration plan Phase L1).
-//!
-//! Computes unified diffs with the `similar` crate instead of shelling out to
-//! `git diff`, while every downstream consumer stays untouched: the producer
-//! emits **git-shaped unified patch text**, so the cached raw text, the row
-//! parser, the display model, per-file metadata scanning, and granular
-//! staging — which composes its patches from the cached raw text (ADR-0013) —
-//! all keep working verbatim. Whenever an in-process computation cannot be
-//! performed confidently, [`diff_text`] delegates to the executor's CLI text
-//! path unchanged: multi-file or stat targets, unreadable revisions (rename
-//! sources, newly added files), and non-UTF-8 content all stay authoritative
-//! CLI territory.
-//!
-//! The module also hosts the structured 3-way merge ([`merge_segments`])
-//! backing the conflict editor: ordered `(ours, theirs, is_conflict)`
-//! segments with the same shape as the raw-marker parser's tuples, built from
-//! `similar`'s merge regions instead of parsing conflict markers.
-
 use std::path::Path;
 
 use similar::{ChangeTag, MergeResolution, TextDiffConfig, TextMerge, WhitespaceMode};
@@ -26,10 +8,8 @@ use turbogit_domain::model::{
 };
 use turbogit_engine_api::GitExecutor;
 
-/// Context lines around each change cluster — git's default.
+/// Context lines around each change cluster, git's default.
 const CONTEXT_RADIUS: usize = 3;
-
-// --- unified patch production -------------------------------------------------
 
 /// The diff `opts` describes, as a [`Patch`]: computed in-process from the two
 /// file versions when they are readable through the engine seam, otherwise the
@@ -64,8 +44,6 @@ pub fn patch(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> TgResult<P
 /// an invalid revision, and filesystem failures all look the same here.
 /// Fall back for those errors too, letting git distinguish actual deletions.
 fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<TgResult<Patch>> {
-    // Single-path full patches only; whole-tree, stat, and commit-scoped
-    // requests keep their CLI semantics.
     let path = opts
         .path
         .as_ref()
@@ -109,7 +87,7 @@ fn forward_slashes(path: &Path) -> String {
         .join("/")
 }
 
-/// NUL-byte sniff — git's own binaryness test for blob contents.
+/// NUL-byte sniff, git's own binaryness test for blob contents.
 fn is_binary(content: &str) -> bool {
     content.as_bytes().contains(&0)
 }
@@ -120,8 +98,6 @@ fn is_binary(content: &str) -> bool {
 /// repo-relative, slash-separated path a patch header wants.
 pub fn untracked_content(root: &Path, rel: &Path) -> Option<(String, String)> {
     let bytes = std::fs::read(root.join(rel)).ok()?;
-    // Decode before sniffing so the one text-shaped `is_binary` stays the only
-    // copy of git's test: a NUL-bearing side — UTF-8 or not — still refuses.
     let content = String::from_utf8(bytes).ok()?;
     if content.is_empty() || is_binary(&content) {
         return None;
@@ -133,8 +109,8 @@ pub fn untracked_content(root: &Path, rel: &Path) -> Option<(String, String)> {
 /// side is a creation or a deletion; equal text contents produce no section at
 /// all, exactly like `git diff` printing nothing for an unchanged path.
 ///
-/// The hunk spans are computed from `similar`'s own ranges — git's 1-based
-/// start, with a zero-length side pointing at the line it lands after — and the
+/// The hunk spans are computed from `similar`'s own ranges, git's 1-based
+/// start, with a zero-length side pointing at the line it lands after, and the
 /// section heading comes from the same funcname heuristic the text producer
 /// used. Both are fields of the value now rather than a string arranged to
 /// match git byte for byte, which is what `ADR-0022` raised this seam for.
@@ -212,7 +188,7 @@ pub fn file_patch(
                     .unwrap_or(change.value())
                     .to_string(),
                 // git terminates the bare record first, then flags it on its
-                // own line — here the flag is a property of the line.
+                // own line, here the flag is a property of the line.
                 no_newline: diff.newline_terminated() && change.missing_newline(),
             });
         }
@@ -229,14 +205,13 @@ pub fn file_patch(
         });
     }
     if hunks.is_empty() {
-        // No textual changes — git prints nothing at all for the path.
         return Patch::default();
     }
     headers.push(PatchHeaderLine::Sources { old: a, new: b });
     one_file(rel, headers, hunks)
 }
 
-/// One section, with its paths recorded repo-relative — the value's form. The
+/// One section, with its paths recorded repo-relative, the value's form. The
 /// `a/`/`b/` prefixes live in the source pair, not baked into a name.
 fn one_file(rel: &str, headers: Vec<PatchHeaderLine>, hunks: Vec<PatchHunk>) -> Patch {
     Patch {
@@ -252,7 +227,7 @@ fn one_file(rel: &str, headers: Vec<PatchHeaderLine>, hunks: Vec<PatchHunk>) -> 
 
 /// Section heading git appends to a hunk header: the closest line strictly
 /// before the hunk (in the old content) whose first byte is alphabetic, `_`,
-/// or `$` — git's default funcname heuristic — truncated to 80 bytes with
+/// or `$`, git's default funcname heuristic, truncated to 80 bytes with
 /// trailing whitespace stripped. `next_old_line` is the hunk's first old-side
 /// line index (0-based). No matching line means no heading, like git.
 fn section_heading(old: &str, next_old_line: usize) -> Option<String> {
@@ -269,8 +244,8 @@ fn section_heading(old: &str, next_old_line: usize) -> Option<String> {
         }
     }
     heading.map(|line| {
-        // Truncate bytes first, then strip trailing whitespace — git's
-        // order — never splitting a UTF-8 code point.
+        // Truncate bytes first, then strip trailing whitespace, git's
+        // order, never splitting a UTF-8 code point.
         let mut cut = line.len().min(HEADING_CAP);
         while !line.is_char_boundary(cut) {
             cut -= 1;
@@ -279,11 +254,9 @@ fn section_heading(old: &str, next_old_line: usize) -> Option<String> {
     })
 }
 
-// --- structured 3-way merge ---------------------------------------------------
-
 /// Ordered merge segments from a structured 3-way merge of `base`, `ours`,
 /// and `theirs` (via `similar::merge`): `(ours, theirs, is_conflict)` tuples
-/// with the same shape the conflict editor's raw-marker parser produces —
+/// with the same shape the conflict editor's raw-marker parser produces,
 /// normal segments carry their text in the first field, conflict segments
 /// both sides. Non-overlapping edits fold into normal segments
 /// automatically; only genuinely incompatible regions stay conflicts, so the
@@ -310,8 +283,6 @@ pub fn merge_segments(base: &str, ours: &str, theirs: &str) -> Vec<(String, Stri
         match region.resolution() {
             MergeResolution::Conflict => segs.push((ours_text, theirs_text, true)),
             MergeResolution::Theirs => push_normal(&mut segs, theirs_text),
-            // Unchanged / Ours / Both all render our side (identical content
-            // by definition for the first and last).
             _ => push_normal(&mut segs, ours_text),
         }
     }
@@ -319,7 +290,7 @@ pub fn merge_segments(base: &str, ours: &str, theirs: &str) -> Vec<(String, Stri
 }
 
 /// Append a normal segment, flattening into a preceding normal segment and
-/// skipping empties — the tuple stream equivalent of the marker parser's
+/// skipping empties, the tuple stream equivalent of the marker parser's
 /// accumulating normal buffer.
 fn push_normal(segs: &mut Vec<(String, String, bool)>, text: String) {
     if text.is_empty() {
@@ -335,9 +306,6 @@ fn push_normal(segs: &mut Vec<(String, String, bool)>, text: String) {
 mod tests {
     use super::*;
 
-    /// The creation-patch admission refuses exactly what git's binaryness test
-    /// and UTF-8 decoding refuse, and spells the header path forward-slashed
-    /// and repo-relative.
     #[test]
     fn untracked_content_refuses_empty_binary_and_non_utf8_and_spells_the_path() {
         let root = tempfile::tempdir().unwrap();
@@ -352,11 +320,9 @@ mod tests {
         std::fs::write(root.path().join("empty.md"), "").unwrap();
         assert!(untracked_content(root.path(), Path::new("empty.md")).is_none());
 
-        // A NUL anywhere is git's binaryness test, valid UTF-8 or not.
         std::fs::write(root.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
         assert!(untracked_content(root.path(), Path::new("blob.bin")).is_none());
 
-        // No NUL, but not decodable as UTF-8 either.
         std::fs::write(root.path().join("invalid.txt"), [0xff, 0xfe]).unwrap();
         assert!(untracked_content(root.path(), Path::new("invalid.txt")).is_none());
     }
@@ -370,15 +336,12 @@ mod tests {
             .lock()
             .unwrap()
             .insert(path.into(), "old\n".into());
-        // Reading a directory fails, but that is not evidence of deletion.
         std::fs::create_dir(root.path().join(path)).unwrap();
         let opts = DiffOpts {
             path: Some(path.into()),
             ..DiffOpts::default()
         };
         assert!(in_process(&exec, root.path(), &opts).is_none());
-        // Falling back means the engine's own answer, unchanged: no synthesized
-        // deletion section.
         assert_eq!(
             patch(&exec, root.path(), &opts).unwrap(),
             exec.diff_patch(root.path(), &opts).unwrap()
@@ -470,7 +433,6 @@ mod tests {
         let patch = file_patch("x.txt", Some("a\n"), Some("b\n"), false);
         let hunk = &patch.files[0].hunks[0];
         assert_eq!((hunk.old_count, hunk.new_count), (1, 1));
-        // The span is fields; the spelling git uses for them is derived.
         assert_eq!(hunk.header_line(), "@@ -1 +1 @@");
     }
 
@@ -505,7 +467,6 @@ mod tests {
             patch.to_string(),
             "diff --git a/b.dat b/b.dat\nBinary files a/b.dat and b/b.dat differ\n"
         );
-        // A binary deletion keeps both the mode header and /dev/null wording.
         let deleted = file_patch("b.dat", Some("\0old"), None, false);
         let text = deleted.to_string();
         assert!(
@@ -523,7 +484,6 @@ mod tests {
 
     #[test]
     fn file_patch_marks_missing_trailing_newlines_like_git() {
-        // Losing the final newline: only the new side carries the hint.
         let patch = file_patch("x.txt", Some("end\n"), Some("end"), false);
         assert_eq!(flagged(&patch), vec!["+end"]);
         assert!(
@@ -532,7 +492,6 @@ mod tests {
                 .contains("-end\n+end\n\\ No newline at end of file\n"),
             "{patch}"
         );
-        // Two unterminated sides: git marks both.
         let patch = file_patch("x.txt", Some("end"), Some("other"), false);
         assert_eq!(flagged(&patch), vec!["-end", "+other"]);
         assert!(
@@ -543,7 +502,6 @@ mod tests {
         );
     }
 
-    /// The body lines a section flags as unterminated, with git's prefix.
     fn flagged(patch: &Patch) -> Vec<String> {
         patch
             .files
@@ -590,10 +548,8 @@ mod tests {
 
     #[test]
     fn merge_segments_flattens_adjacent_normals_and_skips_empties() {
-        // Identical edits on both sides resolve as `Both` — one normal run.
         let segs = merge_segments("x\n", "y\n", "y\n");
         assert_eq!(segs, vec![("y\n".to_owned(), String::new(), false)]);
-        // No regions at all when every input is empty.
         assert!(merge_segments("", "", "").is_empty());
     }
 }

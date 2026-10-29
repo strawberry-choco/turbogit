@@ -1,7 +1,3 @@
-//! Worktrees & Submodules tool tabs: real browsers over the focused root, driven
-//! through the real [`turbogit_ui::ui::render`] via `egui_kittest` over temporary git
-//! repositories. Asserts only public surfaces: painted labels, on-disk git effects,
-//! and public `AppState` transitions.
 use egui::Rect;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
@@ -33,7 +29,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
-/// A fresh scratch parent under the test scratch root.
 fn scratch(tag: &str) -> PathBuf {
     let parent = test_support::scratch_root(tag);
     let _ = std::fs::remove_dir_all(&parent);
@@ -41,13 +36,10 @@ fn scratch(tag: &str) -> PathBuf {
     parent
 }
 
-/// Deliberately unstyled: this suite's claims are pixel readings on the default
-/// face, and the styled preamble installs the embedded font stack.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Step frames until `pred` holds; a plain `settle` cannot wait on an async cycle.
 fn step_until(h: &mut Harness<'_, AppState>, mut pred: impl FnMut(&Harness<'_, AppState>) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -60,8 +52,6 @@ fn step_until(h: &mut Harness<'_, AppState>, mut pred: impl FnMut(&Harness<'_, A
     panic!("condition not met within 10s");
 }
 
-/// [`step_until`] for a wait whose *failure* is the assertion: returning a bool lets
-/// the caller fail in words about the claim instead of timing out on the answer.
 fn step_briefly(
     h: &mut Harness<'_, AppState>,
     mut pred: impl FnMut(&Harness<'_, AppState>) -> bool,
@@ -88,10 +78,6 @@ fn painted_contains(h: &Harness<'_, AppState>, needle: &str) -> bool {
     painted_text(h).iter().any(|t| t.contains(needle))
 }
 
-// Two harnesses on purpose: the pane harness below never drains the event pump, so
-// no dirty probe can land and a row's STATE cell stays in the unknown state for as
-// long as the test needs. The shell harness owns everything behavioural.
-
 fn worktree(root: &RootId, path: PathBuf, branch: &str, dirty: Option<bool>) -> Worktree {
     Worktree {
         path,
@@ -101,9 +87,6 @@ fn worktree(root: &RootId, path: PathBuf, branch: &str, dirty: Option<bool>) -> 
     }
 }
 
-/// A settled harness over one pane's own `show` function, over a cache this file
-/// seeds by hand. Deliberately outside all three shared shell constructors: it does
-/// not drain the event pump, so no dirty probe can race the assertions.
 fn pane_harness(
     tag: &str,
     seed: impl FnOnce(&mut AppState, &Path),
@@ -124,8 +107,6 @@ fn pane_harness(
                     turbogit_ui::theme::install_fonts(ui.ctx());
                     fonts_installed = true;
                 }
-                // No `state.drain_events()`: the shell that dispatches the dirty
-                // probe is not being rendered here.
                 egui::CentralPanel::default().show(ui, |ui| {
                     show(ui, state);
                 });
@@ -156,7 +137,6 @@ fn worktrees_pane_harness(
     )
 }
 
-/// One seeded submodule; `head`/`recorded` are the checked-out and recorded commits.
 fn submodule(
     root: &RootId,
     path: &str,
@@ -188,8 +168,6 @@ fn submodules_pane_harness(
     )
 }
 
-/// Every state cell below the column-header row, in reading order. Scoped **by
-/// position**, never by its string — the same word paints on more than one row.
 fn state_cells(h: &Harness<'_, AppState>) -> Vec<PaintedGalley> {
     status_cells(h, "STATE")
 }
@@ -213,8 +191,6 @@ fn status_cells(h: &Harness<'_, AppState>, label: &str) -> Vec<PaintedGalley> {
     cells
 }
 
-/// The pane header's own band. `title` is a parameter because both panes share the
-/// header with a different word in it.
 struct HeaderBand {
     title: PaintedGalley,
     rule: Rect,
@@ -240,10 +216,6 @@ fn pane_header_band(h: &Harness<'_, AppState>, title: &str) -> HeaderBand {
     HeaderBand { title, rule }
 }
 
-// --- Header ------------------------------------------------------------------
-
-/// Both counted at `2` on purpose: the count chip is asserted by the number it
-/// carries, so a one-row fixture would let a chip counting the wrong thing pass.
 fn worktrees_header_harness() -> Harness<'static, AppState> {
     worktrees_pane_harness(
         "wt17-header",
@@ -255,7 +227,6 @@ fn submodules_header_harness() -> Harness<'static, AppState> {
     diverged_and_matching("sub18-header")
 }
 
-/// One row per pane that has a header; the two `Option`s are the claim each pane adds.
 struct PaneHeader {
     case: &'static str,
     title: &'static str,
@@ -308,7 +279,6 @@ fn both_pane_headers_are_the_shared_pane_header_with_a_neutral_count_chip() {
             "{case}: the pane title is the shared pane-title type size"
         );
 
-        // Located by the header **band**, not by "a `2` somewhere".
         let count = painted_galleys(&h)
             .into_iter()
             .find(|g| g.text == "2" && g.rect.bottom() <= header.rule.top())
@@ -376,8 +346,6 @@ fn both_pane_headers_are_the_shared_pane_header_with_a_neutral_count_chip() {
     }
 }
 
-// --- Column chrome -----------------------------------------------------------
-
 #[test]
 fn worktree_columns_are_labelled_once_and_every_row_starts_where_the_header_does() {
     let h = worktrees_pane_harness("wt17-columns", &[("wt-a", "feature-a", Some(false))]);
@@ -393,7 +361,6 @@ fn worktree_columns_are_labelled_once_and_every_row_starts_where_the_header_does
         );
     }
 
-    // Origins are compared, never a width.
     let path = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text.ends_with("wt-a"))
@@ -404,7 +371,6 @@ fn worktree_columns_are_labelled_once_and_every_row_starts_where_the_header_does
         .min_by_key(|(rect, _)| (rect.width() * rect.height()) as i64)
         .map(|(rect, _)| rect)
         .unwrap_or_else(|| panic!("the row paints its branch as a ref chip"));
-    // The state cell's origin is the mark pair's rect, one `STATE_DOT_R` in.
     let dot = filled_circles(&h)
         .into_iter()
         .find(|(_centre, radius, _)| *radius == turbogit_ui::ui::components::STATE_DOT_R)
@@ -431,7 +397,6 @@ fn worktree_columns_are_labelled_once_and_every_row_starts_where_the_header_does
         );
     }
 
-    // A right-aligned control is placed by where it ends.
     let actions_x = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "ACTIONS")
@@ -461,8 +426,6 @@ fn the_head_cell_is_empty_rather_than_filled_with_a_placeholder() {
         .expect("STATE is labelled");
     let band = head.rect.left()..state_label.rect.left();
 
-    // No dash, no ellipsis, no zero-width string: a placeholder glyph would read
-    // as a value the pane knows.
     let in_head_band: Vec<String> = painted_galleys(&h)
         .into_iter()
         .filter(|g| band.contains(&g.pos.x) && g.pos.y > head.rect.bottom())
@@ -476,11 +439,6 @@ fn the_head_cell_is_empty_rather_than_filled_with_a_placeholder() {
     );
 }
 
-// --- The path column ---------------------------------------------------------
-
-/// Read from geometry, never the galley's text: that accessor returns the
-/// *unwrapped input*, so an elided path and an overflowing one look identical
-/// through it.
 #[test]
 fn the_worktree_path_is_the_primary_column_in_the_data_face_at_its_own_width() {
     let h = worktrees_pane_harness("wt17-path", &[("wt-a", "feature-a", Some(false))]);
@@ -508,7 +466,6 @@ fn the_worktree_path_is_the_primary_column_in_the_data_face_at_its_own_width() {
         "the path must not fall back to the chrome face"
     );
 
-    // A deep path must not push BRANCH out of line.
     let branch = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "BRANCH")
@@ -523,7 +480,6 @@ fn the_worktree_path_is_the_primary_column_in_the_data_face_at_its_own_width() {
         painted.rect,
         branch.rect
     );
-    // The fixture path is far longer than the gap, so this is the elision case.
     let full = ui_text_width(&h, &painted.text);
     assert!(
         full > painted.rect.width() + 1.0,
@@ -534,10 +490,6 @@ fn the_worktree_path_is_the_primary_column_in_the_data_face_at_its_own_width() {
     );
 }
 
-// --- The branch column -------------------------------------------------------
-
-/// Read from the filled rect under the text, not the galley's colour: the ink a
-/// reader sees is applied at paint time.
 #[test]
 fn the_worktree_branch_is_the_neutral_ref_chip_and_not_the_brand_token() {
     let h = worktrees_pane_harness("wt17-branch", &[("wt-a", "feature-a", Some(false))]);
@@ -547,7 +499,6 @@ fn the_worktree_branch_is_the_neutral_ref_chip_and_not_the_brand_token() {
         .find(|g| g.text == "feature-a")
         .unwrap_or_else(|| panic!("the branch name paints"));
 
-    // The pane's only blue is its one primary action.
     let add = h.get_by_label("Add worktree");
     let competing: Vec<Rect> = filled_rects(&h)
         .into_iter()
@@ -603,13 +554,8 @@ fn the_worktree_branch_is_the_neutral_ref_chip_and_not_the_brand_token() {
     );
 }
 
-// --- The state column --------------------------------------------------------
-
-/// Deliberately geometric: the word is multi-byte, so what is asserted is a real
-/// extent rather than a string.
 #[test]
 fn an_unprobed_worktree_renders_a_visible_probing_state_and_the_cell_is_never_empty() {
-    // Two rows: the claim is about *every* row, so one sample would not test it.
     let h = worktrees_pane_harness(
         "wt17-probing",
         &[("wt-a", "feature-a", None), ("wt-b", "feature-b", None)],
@@ -631,7 +577,6 @@ fn an_unprobed_worktree_renders_a_visible_probing_state_and_the_cell_is_never_em
         );
     }
 
-    // Matched on leading ASCII: the ellipsis is not what this claim is about.
     for cell in &cells {
         assert!(
             cell.text.starts_with("probing"),
@@ -667,7 +612,6 @@ fn only_a_settled_clean_probe_renders_the_word_clean() {
         "`clean` is the only thing that renders the word clean, and exactly one \
          row's probe settled clean here: {words:?}"
     );
-    // Positional, because a cell found by its string is the thing under check.
     let probing = cells
         .iter()
         .find(|g| g.pos.y > cells[0].pos.y && g.pos.y < cells[2].pos.y.max(cells[0].pos.y))
@@ -680,14 +624,10 @@ fn only_a_settled_clean_probe_renders_the_word_clean() {
     );
 }
 
-// --- The row action ----------------------------------------------------------
-
-/// Asserted so the quiet treatment cannot rename the verb under the removal test above.
 #[test]
 fn remove_is_a_quiet_row_action_and_still_answers_to_its_name() {
     let h = worktrees_pane_harness("wt17-quiet-remove", &[("wt-a", "feature-a", Some(false))]);
 
-    // A named node with a hit target, so a screen reader reaches it by name.
     let remove = h.get_by_label("Remove wt-a");
     assert!(
         remove.rect().height() >= 24.0,
@@ -695,7 +635,6 @@ fn remove_is_a_quiet_row_action_and_still_answers_to_its_name() {
         remove.rect()
     );
 
-    // A quiet action fills nothing at rest, where a full button fills exactly that rect.
     let label = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "Remove wt-a")
@@ -717,7 +656,6 @@ fn remove_is_a_quiet_row_action_and_still_answers_to_its_name() {
          own rect. Found a plate at: {plate:?}"
     );
 
-    // Quiet in ink too: a destructive verb painted as an invitation is asking to be pressed.
     assert_ne!(
         label.color,
         Palette::BRAND,
@@ -731,10 +669,6 @@ fn remove_is_a_quiet_row_action_and_still_answers_to_its_name() {
     );
 }
 
-// --- The dialog --------------------------------------------------------------
-
-/// Asserted by the widget info the edits register, not the visible wording: the
-/// accessible name is the contract.
 #[test]
 fn the_new_worktree_dialog_keeps_two_distinct_accessibility_labels_on_its_inputs() {
     let parent = scratch("wt17-dialog-labels");
@@ -749,14 +683,12 @@ fn the_new_worktree_dialog_keeps_two_distinct_accessibility_labels_on_its_inputs
 
     let path = h.get_by_label("Worktree path input");
     let branch = h.get_by_label("Worktree branch input");
-    // Two nodes answering to one name is a screen reader reading one field twice.
     assert_ne!(
         format!("{:?}", path.rect()),
         format!("{:?}", branch.rect()),
         "the two labelled inputs are two fields, not one node reached twice"
     );
 
-    // And each is a text input, not a button that happens to be named.
     let text_inputs = h
         .query_all_by_role(egui::accesskit::Role::TextInput)
         .count();
@@ -766,7 +698,6 @@ fn the_new_worktree_dialog_keeps_two_distinct_accessibility_labels_on_its_inputs
     );
 }
 
-/// The laid-out size of a string; [`PaintedGalley`] reports the family but not the size.
 fn painted_font_size<S>(harness: &Harness<'_, S>, needle: &str) -> f32 {
     harness
         .output()
@@ -784,8 +715,6 @@ fn painted_font_size<S>(harness: &Harness<'_, S>, needle: &str) -> f32 {
         .unwrap_or_else(|| panic!("`{needle}` was not painted"))
 }
 
-/// How wide `text` would lay out **unwrapped**. A galley's `text` accessor hands back
-/// the *unwrapped input*, so a fitted string and a clipped one look identical through it.
 fn ui_text_width<S>(harness: &Harness<'_, S>, text: &str) -> f32 {
     let font_id = harness
         .output()
@@ -816,7 +745,6 @@ fn ui_text_width<S>(harness: &Harness<'_, S>, text: &str) -> f32 {
     harness.ctx.fonts_mut(|f| f.layout_job(job).size().x)
 }
 
-/// [`assert_painted`] that names the **case** too: three rows assert the same string.
 #[track_caller]
 fn case_asserts_painted(case: &str, h: &Harness<'_, AppState>, needle: &str, painted: bool) {
     let texts = painted_text(h);
@@ -827,8 +755,6 @@ fn case_asserts_painted(case: &str, h: &Harness<'_, AppState>, needle: &str, pai
     );
 }
 
-/// One row per way the Worktrees list can arrive. All four make the same claim: the
-/// loading state is tied to the list, never to the (never-run) probe.
 struct ListArrival {
     case: &'static str,
     tag: &'static str,
@@ -900,10 +826,8 @@ fn the_worktrees_list_lands_before_anything_is_probed() {
         let mut h = harness(state);
         settle(&mut h);
 
-        // The tab's data loads asynchronously (event pump); step until it paints.
         step_until(&mut h, |h| painted_contains(h, row.arrived));
         if let Some(needle) = row.then_waits {
-            // The dirty label is probe-driven: it paints as the window-open probe settles.
             step_until(&mut h, |h| painted_contains(h, needle));
         }
         for needle in row.paints {
@@ -933,9 +857,6 @@ fn worktrees_header_keeps_add_action_in_the_right_aligned_action_slot() {
     );
 }
 
-// -- Badge and eager fill: the cheap list lands before any probe --
-
-/// The badge and eager fill never probe, so the rows keep their unknown state.
 #[test]
 fn worktrees_badge_counts_without_any_dirty_probe() {
     let parent = scratch("wt-sub-tabs-list-first");
@@ -943,7 +864,6 @@ fn worktrees_badge_counts_without_any_dirty_probe() {
     let wt = add_worktree(&repo, &parent, "wt-feature", "feature");
     std::fs::write(wt.join("base.txt"), "changed\n").unwrap();
     let state = AppState::for_roots(&parent, &[repo]);
-    // Stay off the Worktrees window: the badge must not start any probe.
     let mut h = harness(state);
 
     step_until(&mut h, |h| painted_contains(h, "Worktrees 1"));
@@ -982,7 +902,6 @@ fn worktrees_tab_add_action_creates_a_worktree_end_to_end() {
     let created = repo.join("wt-created");
     h.get_by_label("Create").click();
 
-    // Wait for the painted row, not just the directory: git creates it mid-op.
     step_until(&mut h, |h| {
         created.exists() && painted_contains(h, "wt-created")
     });
@@ -1080,13 +999,10 @@ fn submodules_tab_renders_unicode_commit_references_without_splitting_them() {
     assert!(!painted_contains(&h, "界界界界界界界界"));
 }
 
-/// The word `recorded` is gone from the view by design, so the claim is restated as
-/// both commits painted, each at its own column's origin.
 #[test]
 fn submodules_tab_shows_needs_update_with_pinned_vs_recorded() {
     let parent = scratch("wt-sub-tabs-sub-ahead");
     let repo = super_with_submodule(&parent, "alpha");
-    // Move the submodule's HEAD off the recorded commit.
     let sub_wc = repo.join("child");
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
     git(&sub_wc, &["add", "."]);
@@ -1099,7 +1015,6 @@ fn submodules_tab_shows_needs_update_with_pinned_vs_recorded() {
     step_until(&mut h, |h| painted_contains(h, "Needs update"));
 
     assert_painted(&h, "Needs update");
-    // Both sides are on screen, each under its own column's header.
     let out_x = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "CHECKED OUT")
@@ -1187,7 +1102,6 @@ fn tab_badges_show_live_worktree_and_submodule_counts() {
     add_worktree(&repo, &parent, "wt-a", "feature-a");
     add_worktree(&repo, &parent, "wt-b", "feature-b");
     let state = AppState::for_roots(&parent, &[repo]);
-    // Stay on Changes: the badge must be live, not visit-driven.
     let mut h = harness(state);
     settle(&mut h);
     step_until(&mut h, |h| painted_contains(h, "Worktrees 2"));
@@ -1223,9 +1137,6 @@ fn header_x(h: &Harness<'_, AppState>, label: &str) -> f32 {
         .x
 }
 
-/// Galleys on the row whose status dot sits at `row_centre`, within `tolerance`.
-/// Scoped **by position, never by string** — a cell found by its own value is the
-/// thing being checked.
 fn row_galleys(
     h: &Harness<'_, AppState>,
     row_centre: f32,
@@ -1241,8 +1152,6 @@ fn row_galleys(
         .collect()
 }
 
-/// The status dot of every row, in row order — the pane's only circle, and so the
-/// honest anchor for "which band is this row".
 fn status_dots(h: &Harness<'_, AppState>) -> Vec<(egui::Pos2, egui::Color32)> {
     let mut dots: Vec<(egui::Pos2, egui::Color32)> = filled_circles(h)
         .into_iter()
@@ -1262,13 +1171,6 @@ fn column_labels(h: &Harness<'_, AppState>) -> [(&'static str, f32); 5] {
         ("ACTIONS", header_x(h, "ACTIONS")),
     ]
 }
-
-// --- Header ------------------------------------------------------------------
-
-// The Submodules fixture has two submodules and only one is `Needs update`, so a
-// chip saying `2` counts submodules and one saying `1` counts something interesting.
-
-// --- Column chrome -----------------------------------------------------------
 
 #[test]
 fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_header_does() {
@@ -1292,7 +1194,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
         );
     }
 
-    // Asserted before any cell is looked for, so a shared origin reads as a sentence.
     let anchored = [
         ("PATH", path_x),
         ("CHECKED OUT", out_x),
@@ -1313,7 +1214,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
     let dots = status_dots(&h);
     assert_eq!(dots.len(), 2, "one status mark per row, in row order");
 
-    // Row 0 is the diverged submodule, so all four value columns are occupied.
     let row = dots[0].0.y;
     let path_cell = row_galleys(&h, row, path_x - 4.0..out_x - 8.0, 6.0)
         .into_iter()
@@ -1328,7 +1228,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
         .find(|g| g.family == egui::FontFamily::Monospace)
         .unwrap_or_else(|| panic!("the diverged row paints its recorded commit"));
 
-    // The status cell's origin is the mark pair's rect, one `STATE_DOT_R` in.
     let dot_x = dots[0].0.x - turbogit_ui::ui::components::STATE_DOT_R;
     for (label, header_at, cell_at) in [
         ("PATH", path_x, path_cell.rect.left()),
@@ -1345,7 +1244,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
         );
     }
 
-    // A right-aligned control is placed by where it ends.
     let actions_x = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "ACTIONS")
@@ -1360,7 +1258,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
         deinit.rect()
     );
 
-    // …and the second row, whose RECORDED cell is empty on purpose.
     let row = dots[1].0.y;
     let path_cell = row_galleys(&h, row, path_x - 4.0..out_x - 8.0, 6.0)
         .into_iter()
@@ -1387,10 +1284,6 @@ fn the_submodules_columns_are_labelled_once_and_every_row_starts_where_the_heade
     );
 }
 
-// --- The two commit columns --------------------------------------------------
-
-/// Expected colours are read through `RepoState::Diverged.color()` rather than written
-/// as a literal, so a view-local literal cannot pass while the two answers drift apart.
 #[test]
 fn the_two_commit_columns_are_two_columns_and_only_the_side_that_moved_is_coloured() {
     use turbogit_ui::theme::RepoState;
@@ -1398,14 +1291,12 @@ fn the_two_commit_columns_are_two_columns_and_only_the_side_that_moved_is_colour
     let [(_, _), (_, out_x), (_, recorded_x), ..] = column_labels(&h);
     let dots = status_dots(&h);
 
-    // -- two columns, not one sentence --------------------------------
     assert!(
         (out_x - recorded_x).abs() > 1.0,
         "CHECKED OUT and RECORDED are two columns at {out_x} and {recorded_x}; a \
          single cell holding one sentence is what this ticket replaced"
     );
 
-    // -- the diverged row: both values ------------------------------------
     let row = dots[0].0.y;
     let out_cell = row_galleys(&h, row, out_x - 4.0..recorded_x - 8.0, 6.0)
         .into_iter()
@@ -1429,7 +1320,6 @@ fn the_two_commit_columns_are_two_columns_and_only_the_side_that_moved_is_colour
         out_cell.text
     );
 
-    // -- …and the side that moved is the distinguished one ---------------
     assert_eq!(
         out_cell.color,
         RepoState::Diverged.color(),
@@ -1448,7 +1338,6 @@ fn the_two_commit_columns_are_two_columns_and_only_the_side_that_moved_is_colour
         "a divergence the reader cannot see is a column split for its own sake"
     );
 
-    // -- the matching row: one column occupied -------------------------
     let row = dots[1].0.y;
     let out_cell = row_galleys(&h, row, out_x - 4.0..recorded_x - 8.0, 6.0)
         .into_iter()
@@ -1475,8 +1364,6 @@ fn the_two_commit_columns_are_two_columns_and_only_the_side_that_moved_is_colour
     );
 }
 
-// --- The row action ----------------------------------------------------------
-
 /// The flag is asserted by driving the real action and reading the refetched cache:
 /// `git submodule update` without `--init` has no working copy and would leave the row
 /// uninitialised with no head.
@@ -1492,7 +1379,6 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
     settle(&mut h);
     step_until(&mut h, |h| painted_contains(h, "Deinit child"));
 
-    // An initialised submodule keeps the update verb and still offers deinit.
     assert_painted(&h, "Update child");
     assert!(
         h.query_all_by_label("Init child").next().is_none(),
@@ -1504,7 +1390,6 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
     h.get_by_label("OK").click();
     step_until(&mut h, |h| painted_contains(h, "Uninitialized"));
 
-    // Scoped by position is not possible: both verbs carry the same name.
     assert_painted(&h, "Init child");
     assert!(
         h.query_all_by_label("Init child").count() == 1,
@@ -1516,12 +1401,9 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
         "the update verb is gone from an uninitialised submodule's row — the \
          operation was always an init and the label now says so"
     );
-    // Deinit is still there: renaming one action must not remove the other.
     assert_painted(&h, "Deinit child");
 
     h.get_by_label("Init child").click();
-    // A *bounded* wait: the thing awaited is the thing asserted, so the failure must
-    // be a sentence about the state, not a ten-second timeout.
     assert!(
         step_briefly(&mut h, |h| {
             h.state()
@@ -1555,7 +1437,6 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
         "once the submodule is initialised again, its action is an update again"
     );
 
-    // Pins the `Uninitialized` arm of the one map by something observable.
     assert_ne!(
         RepoState::Clean.color(),
         RepoState::Uninitialized.color(),
@@ -1563,10 +1444,6 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
     );
 }
 
-// --- The status mark pair ----------------------------------------------------
-
-/// Expected colours are read through the shared map, never a literal spelled here — a
-/// literal in the test would let a second opinion in the view pass.
 #[test]
 fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour() {
     use turbogit_ui::theme::RepoState;
@@ -1626,7 +1503,6 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
              `{word}`: a literal written into the view is the second opinion this \
              ratchet exists to catch"
         );
-        // The word wears the dot's colour; disagreement is what the single map prevents.
         let cell = row_galleys(&h, centre.y, status_x..status_x + 200.0, 6.0);
         let painted_word = cell.iter().find(|g| g.text == *word).unwrap_or_else(|| {
             panic!(
@@ -1644,10 +1520,8 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
             painted_word.rect
         );
 
-        // -- the negative: no background at all ---------------------
         let covering: Vec<(egui::Rect, egui::Color32)> = filled_rects(&h)
             .into_iter()
-            // A full-width surface is the pane behind the row, not a mark in it.
             .filter(|(rect, _)| rect.width() < 600.0 && rect.contains(painted_word.pos))
             .collect();
         assert!(
@@ -1656,7 +1530,6 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
              radius, no chip geometry. Found fills covering the word at {painted_word:?}: \
              {covering:?}"
         );
-        // Nothing is filled in the mark's own extent, which is where a chip would put its rect.
         let band = egui::Rect::from_min_max(
             egui::pos2(status_x - 4.0, painted_word.rect.top() - 8.0),
             egui::pos2(
@@ -1675,7 +1548,6 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
         );
     }
 
-    // A clean submodule and a diverged one never look alike.
     assert_ne!(
         expected[0].1, expected[1].1,
         "a clean submodule and a diverged one must never share a colour"
@@ -1685,9 +1557,6 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
         "…and the painted dots prove it on screen, not just in the mapping"
     );
 
-    // `design_tokens.rs` pins the map entry; this says the *view* wears it. `COUNTER` is
-    // reserved for dirt and unpushed counts and `AHEAD` is clean's green — neither is a
-    // missing working copy, and the error red is a conflict or a divergence.
     let uninitialised = dots[2].1;
     assert_eq!(
         uninitialised,
@@ -1710,8 +1579,6 @@ fn the_status_word_is_a_leading_dot_with_no_background_and_the_one_maps_colour()
     );
 }
 
-/// `INK_3`'s contract is "legal on app/panel/content/sidebar, not on a raised or
-/// selected one", so "which surface is this on" is measured, not assumed.
 #[test]
 fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_legal_surface() {
     use turbogit_ui::theme::RepoState;
@@ -1728,7 +1595,6 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
     h.get_by_label("OK").click();
     step_until(&mut h, |h| painted_contains(h, "Uninitialized"));
 
-    // The state came from the refetched cache, not a local flag flipped by the press.
     let root = h.state().selected_root.clone().expect("selected root");
     let subs = h
         .state()
@@ -1745,7 +1611,6 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
         "…with no working copy at all, which is the fact the colour is about"
     );
 
-    // Located on the row carrying the word, not by index.
     let word = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "Uninitialized")
@@ -1796,10 +1661,6 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
         );
     }
 
-    // `INK_3` is not legal everywhere, so the surface is answered in two halves: the
-    // fill the dot sits inside, read off the configured context (the harness's backing
-    // rect is egui's stock dark fill, not a token this app chose), and that nothing else
-    // is painted between the dot and that fill.
     let ctx = egui::Context::default();
     turbogit_ui::theme::configure_style(&ctx);
     let panel_fill = ctx.style_of(egui::Theme::Dark).visuals.panel_fill;
@@ -1817,8 +1678,6 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
          {panel_fill:?}"
     );
 
-    // `INK_3` is sub-AA on all of these (3.01–4.20:1), so a band of any of them under
-    // this dot is the contract being broken: step up to `INK_2`, do not relax the ramp.
     for (token, fill) in [
         ("SURFACE", Palette::SURFACE),
         ("SURFACE_2", Palette::SURFACE_2),
@@ -1839,12 +1698,6 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
     }
 }
 
-// Contrast comes from `test_support::wcag::contrast`, the one place a ratio is computed.
-
-// --- The row's selection -----------------------------------------------------
-
-/// The pane has **no chosen-row state**, so every row is compared against the
-/// header's origin instead of a selected row against an unselected one.
 #[test]
 fn no_submodule_row_paints_a_selection_fill_and_every_row_starts_at_one_origin() {
     let h = diverged_and_matching("sub18-no-selection");

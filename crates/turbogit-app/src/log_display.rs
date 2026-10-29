@@ -1,22 +1,3 @@
-//! The log pane's **derived display window** (log-view-scaling 04): the union
-//! of the visible roots' loaded windows, sorted, live-filtered, and unioned
-//! with the pickaxe hits — computed when the window it was derived from
-//! changes, not once per frame.
-//!
-//! Plain data owned by the application layer, the same split as
-//! [`crate::diff_model`] (ADR-0014): nothing here references egui, and the
-//! value never borrows the caches. A borrow would have to be re-taken every
-//! frame, which is the cost this value exists to remove — the held window owns
-//! its rows so it can be indexed (and, from log-view-scaling 05, paged) from
-//! outside the frame that built it.
-//!
-//! The lane walk lives here beside it for the same reason it stays pure: lane
-//! colours are a property of the loaded window, so they are assigned when the
-//! window changes and held with it. Its input is the WHOLE loaded window —
-//! never the text-filtered subset, and never the drawn rows — because a
-//! commit's colour must not change as it crosses the viewport or as a search
-//! term narrows.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,38 +6,20 @@ use turbogit_domain::model::{Commit, CommitId, RootId};
 use crate::root_caches::RootCaches;
 use crate::state::AppState;
 
-// --- the UI-side inputs a window is derived from --------------------------------
-
-/// Everything outside the caches that the displayed rows depend on: which
-/// roots are in view, which scope is active, and what the live search box
-/// says. This is the *fingerprint* half of the invalidation rule — the caches'
-/// own [`crate::root_caches::RootCaches::revision`] is the other half — and it
-/// is why a window can be held across frames: two derivations with the same
-/// revision and the same inputs have the same answer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LogInputs {
-    /// The roots filter (`ui.log_root_filter`): one root, or all of them.
     pub root_filter: Option<RootId>,
-    /// The active path scope (`ui.log_path_scope`).
     pub path_scope: Option<std::path::PathBuf>,
-    /// The active ref scope (`ui.log_ref_scope`), which names its own root.
     pub ref_scope: Option<(RootId, String)>,
     /// The live search text (`ui.log_filter`) verbatim. The pickaxe cache is
     /// keyed by its TRIMMED form, so a difference of leading or trailing
     /// whitespace must rebuild; the filter itself matches case-insensitively.
     pub filter: String,
-    /// The roots the graph unions, in union order — [`visible_roots`].
     pub roots: Vec<RootId>,
-    /// The scope's repository (`selected_root`), carried ONLY under a path
-    /// scope: a path scope's listing is read for the selected root, while a
-    /// ref scope names its own root and an unscoped view reads every visible
-    /// root. Carrying the selection unconditionally would rebuild the window
-    /// on every row click, which changes nothing the window holds.
     pub scope_root: Option<RootId>,
 }
 
 impl LogInputs {
-    /// The inputs as the log pane's state stands right now.
     pub fn of(state: &AppState) -> Self {
         Self {
             root_filter: state.ui.log_root_filter.clone(),
@@ -73,10 +36,6 @@ impl LogInputs {
     }
 }
 
-/// The roots whose history is displayed: the roots filter's one root, or every
-/// registered root. The union, the pickaxe union, and the pane's own ref-fill
-/// all read the same list from here, so "which roots are in view" has one
-/// definition.
 pub fn visible_roots(state: &AppState) -> Vec<RootId> {
     match &state.ui.log_root_filter {
         Some(id) => vec![id.clone()],
@@ -84,16 +43,8 @@ pub fn visible_roots(state: &AppState) -> Vec<RootId> {
     }
 }
 
-// --- the held value -------------------------------------------------------------
-
-/// One row of the display window: the commit, owned. `Arc` so a rebuild copies
-/// each commit once and every access afterwards is a pointer, never a clone.
 pub type LogRow = Arc<Commit>;
 
-/// The display window the log pane paints from: an owned, indexable row
-/// sequence plus the lane index those rows were walked for. Built once per
-/// change to the loaded window or to [`LogInputs`], and held on
-/// [`AppState`] (ADR-0014's "compute once per content, paint per frame" split).
 pub struct LogDisplay {
     rows: Vec<LogRow>,
     lanes: HashMap<CommitId, usize>,
@@ -102,37 +53,26 @@ pub struct LogDisplay {
 }
 
 impl LogDisplay {
-    /// How many rows the whole window holds — the number the "N shown" line
-    /// reports, and the row count a paged list pages over
-    /// (log-view-scaling 05). Not the number of rows currently drawn.
     pub fn len(&self) -> usize {
         self.rows.len()
     }
 
-    /// Whether the window holds no rows at all.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
-    /// The row at `index`, or `None` past the end. Indexable rather than
-    /// panicking because the row count moves under any caller that has not
-    /// just re-synced.
     pub fn row(&self, index: usize) -> Option<&Commit> {
         self.rows.get(index).map(|row| row.as_ref())
     }
 
-    /// The whole row sequence, in display order.
     pub fn rows(&self) -> &[LogRow] {
         &self.rows
     }
 
-    /// The lane a commit's graph node is drawn in, or `None` for a commit the
-    /// walk never saw (one outside the loaded window).
     pub fn lane(&self, id: &str) -> Option<usize> {
         self.lanes.get(id).copied()
     }
 
-    /// The whole lane index, as the row painter reads it.
     pub fn lanes(&self) -> &HashMap<CommitId, usize> {
         &self.lanes
     }
@@ -142,7 +82,6 @@ impl LogDisplay {
 /// pure predicate, over the two things that can change the answer: the caches'
 /// revision (a batch landed, a window settled, a scope refilled, anything was
 /// invalidated) and the UI-side fingerprint.
-///
 /// `false` is the promise the log pane makes to its own paint path: the held
 /// rows and their lane colours are still the answer, so the frame reads them
 /// and computes nothing. It is what makes an idle frame cost nothing, and it
@@ -154,26 +93,15 @@ pub fn needs_rebuild(held: Option<&LogDisplay>, revision: u64, inputs: &LogInput
     }
 }
 
-/// The display window for one loaded union and one pickaxe union.
-///
-/// `loaded` is every visible root's window for the active scope, in cache
-/// order and unfiltered; `hits` is the pickaxe rows the search cache holds.
-/// The lane walk runs over `loaded` WHOLE — before the live filter and before
-/// the hits are unioned in — so a commit's colour is a fact about the loaded
-/// window rather than about what the developer happens to be looking at.
 pub fn derive(
     revision: u64,
     inputs: &LogInputs,
     loaded: Vec<LogRow>,
     hits: Vec<LogRow>,
 ) -> LogDisplay {
-    // Lane colours are assigned over the whole loaded window, not over the
-    // rows that survive the filter: a commit keeps the colour the walk gave it
-    // when its batch landed, whether or not a search term is narrowing the list
-    // (spec: "Lane colours are a property of the loaded window").
-    let lanes = assign_colors(&loaded);
     let mut rows = loaded;
     rows.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
+    let lanes = assign_colors(&rows);
     if !inputs.filter.is_empty() {
         let filter = inputs.filter.to_lowercase();
         rows.retain(|c| {
@@ -181,12 +109,6 @@ pub fn derive(
                 || c.id.to_lowercase().contains(&filter)
                 || c.author.name.to_lowercase().contains(&filter)
         });
-        // Code-change hits (issue 17): a commit whose content changed the
-        // query's count shows even when message/hash/author do not match. A hit
-        // already in the window is not added twice; a hit the filter just hid
-        // comes back, so the union is over ids and not over the filtered
-        // subset. Skipped inside a path scope, which may only ever list commits
-        // touching the scoped path.
         if inputs.path_scope.is_none() {
             for c in hits {
                 if !rows.iter().any(|v| v.id == c.id) {
@@ -204,20 +126,6 @@ pub fn derive(
     }
 }
 
-/// Assign each commit a lane index using a lightweight DAG walk, so the list
-/// reads like a commit graph (Epic D1). Newest-first input assumed.
-///
-/// Two properties this shape is load-bearing for:
-/// - **It runs over the whole loaded window.** Its input is the owned row
-///   sequence ([`LogRow`], not the old borrowed `&[&Commit]` union) and it is
-///   called from [`derive`] BEFORE the live text filter and before the pickaxe
-///   hits are unioned in. Scoping it to the viewport would make a commit change
-///   colour as it scrolled through the list; scoping it to the filtered subset
-///   would make a commit change colour as a search term was typed. Neither is a
-///   colour the developer can learn.
-/// - **It is a pure function over a commit sequence.** No state, no renderer,
-///   no window: the rules below are testable on their own, which is where they
-///   are pinned.
 fn assign_colors(commits: &[LogRow]) -> HashMap<CommitId, usize> {
     let mut color_of: HashMap<CommitId, usize> = HashMap::new();
     let mut lanes: Vec<Option<CommitId>> = Vec::new();
@@ -235,7 +143,6 @@ fn assign_colors(commits: &[LogRow]) -> HashMap<CommitId, usize> {
                 }
             });
         color_of.entry(c.id.clone()).or_insert_with(|| {
-            // pick the lane's color, allocating a new one if needed
             if idx < lanes.len() && lanes[idx].is_none() {
                 let c = next_color;
                 next_color += 1;
@@ -266,14 +173,6 @@ fn assign_colors(commits: &[LogRow]) -> HashMap<CommitId, usize> {
     color_of
 }
 
-/// The loaded union and the pickaxe union, read out of the caches under the
-/// active scope. Owned, and read only on a rebuild: a frame that reuses the
-/// held window copies no commit at all.
-///
-/// The scope rules are the log pane's, unchanged: a ref scope shows only its own
-/// ref's listing and hides every other root, a path scope shows the selected
-/// root's scoped listing and nothing else, and an unscoped view unions every
-/// visible root's window.
 pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<LogRow>) {
     let loaded: Vec<LogRow> = if let Some((root, ref_name)) = &inputs.ref_scope {
         owned(caches.ref_log(root, ref_name).unwrap_or_default())
@@ -283,16 +182,8 @@ pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<Log
             None => Vec::new(),
         }
     } else {
-        // The unscoped union: every visible root's window, in the visible roots'
-        // order, each root's rows in its own (newest-first) order. The sort that
-        // makes the union newest-first across roots happens in [`derive`].
         union(&inputs.roots, |id| caches.log(id))
     };
-    // The pickaxe union is skipped inside a path scope: the scoped view may only
-    // ever list commits touching the scoped path, and the pickaxe cache is not
-    // path-scoped. The pane's data-ensure step never fills it there either. The
-    // cache is keyed by the trimmed RAW query (what the engine was given) — not
-    // the lowercased text the filter matches with.
     let hits: Vec<LogRow> = match (inputs.path_scope.is_none(), inputs.filter.trim()) {
         (true, query) if !query.is_empty() => {
             union(&inputs.roots, |id| caches.search_log(id, query))
@@ -302,9 +193,6 @@ pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<Log
     (loaded, hits)
 }
 
-/// Every listed root's window for one reading, as owned rows. A root with
-/// nothing cached contributes nothing, which is what makes the first frame of a
-/// cold log an empty window rather than a miss.
 fn union<'a>(roots: &[RootId], read: impl Fn(&RootId) -> Option<&'a [Commit]>) -> Vec<LogRow> {
     roots
         .iter()
@@ -313,8 +201,6 @@ fn union<'a>(roots: &[RootId], read: impl Fn(&RootId) -> Option<&'a [Commit]>) -
         .collect()
 }
 
-/// One scope's window for `root` as owned rows: the path scope's listing when one
-/// is active and cached, else the root's unscoped window.
 fn scoped_window(caches: &RootCaches, inputs: &LogInputs, root: &RootId) -> Vec<LogRow> {
     if let Some(path) = &inputs.path_scope
         && let Some(commits) = caches.path_log(root, path)
@@ -324,9 +210,6 @@ fn scoped_window(caches: &RootCaches, inputs: &LogInputs, root: &RootId) -> Vec<
     owned(caches.log(root).unwrap_or_default())
 }
 
-/// A cached window as owned rows. One deep copy per commit, once per rebuild —
-/// the price of holding the rows instead of borrowing them, and the reason the
-/// read only happens when something has actually changed.
 fn owned(commits: &[Commit]) -> Vec<LogRow> {
     commits.iter().cloned().map(Arc::new).collect()
 }
@@ -366,8 +249,6 @@ mod tests {
         })
     }
 
-    /// A straight three-commit history on one root, newest first: `a` is HEAD,
-    /// `b` its child, `c` the root commit.
     fn linear() -> (RootId, Vec<LogRow>) {
         let r = root("alpha");
         let rows = vec![
@@ -385,10 +266,6 @@ mod tests {
         }
     }
 
-    // --- the walk's own rules --------------------------------------------------
-
-    /// A linear history reads as one lane: each commit hands its own lane to
-    /// its single parent, so the whole walk allocates one colour.
     #[test]
     fn a_linear_history_walks_in_one_lane() {
         let (_r, rows) = linear();
@@ -399,8 +276,6 @@ mod tests {
         assert_eq!(lanes["c"], 0);
     }
 
-    /// A merge's SECOND parent opens its own lane and keeps it: the lane a
-    /// side branch runs in is the whole reason the graph is readable.
     #[test]
     fn a_merge_gives_its_second_parent_a_fresh_lane() {
         let r = root("alpha");
@@ -414,16 +289,9 @@ mod tests {
         assert_eq!(lanes["m"], 0);
         assert_eq!(lanes["first"], 0, "the first parent continues the lane");
         assert_eq!(lanes["side"], 1, "the merged-in branch opens the next lane");
-        // Two lanes carry `base` at once by the time the walk reaches it, and it
-        // converges on the FIRST one — so the branches meet at a colour the
-        // reader has already seen, rather than the root commit changing colour
-        // between the two lines that arrive at it.
         assert_eq!(lanes["base"], 0);
     }
 
-    /// Appending a batch must not renumber the rows already held: the walk runs
-    /// over the whole window, so growing it can only add lanes, never move one.
-    /// This is the property that makes recomputing on batch-append safe at all.
     #[test]
     fn a_row_keeps_its_lane_when_a_batch_is_appended_above_it() {
         let r = root("alpha");
@@ -442,11 +310,6 @@ mod tests {
         }
     }
 
-    /// A commit the window does not hold — a parent below the oldest loaded row
-    /// — holds a lane in the walk but takes no colour of its own until a batch
-    /// brings it in. It is a default-coloured node until then, which is why the
-    /// walk has to run over the whole window rather than the drawn rows: the
-    /// moment its batch lands, it is coloured like everything else.
     #[test]
     fn a_parent_below_the_loaded_window_takes_no_colour_of_its_own() {
         let r = root("alpha");
@@ -455,18 +318,12 @@ mod tests {
         assert_eq!(lanes.get("b"), None, "an unwalked commit has no colour");
     }
 
-    /// The walk is a function of the sequence alone: the same rows in, the
-    /// same lanes out, twice.
     #[test]
     fn the_walk_is_pure_over_its_input() {
         let (_r, rows) = linear();
         assert_eq!(assign_colors(&rows), assign_colors(&rows));
     }
 
-    // --- the held window -------------------------------------------------------
-
-    /// The rows are an owned, indexable sequence: a row reached by index is
-    /// the same commit the walk saw, and the count is the whole window's.
     #[test]
     fn the_display_window_is_a_stable_indexable_sequence() {
         let (r, rows) = linear();
@@ -480,8 +337,6 @@ mod tests {
         assert_eq!(window.rows()[0].id, "a", "the rows own their commits");
     }
 
-    /// An empty window is a settled answer, not a missing one: the pane paints
-    /// "no commits match" off `is_empty`, so the two must not be confusable.
     #[test]
     fn an_empty_window_is_empty_rather_than_absent() {
         let window = derive(0, &LogInputs::default(), Vec::new(), Vec::new());
@@ -489,8 +344,6 @@ mod tests {
         assert!(window.is_empty());
     }
 
-    /// Newest first, with the id breaking ties in ascending order: two commits
-    /// with the same timestamp keep a stable, reproducible order.
     #[test]
     fn rows_are_ordered_newest_first_with_the_id_breaking_ties() {
         let r = root("alpha");
@@ -504,8 +357,6 @@ mod tests {
         assert_eq!(ids, ["x", "y", "z"]);
     }
 
-    /// The lane index is held WITH the window, and a row's own lane is
-    /// readable from the window rather than recomputed by the painter.
     #[test]
     fn the_lane_index_is_held_with_the_window() {
         let (r, rows) = linear();
@@ -521,10 +372,6 @@ mod tests {
         assert_eq!(window.lane("nope"), None, "an unwalked commit has no lane");
     }
 
-    /// The property this pins: the walk runs over the WHOLE loaded
-    /// window, so a commit the live filter hides keeps the lane the walk gave
-    /// it. Scoping the walk to the filtered subset would renumber the lanes
-    /// every time a search term narrowed the list.
     #[test]
     fn lane_colours_come_from_the_whole_loaded_window() {
         let r = root("alpha");
@@ -560,10 +407,6 @@ mod tests {
         );
     }
 
-    // --- the live filter -------------------------------------------------------
-
-    /// The live filter matches message, hash or author, case-insensitively, and
-    /// an empty filter is not a filter.
     #[test]
     fn the_live_filter_matches_message_hash_and_author_case_insensitively() {
         let r = root("alpha");
@@ -584,17 +427,10 @@ mod tests {
             let ids: Vec<&str> = window.rows().iter().map(|c| c.id.as_str()).collect();
             assert_eq!(ids, expected, "filter {term:?}");
         }
-        // No filter at all is every row, in the union's own order.
         let window = derive(0, &inputs_for(&[root("alpha")]), rows, Vec::new());
         assert_eq!(window.len(), 3);
     }
 
-    // --- the pickaxe union -----------------------------------------------------
-
-    /// A pickaxe hit the metadata filter would miss is unioned in; a hit already
-    /// in the window is not added twice, and a hit the filter hid comes back.
-    /// The union is re-sorted afterwards so a hit from further back cannot land
-    /// out of order.
     #[test]
     fn pickaxe_hits_are_unioned_deduped_and_resorted() {
         let r = root("alpha");
@@ -615,8 +451,6 @@ mod tests {
         );
     }
 
-    /// Inside a path scope the pickaxe cache is not consulted at all: the
-    /// scoped view may only list commits touching the scoped path.
     #[test]
     fn pickaxe_hits_are_skipped_inside_a_path_scope() {
         let r = root("alpha");
@@ -630,11 +464,6 @@ mod tests {
         assert_eq!(ids, ["a"], "a path scope never mixes in pickaxe hits");
     }
 
-    // --- invalidation ----------------------------------------------------------
-
-    /// Nothing changed, so the held window is still the answer to the question
-    /// in front of it. This single `false` is what an idle frame rests on: the
-    /// paint path reads the held rows and the held lanes and computes nothing.
     #[test]
     fn a_held_window_with_the_same_revision_and_inputs_is_still_the_answer() {
         let (r, rows) = linear();
@@ -644,21 +473,14 @@ mod tests {
             !needs_rebuild(Some(&held), 4, &inputs),
             "a frame that changed nothing must not rebuild"
         );
-        // And it says so however the window was reached — a rebuilt handle is
-        // the same answer, so a second frame is as quiet as the first.
         assert!(!needs_rebuild(Some(&held), 4, &inputs));
     }
 
-    /// A window that has never been built is always built: the first frame of
-    /// the log pane is a rebuild like any other.
     #[test]
     fn a_missing_window_is_always_built() {
         assert!(needs_rebuild(None, 0, &LogInputs::default()));
     }
 
-    /// A moved cache revision rebuilds: a batch landed, a scope settled, a
-    /// window said whether history continues, or something was invalidated.
-    /// The revision is the caches' own word for "the loaded window moved".
     #[test]
     fn a_moved_cache_revision_rebuilds() {
         let (r, rows) = linear();
@@ -667,9 +489,6 @@ mod tests {
         assert!(needs_rebuild(Some(&held), 5, &inputs));
     }
 
-    /// Each of the four UI inputs rebuilds on its own, and each is the whole
-    /// story: a batch appended, a scope changed, the roots filter narrowed or
-    /// widened, a search term typed.
     #[test]
     fn each_ui_input_rebuilds_on_its_own() {
         let (r, rows) = linear();
@@ -729,9 +548,6 @@ mod tests {
         }
     }
 
-    /// Whitespace is part of the live term: the pickaxe cache is keyed by the
-    /// TRIMMED text, so a term that differs only in padding reads a different
-    /// cache entry and has to rebuild.
     #[test]
     fn a_padded_search_term_rebuilds_against_the_trimmed_one() {
         let (r, rows) = linear();
@@ -743,11 +559,6 @@ mod tests {
         assert!(needs_rebuild(Some(&held), 4, &padded));
     }
 
-    /// The scoped repository is a fingerprint input where it is read from: a
-    /// path scope's listing is looked up for the selected root, so moving the
-    /// selection inside a scope reads a different window. (Whether the
-    /// selection is carried at all is `LogInputs::of`'s rule, checked where a
-    /// real `AppState` is in hand.)
     #[test]
     fn a_moved_scope_root_rebuilds_inside_a_path_scope() {
         let (r, rows) = linear();

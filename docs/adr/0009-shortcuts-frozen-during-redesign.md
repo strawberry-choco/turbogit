@@ -7,13 +7,13 @@ But the parity programme added seven keys, because the reference's verbs had no
 TurboGit equivalent:
 
 - `⌃⇧D`, `⌃⇧⇥` and `F4` are dispatched in the shell (`ui/shell.rs`), gated on a
-  diff being previewed — the options menu, the pane switch, Jump to Source.
+  diff being previewed, the options menu, the pane switch, Jump to Source.
 - `⌘D` is the apply-patch window's `Show Diff` preflight (`ui/apply_patch.rs`),
   read while that window paints so it cannot fire under a text field.
 - `R`, `E` and `U` set a rebase-plan row to Reword, Edit or Update Ref
   (`ui/interactive_rebase.rs`), joining the `P`/`S`/`F`/`D` already there.
 
-Two of the seven are **required** in this record's sense — nothing else reaches
+Two of the seven are **required** in this record's sense, nothing else reaches
 them: `F4` is the only Jump to Source, and `⌃⇧⇥` is the only writer of
 `UiState::diff_pane`. The other five are accelerators over a control that also
 answers a click (the file-row trigger, the `Show Diff` button, the verb chips), so

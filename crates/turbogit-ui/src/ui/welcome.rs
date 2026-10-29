@@ -1,19 +1,3 @@
-//! Welcome page (issue #10; redesign spec §3).
-//!
-//! Shown instead of the active tool window whenever no project is open or the
-//! user returned to it via the command palette's Open Welcome (`AppState::
-//! show_welcome`, ADR-0004). Full-window, scrollable, left-aligned content
-//! (max-width 980px), one dominant region down to a two-column footer:
-//!
-//! 1. Hero: brand tile + wordmark + tagline, with the "What's new" trigger.
-//! 2. Clone panel: the one clone door (URL input + shallow checkbox + Clone).
-//! 3. Quick actions: three cards — Open / Initialize / Attach workspace.
-//! 4. Lower (two columns, left wider): the recents card (ADR-0005) and the
-//!    getting-started card, side by side.
-//!
-//! Branch indicators on recent rows are computed live at render time through
-//! the engine seam and cached in memory only (never persisted).
-
 use crate::theme::Palette;
 use egui::{
     Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Ui,
@@ -26,65 +10,30 @@ use super::components;
 use super::icons::{self, Icon};
 use super::widgets;
 
-/// Content column width (spec §8.1: max-width 980px).
 const CONTENT_WIDTH: f32 = 980.0;
-/// Hero brand-tile edge (spec §5.1: a 64px rounded tile).
 const HERO_TILE: f32 = 64.0;
-/// Uniform horizontal gutter: the gap between the three quick-action cards and
-/// between the two `lower` columns, matching the 20px vertical section rhythm.
 const GUTTER: f32 = 20.0;
-/// Quick-action card icon tile edge (spec §5.3: a 30px `SURFACE_3` tile).
 const ICON_TILE: f32 = 30.0;
-/// Getting-started step pill edge (spec §5.5: a 20px `SURFACE_3` numeral).
 const STEP_PILL: f32 = 20.0;
-/// A recent-project row: name, path and last-opened on three lines, so the row
-/// is three text lines plus leading rather than a step on the 24/26 px single-line
-/// ramp — which is why it stays here rather than joining `theme`'s row heights.
 const RECENT_ROW_HEIGHT: f32 = 64.0;
 
-/// Right zone of a recent row reserved for its remove control: the shared
-/// [`widgets::icon_button`] square, a 6px gap clear of the chips, and the
-/// row's own 10px gutter. The row's open target and both chips stop at the
-/// zone's left edge, so the control can never overlap the row it belongs to —
-/// and reserving the zone up front means the row does not reflow when the
-/// control appears. The button's own size is the vocabulary's, not this
-/// number's: only the gap and the gutter are stated here.
 const RECENT_ACTIONS_ZONE: f32 = 44.0;
 
 /// Paint alpha of the hero's soft `BRAND` gradient overlay (spec §5.1). A mix
-/// fraction, not a design token — egui has no linear-gradient fill, so the halo
+/// fraction, not a design token, egui has no linear-gradient fill, so the halo
 /// is one `BRAND`-tinted rect blended over [`Palette::BG`].
 const GRADIENT_ALPHA: f32 = 0.22;
 
-/// Branch indicators recompute at most this often (ADR-0005: computed live
-/// at render with in-memory caching — never stored).
 const BRANCH_TTL: Duration = Duration::from_secs(5);
 
-/// The one pane-title face in the app: the token layer's
-/// [`TYPE_PANE_TITLE`](crate::theme::TYPE_PANE_TITLE) in the chrome face.
-///
-/// **One constructor, two callers** — the changelog dialog's title and the
-/// wordmark below both build their heading through it, and a third surface
-/// adopting the role gets the same face by calling the same function. A
-/// caller that wrote the size out instead has restated the role, and the two
-/// spellings are the only way "the pane-title role" can quietly become two
-/// roles that happen to share a number.
-///
-/// The wordmark is a *display* role (`TYPE_WORDMARK`), not a pane title — it
-/// is 42px, and shrinking it to 16px to make the sentence true would be
-/// vandalism. What the two share is the property the sentence is really
-/// about: neither keeps a local copy of its type. Both read the token layer,
-/// and the changelog's title is the one that is a pane title proper.
 fn pane_title_font() -> egui::FontId {
     crate::theme::chrome_font(crate::theme::TYPE_PANE_TITLE)
 }
 
-/// The wordmark's face — the display role the hero's headline is set in.
 fn wordmark_font() -> egui::FontId {
     crate::theme::chrome_font(crate::theme::TYPE_WORDMARK)
 }
 
-/// Render the Welcome page inside the shell's central panel.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     egui::ScrollArea::vertical()
         .id_salt("welcome_page")
@@ -96,8 +45,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 ui.add_space(margin);
                 ui.vertical(|ui| {
                     ui.set_max_width(CONTENT_WIDTH.min(avail));
-                    // Left-aligned vertical rhythm (spec §5.6): hero → clone panel →
-                    // quick actions → lower, uniform 20px between sections.
                     hero(ui, state);
                     ui.add_space(20.0);
                     clone_box(ui, state);
@@ -111,26 +58,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     changelog_overlay(ui, state);
 }
 
-// --- Hero --------------------------------------------------------------------
-
-/// The screen's one dominant region (spec §5.1): a soft `BRAND` gradient band
-/// carrying the 64px brand tile + white `FOLDER_GIT`, the wordmark and tagline
-/// beside it, and the "What's new" ghost trigger on the right (SPACE_BETWEEN).
-/// It replaces the old centered `brand_header` + `what_new_link`. No top bar
-/// is painted here, and the shell no longer renders one over this panel
-/// either — the topbar was deleted, so the hero is the only wordmark and the
-/// status bar is the only chrome this page keeps. The gradient is one subtle
-/// overlay rect; if it ever reads as a blob at some width, drop it — the hero
-/// stands without it.
 fn hero(ui: &mut Ui, state: &mut AppState) {
     let pad = 16.0;
     let gap = 10.0;
     let avail = ui.available_width();
 
-    // Size the band to its content, not to the 64px tile: the 42px wordmark
-    // stacked over a 14px tagline is taller than the tile, so a tile-height band
-    // let the text overflow the gradient vertically and touch its top edge.
-    // Measure both lines, then pad every side so the headline keeps clearance.
     let painter = ui.painter().clone();
     let wm_font = wordmark_font();
     let wm = painter.layout_no_wrap("TurboGit".to_owned(), wm_font.clone(), Palette::INK);
@@ -153,10 +85,8 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
         widgets::mix(Palette::BG, Palette::BRAND, GRADIENT_ALPHA),
     );
 
-    // Content inset from every band edge so nothing sits flush on the gradient.
     let inner = band.shrink(pad);
 
-    // Left cluster: brand tile, then the wordmark/tagline stack.
     let mut left = ui.new_child(
         UiBuilder::new()
             .max_rect(inner)
@@ -190,8 +120,6 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
         );
     });
 
-    // Right: the "What's new" ghost button (SPACE_BETWEEN), opening the same
-    // changelog overlay the retired centered link did.
     let mut right = ui.new_child(
         UiBuilder::new()
             .max_rect(inner)
@@ -202,14 +130,12 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-// --- Lower band: recents + getting started -----------------------------------
-
 fn lower(ui: &mut Ui, state: &mut AppState) {
     // Two columns on the shared card grid (spec §5.6): the getting-started card
     // is exactly one card module (sitting directly under the third quick-action
     // card), recents fills the remaining two modules, and the gap between them
     // stays one `GUTTER`. `item_spacing.x` is pinned to 0 so `add_space(GUTTER)`
-    // is exact — otherwise egui's auto spacing overhangs the content column.
+    // is exact, otherwise egui's auto spacing overhangs the content column.
     let avail = ui.available_width();
     let getting_w = card_module(avail).min((avail - GUTTER) * 0.5);
     let recents_w = (avail - GUTTER) - getting_w;
@@ -229,22 +155,13 @@ fn lower(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-// --- Action cards -----------------------------------------------------------------
-
 #[derive(Clone, Copy)]
 enum CardAction {
-    /// Pick a folder and open it as a project (end-to-end).
     OpenProject,
-    /// Pick a folder, `git init` it, and enter it (end-to-end).
     InitRepo,
-    /// Pick a directory tree and register every repo in it as a workspace
-    /// (issue #34).
     AttachWorkspace,
 }
 
-/// One column of the shared 3-up card grid: the content width split into three
-/// equal modules with `GUTTER` gaps. `lower` reuses this so the getting-started
-/// card is exactly one module wide — aligned under the third quick-action card.
 fn card_module(width: f32) -> f32 {
     (width - 2.0 * GUTTER) / 3.0
 }
@@ -252,7 +169,7 @@ fn card_module(width: f32) -> f32 {
 fn quick_actions(ui: &mut Ui, state: &mut AppState) {
     // Exactly three equal-width cards in one row (spec §5.3). `item_spacing.x`
     // is pinned to 0 so `add_space(GUTTER)` is the exact gap and the three cards
-    // span precisely the content column — their right edge lines up with the
+    // span precisely the content column, their right edge lines up with the
     // hero and clone panel instead of overhanging it.
     let card_w = card_module(ui.available_width());
     ui.horizontal(|ui| {
@@ -265,8 +182,6 @@ fn quick_actions(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Dispatch-layer wrapper: yields the card's copy so the shared painter can
-/// stay single-purpose. Descriptions are the spec-Q3 tightened wording.
 fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, width: f32) {
     let (title, body, icon) = match action {
         CardAction::OpenProject => (
@@ -288,23 +203,6 @@ fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, widt
     action_card(ui, state, icon, title, body, width, action);
 }
 
-/// One quick-action card (spec §5.3): a `CONTENT_BG` fill at `CARD_RADIUS`,
-/// content-hugging — its height derives from its own galleys rather than a
-/// fixed box. A 30px `SURFACE_3` tile (`CONTROL_RADIUS`) carries a 15px
-/// `ACCENT_TEXT` icon; title `TYPE_DETAIL_TITLE` `INK`, description `TYPE_BODY`
-/// `INK_2`. Hover brightens the fill.
-///
-/// **It paints no stroke, and that is the point (R2).** These are content
-/// regions: they sit in the middle of a pane, not above one. A hairline around
-/// a content region is redundant with the padding it already carries and is the
-/// one thing `CardFrame::default()` exists to stop — a card is a surface, and a
-/// stroke means the surface floats. The three cards used to draw a 1px `LINE`
-/// ring (`BRAND` on hover), which made the app's one bordered *content* region
-/// and put it in the same visual class as the changelog dialog, the one card
-/// that genuinely floats. Hover now reads through the fill alone, and it reads
-/// through the right rung: `SURFACE_2` is `RAISED_ON_CARD`, the raised value for
-/// a control sitting on a content-surface card, where the plain `SURFACE` would
-/// be the wrong step (R5).
 fn action_card(
     ui: &mut Ui,
     state: &mut AppState,
@@ -373,7 +271,6 @@ fn action_card(
         Palette::INK_2,
     );
 
-    // Accessibility / headless-test queryability.
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, title));
     widgets::focus_ring(ui, &response);
     if !response.clicked() {
@@ -398,8 +295,6 @@ fn action_card(
     }
 }
 
-/// Ask the injected/native folder picker for a directory. Missing or
-/// cancelled picks surface a toast instead of failing silently.
 fn pick_dir(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     let Some(pick) = state.dir_picker.as_ref() else {
         state.ui.toast = Some(Toast::error(format!(
@@ -414,27 +309,11 @@ fn pick_dir(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     picked
 }
 
-/// Folder-picker entry for the workspace picker (issue #34) and the Welcome
-/// Open card — one shared seam for both folder-picker flows.
 pub fn pick_dir_public(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     pick_dir(state, purpose)
 }
 
-// --- Clone box ----------------------------------------------------------------------
-
-/// The one clone door (spec §5.2): a full-width `CONTENT_BG` card merging the
-/// old "Clone from URL" card and the inline clone box. A header row carries the
-/// `DOWNLOAD` accent icon + "Clone a repository" with the shallow checkbox
-/// right-aligned; the body row is the URL input (filling) plus a primary Clone
-/// button. Input and checkbox keep their exact kittest labels ("Repository URL",
-/// "Shallow clone (--depth 1)"), so the clone flow's headless coverage is
-/// untouched. The card is the shared [`widgets::card`] at 16 px of padding
-/// (wider than the panel padding) and a full-width stretch.
 fn clone_box(ui: &mut Ui, state: &mut AppState) {
-    // The environment check comes first (ticket 19): a missing or unreachable
-    // `git` is the single most common first-run failure, and this card is where
-    // a first run meets it. `clone_into` is synchronous on the calling thread,
-    // so without this the failure is a frozen window instead of a sentence.
     let git = state.git_env_check();
     let url_present = !state.ui.welcome_clone_url.trim().is_empty();
     widgets::card(ui, widgets::CardFrame::default().padded(16), |ui| {
@@ -457,9 +336,6 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
         });
         ui.add_space(10.0);
 
-        // The not-found state, stated with the reason and a route out of it. It
-        // is a *state*, not an error toast: it is true for as long as the check
-        // fails, and it is the reason the Clone control below is gated.
         if let Err(reason) = &git {
             ui.label(
                 RichText::new(format!(
@@ -472,9 +348,6 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
             ui.add_space(8.0);
         }
 
-        // Body: URL input fills the row; the Clone button is pinned right.
-        // Reserve the button's width first so `text_input` doesn't swallow
-        // the whole line (spec §5.2: input + button on one row).
         let label_w = ui
             .painter()
             .layout_no_wrap(
@@ -503,10 +376,6 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
         if std::mem::take(&mut state.ui.welcome_focus_clone) {
             response.request_focus();
         }
-        // Two independent gates, one control: a URL to clone, and an
-        // environment that can clone it. A control gated on only one of them is
-        // the bug this pins — and it stays rendered-but-gated, so the remedy
-        // above is never the only thing on screen with nothing beside it.
         let can_clone = git.is_ok() && url_present;
         let clicked = widgets::disabled_child_scope(ui, can_clone, |ui| {
             widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked()
@@ -517,9 +386,6 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Clone the entered URL into a picked parent folder and enter the result.
-/// The clone itself is the app layer's (["AppState::clone_into"]); this only
-/// gathers the URL, the folder and the folder name the URL implies.
 fn clone_from_url(state: &mut AppState) {
     let url = state
         .ui
@@ -534,8 +400,6 @@ fn clone_from_url(state: &mut AppState) {
     let Some(parent) = pick_dir(state, "Clone") else {
         return;
     };
-    // Derive the folder name from the URL's last path segment. Split on both
-    // separators so pasted Windows paths ("C:\repos\origin") work like URLs.
     let name = url
         .trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
@@ -554,14 +418,6 @@ fn clone_from_url(state: &mut AppState) {
     state.clone_into(&url, &dest, depth);
 }
 
-// --- Recent projects column ------------------------------------------------------------
-
-/// Recent projects as a real card (spec §5.4): a `CONTENT_BG` frame holding the
-/// "RECENT PROJECTS" group title + a right-aligned count badge, one clickable
-/// row per entry, and a "Show all projects" footer. `recent_row`'s internals are
-/// unchanged apart from the branch chip fill. Clicking a row reopens that project.
-/// The card is the shared [`widgets::card`] at 16 px of padding and a
-/// full-width stretch.
 fn recents_column(ui: &mut Ui, state: &mut AppState) {
     widgets::card(ui, widgets::CardFrame::default().padded(16), |ui| {
         let count = state.ui.recent_projects.len();
@@ -585,8 +441,6 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
             ui.add_space(4.0);
         }
 
-        // Footer: a visually-honest v1 no-op — there is no recents browser
-        // to route to yet (recorded as a follow-up in plan §4).
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.label(
@@ -599,15 +453,6 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// One recent-project row: name, path and last-opened on the left, the live
-/// branch chip (and a workspace row's repo count) in the right chip lane, and
-/// the remove control in the reserved zone past them.
-///
-/// The row's own click target stops at [`RECENT_ACTIONS_ZONE`]'s left edge
-/// (the sidebar's rule-row reservation), so one click stays one intent: a
-/// click on the trash cannot also open the project. Hover is read off the
-/// *whole* row rather than the click target, so pointing at the remove
-/// control does not make the row it belongs to lose its highlight.
 fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents::RecentProject) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, RECENT_ROW_HEIGHT), Sense::hover());
@@ -628,7 +473,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     widgets::paint_row(ui, rect, components::RowState::from_flags(false, hovered));
 
     let pad_x = 10.0;
-    // Chips lay out to the left of the remove zone, right-aligned to it.
     let chips_right = rect.right() - RECENT_ACTIONS_ZONE;
 
     let name_galley = painter.layout_no_wrap(
@@ -651,12 +495,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     painter.galley(Pos2::new(x, rect.top() + 25.0), path_galley, Palette::INK_3);
     painter.galley(Pos2::new(x, rect.top() + 42.0), meta_galley, Palette::INK_3);
 
-    // Live branch indicator (ADR-0005): computed at render time, cached in
-    // memory, never stored. Small text on the chip uses the readable accent
-    // ink (ACCENT_TEXT), not the action-fill BRAND — BRAND-on-SELECTION only
-    // clears ~2.5:1, while ACCENT_TEXT reaches 4.5:1 on the SELECTION chip
-    // (see the design_tokens audit). The SELECTION fill is the deliberate
-    // brand-warm contrast change from spec §4.
     let branch = cached_branch(state, &project.path);
     if let Some(branch) = &branch {
         let branch_galley = painter.layout_no_wrap(
@@ -674,9 +512,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         );
     }
 
-    // Workspace rows (issue #34) additionally show their indexed repo count
-    // as a chip in the same lane, then restore via the attach flow instead of
-    // a single-project open.
     if project.kind == turbogit_app::recents::RecentKind::Workspace
         && let Some(count) = project.repo_count
     {
@@ -686,8 +521,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::ACCENT_TEXT,
         );
-        // A branch chip already owns the lane's vertical middle; stack the
-        // count above it, or centre it when there is no branch chip.
         let cy = if branch.is_some() {
             rect.top() + 10.0
         } else {
@@ -703,11 +536,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         );
     }
 
-    // Remove control: a square ghost trash button inside the reserved zone —
-    // the row's own interact does not reach it, and it is registered after, so
-    // a click lands on exactly one of the two. Removing a row only forgets the
-    // path — the project on disk is untouched and reopening it re-records it —
-    // so this is a single click, not a confirmation-gated one.
     let remove_zone = Rect::from_min_max(
         Pos2::new(chips_right, rect.top()),
         Pos2::new(rect.right(), rect.bottom()),
@@ -717,8 +545,6 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             .max_rect(remove_zone)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    // The row's own gutter, applied in a right-to-left zone so the button sits
-    // `pad_x` in from the row's edge and keeps the vocabulary's own size.
     remove_ui.add_space(pad_x);
     let remove = widgets::icon_button(&mut remove_ui, Icon::TRASH_2);
     remove.widget_info(|| {
@@ -734,21 +560,13 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         return;
     }
 
-    // Accessibility / headless-test queryability: rows are labelled by the
-    // project name.
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, project.name.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        // Shared dispatch (issue #34): the workspace picker routes
-        // through the same helper, so the kind semantics — a Workspace row
-        // deep-scans, a Project row bounded-scans — live in one place.
         state.open_recent(project);
     }
 }
 
-/// Branch of `path` for the welcome indicator: recomputed when missing or
-/// older than [`BRANCH_TTL`], otherwise served from the in-memory cache.
-/// Detached HEAD / non-repos cache as `None`.
 fn cached_branch(state: &mut AppState, path: &std::path::Path) -> Option<String> {
     if let Some((branch, at)) = state.ui.welcome_branch_cache.get(path)
         && at.elapsed() < BRANCH_TTL
@@ -763,8 +581,6 @@ fn cached_branch(state: &mut AppState, path: &std::path::Path) -> Option<String>
     branch
 }
 
-// --- Getting started ------------------------------------------------------------------
-
 const HINTS: [&str; 5] = [
     "Stage files in the Commit tool window.",
     "Write a message and commit your changelist.",
@@ -773,11 +589,6 @@ const HINTS: [&str; 5] = [
     "Browse history in the Git Log tool window.",
 ];
 
-/// Numbered getting-started tips as a `SURFACE` card (spec §5.5): the group
-/// title plus five steps, each a `STEP_PILL` numeral pill before its body text.
-/// It sits beside the recents card, so it wears the shared
-/// [`widgets::CardFrame::raised`] tone at 16 px of padding — a `CONTENT_BG`
-/// fill there would be the same colour as the pane behind it.
 fn getting_started(ui: &mut Ui) {
     widgets::card(
         ui,
@@ -800,8 +611,6 @@ fn getting_started(ui: &mut Ui) {
     );
 }
 
-/// A getting-started step numeral: a `STEP_PILL` `SURFACE_3` pill
-/// (`PILL_RADIUS`) carrying a mono `ACCENT_TEXT` digit (spec §5.5).
 fn step_pill(ui: &mut Ui, n: usize) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(STEP_PILL), Sense::hover());
     ui.painter().rect_filled(
@@ -818,9 +627,6 @@ fn step_pill(ui: &mut Ui, n: usize) {
     );
 }
 
-// --- What's new / changelog ------------------------------------------------------
-
-/// In-app changelog entries (issue #34), rendered by the "What's new" overlay.
 const CHANGELOG: &[(&str, &str)] = &[
     (
         "v0.9.0",
@@ -837,24 +643,6 @@ const CHANGELOG: &[(&str, &str)] = &[
     ("v0.9.0", "• A “What's new” link opens this changelog."),
 ];
 
-/// Center-anchored changelog overlay (issue #34): a framed panel listing
-/// [`CHANGELOG`] entries with a Close button. Painted above the Welcome page
-/// content while [`UiState::show_changelog`] is set.
-///
-/// It floats rather than filling a pane, so it is the shared [`widgets::card`]
-/// in its pinned form — [`widgets::CardFrame::raised`] tone,
-/// [`widgets::CardFrame::bordered`], 20 px of padding, and a 420 px minimum
-/// width — inside the centering [`egui::Area`]. It is the app's one bordered
-/// card: a stroke on a card means the surface floats (see
-/// [`widgets::CardFrame::default`]), and this is a surface that floats.
-///
-/// Its title is [`PANE_TITLE`], the token layer's one pane-title role, through
-/// [`pane_title_font`]. The Welcome screen is exempt from nothing: the first
-/// screen anyone sees reads its heading type from the same role the settings
-/// page header and the multi-selection summary do, rather than from a size
-/// spelled beside it. A literal here is how two screens end up disagreeing
-/// about what a title is, and the fix is to reach the token, not to match the
-/// number.
 fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.show_changelog {
         return;
@@ -911,9 +699,6 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
         });
 }
 
-// --- Small helpers ---------------------------------------------------------------------
-
-/// Paint one icon primitive at `origin` without disturbing layout.
 fn paint_icon_at(ui: &mut Ui, icon: Icon, origin: Pos2, size: f32, color: Color32) {
     let mut child = ui.new_child(
         UiBuilder::new()
@@ -923,8 +708,6 @@ fn paint_icon_at(ui: &mut Ui, icon: Icon, origin: Pos2, size: f32, color: Color3
     icons::icon(&mut child, icon, size, color);
 }
 
-/// Middle-truncate `s` to roughly `max` characters so single-line galleys fit
-/// their reserved width.
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_owned();

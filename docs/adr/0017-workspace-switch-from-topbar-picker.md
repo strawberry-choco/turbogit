@@ -12,7 +12,7 @@ detour (Ctrl+Shift+A → Open Welcome → a Welcome card). Issue #34 replaces th
 stub with a real picker. The decisions below are the ones a future reader
 would otherwise re-litigate.
 
-## D1 — a state-driven `egui::Window`, not a response-bound `Popup::menu`
+## D1, a state-driven `egui::Window`, not a response-bound `Popup::menu`
 
 `Popup::menu(&selector)` is the local precedent (commit window's branch menu)
 and needs zero state, but it is mouse-only: its open state derives from a
@@ -26,7 +26,7 @@ already a state-driven window painted after the shell in `ui::render`, so a
 click recorded during the trigger's render paints the picker in the same
 frame.
 
-## D2 — the palette entry is palette-only; `Action::all()` is untouched
+## D2, the palette entry is palette-only; `Action::all()` is untouched
 
 `Action::all()` is the VCS operations popup's frozen action set, pinned by
 `feedback_chrome.rs`. The palette set (`palette_actions()`) may grow:
@@ -34,7 +34,7 @@ ADR-0011 says the sets do not shrink and the palette additionally gains
 shell-navigation actions (`GoToLog` / `OpenWelcome` / `StageHunk` are the
 precedent `SwitchWorkspace` copies verbatim).
 
-## D3 — no persisted state; the anchor is plain `f32` pairs
+## D3, no persisted state; the anchor is plain `f32` pairs
 
 Two session-only `UiState` fields (`workspace_picker_open`,
 `workspace_picker_anchor`) sit beside `vcs_popup` / `command_palette` /
@@ -42,11 +42,11 @@ Two session-only `UiState` fields (`workspace_picker_open`,
 is the trigger's bottom-left captured at click time so the dropdown sits
 under the row without hardcoding a trigger x-offset; `None` (palette route)
 falls back to a fixed position. It is stored as a plain `(f32, f32)`
-rather than `egui::Rect` because `turbogit-app` is egui-free by design —
+rather than `egui::Rect` because `turbogit-app` is egui-free by design,
 adding an egui type to store two numbers would trade the crate's boundary
 for nothing. The UI layer owns the `Pos2` conversion.
 
-## D4 — dispatch is shared with the Welcome screen, not duplicated
+## D4, dispatch is shared with the Welcome screen, not duplicated
 
 `welcome.rs` already contained the kind dispatch (a `Workspace` recent
 deep-scans, a `Project` recent bounded-scans). It is extracted into
@@ -54,7 +54,7 @@ deep-scans, a `Project` recent bounded-scans). It is extracted into
 means deep scan" is exactly the kind of thing that drifts the first time a
 third `RecentKind` appears.
 
-## D5 — the current workspace is always a row, and it is inert
+## D5, the current workspace is always a row, and it is inert
 
 `launch_in(Some(dir))` registers roots but does not record a recent, so a
 workspace opened from the CLI would be missing from its own picker. The
@@ -62,10 +62,10 @@ picker synthesizes a current row from `project_dir` + `multi.roots.len()`
 and marks it `current`. Clicking it is inert (close only): re-dispatching
 would reset `selected_root` and drop every cache for no user-visible gain.
 
-## D6 — a missing path is caught before dispatch
+## D6, a missing path is caught before dispatch
 
 `open_project` on a deleted directory rescans to zero roots and
-`show_welcome()` then returns true — the user is silently dumped on Welcome
+`show_welcome()` then returns true, the user is silently dumped on Welcome
 with no explanation. `open_recent` pre-checks `is_dir()` and surfaces
 `Toast::error` instead of dispatching.
 
@@ -77,17 +77,17 @@ neither for free). The click-outside path follows egui's own dropdown idiom
 on the *previous* frame, so the trigger click that opens the picker cannot
 also close it in the same frame.
 
-## Amendment — the trigger is the sidebar's workspace header
+## Amendment, the trigger is the sidebar's workspace header
 
 The topbar never got its selector back; it was deleted, which left the picker
 reachable only by keyboard (the palette) and no mouse affordance at all. The
-sidebar's workspace header row — the folder icon, project basename, repo count
-and the chevron that had always looked like a dropdown — is now the trigger:
+sidebar's workspace header row, the folder icon, project basename, repo count
+and the chevron that had always looked like a dropdown, is now the trigger:
 the whole band is a `ui.interact(…, Sense::click())` with a stable id, a hand
 cursor and a "Switch workspace" tooltip on hover.
 
 D1 still decides, and the same reason decides it a second time. The reason was
-never "the topbar is gone" — it was that a `Popup::menu` bound to one render's
+never "the topbar is gone", it was that a `Popup::menu` bound to one render's
 response can be opened *only* by that click. The header's response has exactly
 the same lifetime, so the same conclusion holds: the click records
 `workspace_picker_open` and the window paints later in the same frame. Making

@@ -1,94 +1,47 @@
-//! Recursive project tree (sidebar-project-tree issue 01): the pure model
-//! behind the sidebar's PROJECTS section, replacing the flat
-//! `groups → repos` shape with a tree rooted at the project directory.
-//!
-//! A node is either a **folder node** (a directory that is not itself a
-//! repository root) or a **repo node** (a repository root carrying the
-//! status dot, branch, ahead/behind, and conflict/dirty counts; it may
-//! carry child nodes when repositories nest). Pure presentation logic over
-//! the flat registered-root list, per ADR-0018: the builder consumes the
-//! exact same roots the flat model consumes; discovery is unchanged.
-//!
-//! Three functions form the primary seam, all tested without any UI:
-//! [`build_tree`] (builder + collapse rule + path labels + subtree
-//! totals), [`filter_tree`] (the live text filter), and [`filter_repos`]
-//! (the predicate filter the smart-group narrowing rides on). Both filters
-//! narrow the tree to the surviving repos and then re-apply the collapse
-//! rule, so a folder with one surviving repo collapses again.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{DisplayName, Root, RootId};
 
 use crate::ui::widgets;
 
-/// Sidebar and branch headers share state meanings and colors.
 pub use crate::theme::RepoState as DotState;
 
-/// A repo node: a repository root with its git state and, when
-/// repositories nest, the nodes beneath it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoNode {
     pub id: RootId,
-    /// The repo's own name (its path's file name), kept in full.
     pub name: String,
-    /// The display label: the repo's bare name, or the abbreviated
-    /// **path label** when the repo was promoted out of a collapsed
-    /// folder chain (each collapsed folder's first character, joined
-    /// with `name` by `/`).
     pub label: String,
-    /// Full path (the live filter matches against it).
     pub path: PathBuf,
     /// Current branch label, `None` when detached.
     pub branch: Option<String>,
-    /// The row's status dot (CONTEXT.md: clean / dirty / conflict / diverged).
     pub dot: DotState,
-    /// Outgoing commits vs upstream (↑ badge).
     pub ahead: usize,
-    /// Incoming commits vs upstream (↓ badge).
     pub behind: usize,
-    /// Conflicted paths (the smart-group conflict predicate).
     pub conflicts: usize,
     /// Modified + unversioned paths (the smart-group dirty predicate).
     pub dirty_count: usize,
-    /// Child nodes when repositories nest (a repo inside a repo).
     pub children: Vec<ProjectNode>,
 }
 
-/// A folder node: a directory that is not itself a repository root,
-/// grouping the repos and folders beneath it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderNode {
-    /// The folder's own name (its path's file name).
     pub name: String,
-    /// Child nodes in name order.
     pub children: Vec<ProjectNode>,
-    /// Repos anywhere in the subtree (the folder's repo-count badge).
     pub total: usize,
-    /// Repos in the subtree with a dirty or conflicted dot (the dirty badge).
     pub dirty: usize,
 }
 
-/// One node of the project tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectNode {
     Folder(FolderNode),
     Repo(RepoNode),
 }
 
-/// The fully collapsed tree rooted at the project directory. The project
-/// directory is itself just the topmost node: a repo node when it has a
-/// `.git`, a folder node otherwise. May be empty when the project has no
-/// repos.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProjectTree {
-    /// Top-level displayed nodes, in name order.
     pub nodes: Vec<ProjectNode>,
 }
 
-/// Every repo node of `nodes` in pre-order: a repo node pushes itself then
-/// recurses into its children; a folder recurses into its children. Shared
-/// by [`iter_repos`] and the selection module's subtree walk.
 pub(crate) fn iter_repos_from(nodes: &[ProjectNode]) -> impl Iterator<Item = &RepoNode> {
     fn walk<'a>(nodes: &'a [ProjectNode], out: &mut Vec<&'a RepoNode>) {
         for node in nodes {
@@ -106,8 +59,6 @@ pub(crate) fn iter_repos_from(nodes: &[ProjectNode]) -> impl Iterator<Item = &Re
     out.into_iter()
 }
 
-/// Every repo node of the tree in pre-order (tree order matches the
-/// sidebar's paint order).
 pub fn iter_repos(tree: &ProjectTree) -> impl Iterator<Item = &RepoNode> {
     iter_repos_from(&tree.nodes)
 }
@@ -150,10 +101,6 @@ pub fn filter_tree(project_dir: &Path, tree: &ProjectTree, query: &str) -> Proje
     })
 }
 
-/// Narrow the tree to the repos the predicate accepts, then re-collapse
-/// the survivors with the same rule and path labels. The smart-group
-/// narrowing rides on this (issue 01: "narrows to its member repos and
-/// re-collapses the same way").
 pub fn filter_repos(
     project_dir: &Path,
     tree: &ProjectTree,
@@ -173,10 +120,6 @@ pub fn filter_repos(
     assemble(project_dir, survivors)
 }
 
-// --- Internal model -----------------------------------------------------------
-
-/// The repo fields that survive a re-build (a filter re-collapses the tree
-/// from the surviving repos' paths).
 #[derive(Debug, Clone)]
 struct RepoData {
     id: RootId,
@@ -190,8 +133,6 @@ struct RepoData {
     dirty_count: usize,
 }
 
-/// The pre-collapse tree: directories and repos by name, before the
-/// display rule shapes it.
 enum RawNode {
     Folder {
         name: String,
@@ -203,18 +144,10 @@ enum RawNode {
     },
 }
 
-/// Map each registered root onto its row data (the fields a repo node
-/// carries beyond its children and label).
 fn repo_data(root: &Root, ahead_behind: &dyn Fn(&RootId) -> Option<(usize, usize)>) -> RepoData {
     let (ahead, behind) = ahead_behind(&root.id).unwrap_or((0, 0));
     RepoData {
         id: root.id.clone(),
-        // File-name label of a path (the `<repo>` fallback matches the shell's).
-        // The "matches the shell's" claim is **false and left exactly so**: the
-        // shell's workspace header spells its own fallback `"<workspace>"`.
-        // Whether the two should match is a product ruling, not a refactor's,
-        // and either answer changes a rendered string — recorded here so the
-        // next rescan does not re-derive it as a fresh defect.
         name: root.path.display_name_or("<repo>"),
         path: root.path.clone(),
         branch: root.current_branch.clone(),
@@ -226,9 +159,6 @@ fn repo_data(root: &Root, ahead_behind: &dyn Fn(&RootId) -> Option<(usize, usize
     }
 }
 
-/// Build the raw tree for every repo in `repos`, then apply the display
-/// rule. The project directory is the topmost node: a repo node when it
-/// has a `.git`, a folder node otherwise.
 fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> ProjectTree {
     let mut root = RawNode::Folder {
         name: project_dir.display_name_or("<repo>"),
@@ -237,7 +167,6 @@ fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> Projec
     let mut root_row: Option<RepoData> = None;
     for r in repos {
         match r.path.strip_prefix(project_dir) {
-            // The project directory itself is a repository root.
             Ok(rel) if rel.as_os_str().is_empty() => root_row = Some(r),
             Ok(rel) => {
                 let comps: Vec<String> = rel
@@ -246,9 +175,6 @@ fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> Projec
                     .collect();
                 insert_components(&mut root, &comps, r);
             }
-            // A root outside the project directory cannot come from
-            // discovery; keep it visible at the top level rather than
-            // dropping it.
             Err(_) => insert_components(&mut root, &[r.path.display_name_or("<repo>")], r),
         }
     }
@@ -265,8 +191,6 @@ fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> Projec
     ProjectTree { nodes }
 }
 
-/// Insert one repo into the raw tree by descending the relative path
-/// components, creating folders as needed.
 fn insert_components(root: &mut RawNode, comps: &[String], row: RepoData) {
     let (last, chain) = comps
         .split_last()
@@ -278,8 +202,6 @@ fn insert_components(root: &mut RawNode, comps: &[String], row: RepoData) {
     upsert_repo(children, last.clone(), row);
 }
 
-/// Descend into the child named `name` (a folder or a repo — nested repos
-/// carry their children too), creating a folder when it does not exist.
 fn child_dir_mut<'a>(children: &'a mut Vec<RawNode>, name: &str) -> &'a mut Vec<RawNode> {
     match children.iter().position(|c| node_name(c) == name) {
         Some(ix) => node_children_mut(&mut children[ix]),
@@ -293,18 +215,12 @@ fn child_dir_mut<'a>(children: &'a mut Vec<RawNode>, name: &str) -> &'a mut Vec<
     }
 }
 
-/// Attach a repo at `name`: replace an existing repo row (nested repos),
-/// convert a folder that turns out to be a repo itself, or push a new node.
 fn upsert_repo(children: &mut Vec<RawNode>, name: String, row: RepoData) {
     if let Some(existing) = children.iter_mut().find(|c| node_name(c) == name) {
         match existing {
-            // A repo already sits at this position (a repo inside a repo):
-            // refresh its row.
             RawNode::Repo {
                 row: existing_row, ..
             } => *existing_row = row,
-            // A directory is a repository root: convert the folder to a
-            // repo node, keeping the nested children.
             RawNode::Folder { children: kids, .. } => {
                 let kids = std::mem::take(kids);
                 *existing = RawNode::Repo {
@@ -343,10 +259,6 @@ fn sort_rec(node: &mut RawNode) {
     }
 }
 
-/// The display rule (ADR-0018 D2/D3): repo nodes always display; a folder
-/// displays iff its subtree holds at least two repos; a folder holding
-/// exactly one collapses, promoting its single repo with this folder's
-/// first character prefixed to the repo's label.
 fn display(raw: RawNode) -> Vec<ProjectNode> {
     match raw {
         RawNode::Repo { row, children } => {
@@ -368,12 +280,8 @@ fn display(raw: RawNode) -> Vec<ProjectNode> {
             let displayed = display_nodes(children);
             let total = displayed.iter().map(subtree_total).sum::<usize>();
             match total {
-                // An empty folder (no repos) renders nothing.
                 0 => Vec::new(),
                 1 => {
-                    // Exactly one repo in the subtree: promote it with
-                    // this folder's first character (a displayed folder
-                    // needs ≥ 2 repos, so the lone child is the repo).
                     let repo = match displayed.into_iter().next() {
                         Some(ProjectNode::Repo(r)) => r,
                         _ => unreachable!("a subtree with one repo surfaces as that repo"),
@@ -401,7 +309,6 @@ fn display_nodes(nodes: Vec<RawNode>) -> Vec<ProjectNode> {
     nodes.into_iter().flat_map(display).collect()
 }
 
-/// Repos in a node's subtree, counting repos nested beneath repo children.
 fn subtree_total(node: &ProjectNode) -> usize {
     match node {
         ProjectNode::Folder(f) => f.total,
@@ -409,7 +316,6 @@ fn subtree_total(node: &ProjectNode) -> usize {
     }
 }
 
-/// Repos in a node's subtree with a dirty or conflicted dot.
 fn subtree_dirty(node: &ProjectNode) -> usize {
     match node {
         ProjectNode::Folder(f) => f.dirty,
@@ -420,8 +326,6 @@ fn subtree_dirty(node: &ProjectNode) -> usize {
     }
 }
 
-/// Prefix a promoted repo's label with a collapsed folder's first Unicode
-/// character (`foo/bar` promoted under `x` → `x/f/bar`).
 fn prefix_label(label: String, folder: &str) -> String {
     match folder.chars().next() {
         Some(c) => format!("{c}/{label}"),
@@ -429,9 +333,6 @@ fn prefix_label(label: String, folder: &str) -> String {
     }
 }
 
-/// Every folder on the repo's path from the project directory down to its
-/// parent: a name match keeps the whole subtree (the flat model's
-/// group-name rule, generalized to every depth).
 fn ancestor_folder_matches(project_dir: &Path, repo: &RepoNode, q: &str) -> bool {
     let Ok(rel) = repo.path.strip_prefix(project_dir) else {
         return false;
@@ -441,7 +342,6 @@ fn ancestor_folder_matches(project_dir: &Path, repo: &RepoNode, q: &str) -> bool
         .any(|c| widgets::filter_matches(&c.as_os_str().to_string_lossy(), q))
 }
 
-/// Use the same precedence as the branch section header.
 fn dot_state(root: &Root, ahead: usize, behind: usize) -> DotState {
     DotState::from_root(root, ahead, behind)
 }
@@ -510,11 +410,8 @@ mod tests {
             .collect()
     }
 
-    // --- The four canonical layouts (spec §Further Notes) ---
-
     #[test]
     fn project_dir_that_is_itself_a_repo_renders_a_single_repo_item() {
-        // `a/.git` → `a`
         let project = Path::new("/w/a");
         let tree = build_tree(project, &[root("/w/a", Some("main"))], &|_| Some((0, 0)));
 
@@ -528,7 +425,6 @@ mod tests {
 
     #[test]
     fn two_repos_directly_under_a_folder_render_a_folder_over_the_repos() {
-        // `a/b` + `a/c` → folder `a` over `b`, `c`
         let project = Path::new("/w/a");
         let tree = build_tree(
             project,
@@ -545,8 +441,6 @@ mod tests {
 
     #[test]
     fn nested_directories_render_a_folder_at_every_level_holding_two_or_more_repos() {
-        // `a/b` + `a/c/d` + `a/c/e` → folder `a` over `b` and folder `c`
-        // over `d`, `e`
         let project = Path::new("/w/a");
         let tree = build_tree(
             project,
@@ -571,7 +465,6 @@ mod tests {
 
     #[test]
     fn a_repo_inside_a_repo_renders_the_outer_with_the_inner_beneath() {
-        // `a/.git` + `a/b/.git` → repo `a` over repo `b`
         let project = Path::new("/w/a");
         let tree = build_tree(
             project,
@@ -589,11 +482,8 @@ mod tests {
         assert_eq!(b.branch.as_deref(), Some("dev"));
     }
 
-    // --- Collapse rule and path labels ---
-
     #[test]
     fn a_deep_single_repo_chain_collapses_to_one_promoted_repo() {
-        // `a/b/c/.git` (a = project directory) → `a/b/c`
         let project = Path::new("/w/a");
         let tree = build_tree(project, &[root("/w/a/b/c", Some("main"))], &|_| {
             Some((0, 0))
@@ -610,7 +500,6 @@ mod tests {
 
     #[test]
     fn a_chain_of_single_repo_folders_promotes_with_an_abbreviated_path_label() {
-        // `foo/bar/.git` under a collapsing project root → `w/f/bar`
         let project = Path::new("/w");
         let tree = build_tree(project, &[root("/w/foo/bar", Some("main"))], &|_| {
             Some((0, 0))
@@ -622,8 +511,6 @@ mod tests {
 
     #[test]
     fn promoted_labels_start_at_the_topmost_collapsing_folder_and_never_repeat_the_parent() {
-        // The parent `w` displays (two repos in its subtree); the `top`
-        // chain beneath it collapses and its label starts at `top`, not `w`.
         let project = Path::new("/w");
         let tree = build_tree(
             project,
@@ -644,7 +531,6 @@ mod tests {
 
     #[test]
     fn non_ascii_folder_names_abbreviate_by_first_character() {
-        // `项目/代码` → `项/代码`
         let project = Path::new("/w");
         let tree = build_tree(
             project,
@@ -659,8 +545,6 @@ mod tests {
         assert_eq!(w.total, 2);
         assert_eq!(labels(&w.children), ["other", "项/代码"]);
     }
-
-    // --- Subtree totals ---
 
     #[test]
     fn folder_subtree_totals_count_repos_and_dirty_beneath_them() {
@@ -709,8 +593,6 @@ mod tests {
         assert!(tree.nodes.is_empty());
     }
 
-    // --- Filters re-collapse the survivors ---
-
     #[test]
     fn live_filter_narrows_to_matching_repos_and_recollapses_with_path_labels() {
         let project = Path::new("/w");
@@ -720,39 +602,31 @@ mod tests {
         ];
         let full = build_tree(project, &roots, &|_| Some((0, 0)));
 
-        // The full view collapses each single-repo leaf chain under the
-        // displayed folder `x`.
         let w = folder(&full.nodes[0]);
         let x = folder(&w.children[0]);
         assert_eq!(labels(&x.children), ["y/repo1", "z/repo2"]);
 
-        // By repo name: the single survivor re-collapses the whole chain.
         let t = filter_tree(project, &full, "repo1");
         assert_eq!(t.nodes.len(), 1);
         let r = repo(&t.nodes[0]);
         assert_eq!(r.label, "w/x/y/repo1");
         assert_eq!(r.name, "repo1");
 
-        // By branch, case-insensitively.
         let t = filter_tree(project, &full, "RELEASE");
         assert_eq!(repo(&t.nodes[0]).label, "w/x/z/repo2");
 
-        // By full path.
         let t = filter_tree(project, &full, "/w/x/y/repo1");
         assert_eq!(t.nodes.len(), 1);
 
-        // A folder-name match keeps the whole subtree.
         let t = filter_tree(project, &full, "x");
         assert_eq!(folder(&t.nodes[0]).children.len(), 1);
 
-        // No match → nothing renders.
         assert!(
             filter_tree(project, &full, "nothing-matches")
                 .nodes
                 .is_empty()
         );
 
-        // The empty query returns the tree unchanged.
         assert_eq!(filter_tree(project, &full, ""), full);
     }
 
@@ -768,7 +642,6 @@ mod tests {
         let w = folder(&full.nodes[0]);
         assert_eq!(w.total, 3);
 
-        // Two surviving members keep their shared folder.
         let t = filter_repos(project, &full, |r| r.dirty_count > 0);
         let w = folder(&t.nodes[0]);
         assert_eq!(w.total, 2);
@@ -776,7 +649,6 @@ mod tests {
         assert_eq!(grp.name, "grp");
         assert_eq!(labels(&grp.children), ["a", "b"]);
 
-        // One surviving member under a chain re-collapses to one repo.
         let t = filter_repos(project, &full, |r| r.name == "c");
         assert_eq!(t.nodes.len(), 1);
         assert_eq!(repo(&t.nodes[0]).label, "w/o/c");
@@ -801,8 +673,6 @@ mod tests {
 
     #[test]
     fn dot_state_precedence_conflict_then_diverged_then_dirty_then_clean() {
-        // Migrated from the flat sidebar suite (issue 04): the row dot is
-        // derived from the same precedence chain.
         let project = Path::new("/w/a");
         let mut conflicted = root("/w/a/x", Some("main"));
         conflicted.status.conflicted = vec![PathBuf::from("f.txt")];
@@ -832,8 +702,6 @@ mod tests {
 
     #[test]
     fn ahead_and_behind_land_on_repo_rows_as_badge_counts() {
-        // Migrated from the flat sidebar suite (issue 04): the cache lookup
-        // fills the row's badge counts.
         let project = Path::new("/w/a");
         let tree = build_tree(project, &[root("/w/a/app", Some("main"))], &|_| {
             Some((3, 2))

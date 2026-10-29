@@ -1,9 +1,3 @@
-//! Issue 09 — bulk operations: the preflight-gated, per-repo fan-out.
-//!
-//! Headless integration tests over real git repositories (tempdir + system
-//! `git`): each root gets a bare remote as upstream, and assertions observe
-//! real repository state plus the per-root results `run_bulk` reports.
-
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use turbogit_domain::error::TgResult;
@@ -12,8 +6,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan, run_bulk};
 use turbogit_services::multi_root::{build_root, register};
 
-/// Append a line to `file.txt` in `dir`, stage, commit, and return the new
-/// HEAD SHA.
 fn commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -30,9 +22,6 @@ fn commit(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repo on `main` with local identity, a bare remote at
-/// `<tmp>/<name>.origin.git`, and `main` pushed to it. Returns
-/// `(repo path, remote path)`.
 fn repo_with_upstream(tmp: &Path, name: &str) -> (PathBuf, PathBuf) {
     let repo = tmp.join(name);
     let remote = tmp.join(format!("{name}.origin.git"));
@@ -74,12 +63,10 @@ fn id(repo: &Path) -> RootId {
     RootId(repo.into())
 }
 
-/// The planned root ids, in result order.
 fn result_roots(results: &[(RootId, TgResult<()>)]) -> Vec<RootId> {
     results.iter().map(|(r, _)| r.clone()).collect()
 }
 
-/// Assert every reported outcome is `Ok`.
 #[track_caller]
 fn assert_all_ok(results: &[(RootId, TgResult<()>)]) {
     for (rid, r) in results {
@@ -87,12 +74,10 @@ fn assert_all_ok(results: &[(RootId, TgResult<()>)]) {
     }
 }
 
-/// The tip SHA a bare remote's `main` points at.
 fn remote_tip(remote: &Path) -> String {
     git(remote, &["rev-parse", "main"]).trim().to_string()
 }
 
-/// A scratch clone of `remote` with local identity, for seeding upstream work.
 fn scratch_clone(tmp: &Path, remote: &Path) -> PathBuf {
     let scratch = tmp.join("scratch");
     git(
@@ -109,8 +94,6 @@ fn scratch_clone(tmp: &Path, remote: &Path) -> PathBuf {
     scratch
 }
 
-/// Settings with nothing protected — the shape the pre-policy suites of this
-/// file assume when they exercise the fan-out mechanics themselves.
 fn unprotected() -> VcsSettings {
     VcsSettings {
         protected_branch_patterns: Vec::new(),
@@ -129,12 +112,10 @@ fn run_bulk_pushes_only_the_planned_roots_and_reports_each_outcome() {
     let (lib, _lib_remote) = repo_with_upstream(tmp.path(), "lib");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone(), lib.clone()]);
 
-    // Every root gets one local-ahead commit…
     let alpha_sha = commit(&alpha, "alpha work");
     let ui_sha = commit(&ui, "ui work");
     commit(&lib, "lib work");
 
-    // …but the plan scopes the push to alpha and ui only.
     let plan = BulkPlan {
         op: BulkOp::PushAll,
         roots: vec![id(&alpha), id(&ui)],
@@ -157,7 +138,6 @@ fn run_bulk_pushes_only_the_planned_roots_and_reports_each_outcome() {
     );
     assert_eq!(remote_tip(&ui_remote), ui_sha, "ui's remote advanced");
 
-    // lib stays ahead of its untouched remote.
     let lib_remote = tmp.path().join("lib.origin.git");
     let local_tip = git(&lib, &["rev-parse", "HEAD"]).trim().to_string();
     assert_ne!(
@@ -177,7 +157,6 @@ fn run_bulk_fetch_all_updates_only_the_planned_roots_tracking_refs() {
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
-    // Incoming work on alpha's remote, made through a scratch clone.
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     let incoming = commit(&scratch, "incoming");
     git(&scratch, &["push", "-q", "origin", "main"]);
@@ -217,12 +196,10 @@ fn run_bulk_pull_all_fast_forwards_planned_roots_with_incoming_work() {
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
-    // Incoming work on alpha's remote, made through a scratch clone.
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     let incoming = commit(&scratch, "incoming");
     git(&scratch, &["push", "-q", "origin", "main"]);
 
-    // The plan scopes the pull to alpha; ui is out of scope.
     let plan = BulkPlan {
         op: BulkOp::PullAll,
         roots: vec![id(&alpha)],
@@ -252,10 +229,6 @@ fn run_bulk_pull_honors_the_rebase_policy() {
     let (alpha, alpha_remote) = repo_with_upstream(tmp.path(), "alpha");
     let mgr = manager(&engine, std::slice::from_ref(&alpha));
 
-    // Local commit, then incoming upstream work → a diverged history that a
-    // rebase policy rewrites (no merge commit), while merge would create one.
-    // The upstream commit touches a different file so the rebase applies
-    // cleanly instead of conflicting.
     commit(&alpha, "local work");
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     std::fs::write(scratch.join("other.txt"), "upstream\n").expect("upstream file");
@@ -293,7 +266,6 @@ fn run_bulk_stash_all_parks_dirty_worktrees_in_scope() {
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
-    // Both roots get a dirty worktree; only alpha is in scope.
     for repo in [&alpha, &ui] {
         std::fs::write(repo.join("file.txt"), "dirty\n").expect("dirty file");
     }
@@ -336,8 +308,6 @@ fn run_bulk_reports_a_failing_root_as_err_and_keeps_running_the_rest() {
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
-    // Both roots get commits; alpha's remote is removed so its push fails
-    // structurally while ui's succeeds.
     commit(&alpha, "alpha work");
     commit(&ui, "ui work");
     git(&alpha, &["remote", "remove", "origin"]);
@@ -362,10 +332,6 @@ fn run_bulk_reports_a_failing_root_as_err_and_keeps_running_the_rest() {
     );
 }
 
-// -- Cascade create & checkout branch (issue 11) -----------------------------
-
-/// Put `repo`'s local `main` one commit behind `origin/main`: commit, push,
-/// then reset the local branch back. Returns the upstream tip SHA.
 fn make_behind(repo: &Path) -> String {
     let tip = commit(repo, "incoming upstream work");
     git(repo, &["push", "-q", "origin", "main"]);
@@ -383,12 +349,10 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
     let (existing, _) = repo_with_upstream(tmp.path(), "existing");
     let (behind, _) = repo_with_upstream(tmp.path(), "behind");
 
-    // existing already carries feature/x at its first commit; main moves on.
     let old_tip = git(&existing, &["rev-parse", "HEAD"]).trim().to_string();
     git(&existing, &["branch", "feature/x"]);
     commit(&existing, "more main work");
 
-    // behind: local main is one commit behind origin/main.
     let upstream_tip = make_behind(&behind);
 
     let roots: Vec<turbogit_domain::model::Root> = [&clean, &existing, &behind]
@@ -414,7 +378,6 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
         .expect("the step should succeed");
     }
 
-    // clean: created from HEAD and checked out.
     let head = git(&clean, &["rev-parse", "HEAD"]).trim().to_string();
     assert_eq!(
         git(&clean, &["branch", "--show-current"]).trim(),
@@ -427,7 +390,6 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
         "the new branch sits at the repo's HEAD"
     );
 
-    // existing: checked out, never recreated — the branch keeps its old tip.
     assert_eq!(
         git(&existing, &["branch", "--show-current"]).trim(),
         "feature/x"
@@ -438,7 +400,6 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
         "an existing match is checked out as-is, not recreated at HEAD"
     );
 
-    // behind + apply broadly: based on the upstream tip, not stale HEAD.
     assert_eq!(
         git(&behind, &["branch", "--show-current"]).trim(),
         "feature/x"
@@ -485,8 +446,6 @@ fn create_branch_step_without_apply_broadly_ignores_the_upstream_state() {
     );
 }
 
-// -- Custom command (issue 13) ------------------------------------------------
-
 #[test]
 fn run_bulk_executes_a_custom_command_on_every_planned_root() {
     let engine = CliExecutor {
@@ -497,8 +456,6 @@ fn run_bulk_executes_a_custom_command_on_every_planned_root() {
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
-    // The user-typed form includes the leading "git"; the plan carries it
-    // like the create-&-checkout cascade carries its branch name.
     let plan = BulkPlan {
         op: BulkOp::Custom,
         roots: vec![id(&alpha), id(&ui)],
@@ -527,8 +484,6 @@ fn a_failing_custom_command_reports_the_git_error_per_root_without_stopping_the_
     let tmp = tempfile::tempdir().expect("tempdir");
     let (alpha, _alpha_remote) = repo_with_upstream(tmp.path(), "alpha");
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
-    // ui already carries the branch, so `git branch` fails there with a
-    // "already exists" stderr while alpha succeeds.
     git(&ui, &["branch", "bulk-marker"]);
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
@@ -578,10 +533,6 @@ fn an_unparseable_custom_command_fails_the_step_before_touching_git() {
     );
 }
 
-// -- Protected-branch policy ---------------------------------------------------
-
-/// Whether a reference exists at all — the repository's single rewrite-backup
-/// slot, which a refused rebase must not claim.
 fn ref_exists(dir: &Path, name: &str) -> bool {
     std::process::Command::new("git")
         .args(["show-ref", "--verify", "--quiet", name])
@@ -591,8 +542,6 @@ fn ref_exists(dir: &Path, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The same diverged work that a rebasing pull would rewrite, so "the refusal
-/// refused" is checkable against real history.
 fn diverge(repo: &Path, remote: &Path, tmp: &Path) {
     commit(repo, "local work");
     let scratch = scratch_clone(tmp, remote);
@@ -613,7 +562,6 @@ fn pull_all_refuses_a_rebase_onto_a_protected_root_before_touching_anything() {
     diverge(&alpha, &alpha_remote, tmp.path());
     let tip_before = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
 
-    // The shipped default protects `main`, and `alpha` sits on it.
     let plan = BulkPlan {
         op: BulkOp::PullAll,
         roots: vec![id(&alpha)],
@@ -653,7 +601,6 @@ fn pull_all_still_merges_into_a_protected_root() {
     let (alpha, alpha_remote) = repo_with_upstream(tmp.path(), "alpha");
     let mgr = manager(&engine, std::slice::from_ref(&alpha));
 
-    // Incoming work only: a merging pull fast-forwards, rewriting nothing.
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     let incoming = commit(&scratch, "incoming");
     git(&scratch, &["push", "-q", "origin", "main"]);
@@ -684,8 +631,6 @@ fn a_protected_root_refuses_a_custom_command_whatever_it_was_typed() {
     let (alpha, _remote) = repo_with_upstream(tmp.path(), "alpha");
     let mgr = manager(&engine, std::slice::from_ref(&alpha));
 
-    // An entirely ordinary command — the refusal is about the root, so the
-    // grammar being unrestricted earns it nothing here.
     let plan = BulkPlan {
         op: BulkOp::Custom,
         roots: vec![id(&alpha)],

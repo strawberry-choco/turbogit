@@ -1,18 +1,3 @@
-//! Reading git's unified-diff format into the **Git engine**'s patch value.
-//!
-//! This is the one place in the workspace where git's diff *syntax* is
-//! interpreted (`ADR-0022`). A diff answer arrives here as a [`Patch`] and
-//! everything upstream — the display model, **Partial staging**, the hunk
-//! listings the root caches hold — reads fields. Saying a value back in git's
-//! syntax is the value's own business, in `turbogit-domain`, because the index
-//! is fed bytes and the viewer paints labels.
-//!
-//! The reader sits at the port rather than in an adapter because both adapters
-//! answer with its value *and* the layers above answer for bytes that never came
-//! from an adapter — a patch file the developer pointed at, a header rewriter, a
-//! display model re-reading a cached text. An adapter-local reader would leave
-//! those callers one edge short of it, which is how a second parser gets written.
-//!
 //! Lines before the first `diff --git` section (a `git log -p` commit header,
 //! say) are skipped; an empty diff is an empty value, which is an answer.
 
@@ -21,7 +6,6 @@ use turbogit_domain::model::{
     Patch, PatchFile, PatchHeaderLine, PatchHunk, PatchLine, PatchLineKind,
 };
 
-/// The `Git engine`'s one reader of unified diff.
 pub fn parse_patch(text: &str) -> Patch {
     let mut files: Vec<PatchFile> = Vec::new();
     let mut cursor = Lines {
@@ -51,7 +35,6 @@ pub fn parse_patch(text: &str) -> Patch {
         };
 
         while let Some(line) = cursor.peek() {
-            // A new section opens; the outer loop reads its header.
             if section_header(line).is_some() {
                 break;
             }
@@ -83,8 +66,6 @@ pub fn parse_patch(text: &str) -> Patch {
             let line = line.to_string();
             cursor.next();
             let header = read_header(&line);
-            // `+++` completes the `---` line that opened it; the pair is one
-            // fact because a patch's two sides are one question.
             let plus = match &header {
                 Some(PatchHeaderLine::Sources { new, .. }) if line.starts_with("+++ ") => {
                     Some(new.clone())
@@ -107,9 +88,6 @@ pub fn parse_patch(text: &str) -> Patch {
     Patch { files }
 }
 
-/// A section's opening line: `diff --git a/x b/y`, or git's **combined** view of
-/// an unmerged path (`diff --cc x`, `diff --combined x`). The rest of the line,
-/// and which of the two shapes it was.
 fn section_header(line: &str) -> Option<(&str, bool)> {
     if let Some(rest) = line.strip_prefix("diff --git ") {
         return Some((rest, false));
@@ -122,8 +100,6 @@ fn section_header(line: &str) -> Option<(&str, bool)> {
     None
 }
 
-/// One section header line, as the fact it states. `None` for a line the patch
-/// model does not name — it still reaches the display as the text it is.
 fn read_header(line: &str) -> Option<PatchHeaderLine> {
     if let Some(v) = line.strip_prefix("index ") {
         let (pair, mode) = match v.split_once(' ') {
@@ -188,7 +164,6 @@ fn read_header(line: &str) -> Option<PatchHeaderLine> {
     None
 }
 
-/// `@@ -l,s +l,s @@ heading` plus its body lines, consuming through the hunk.
 fn parse_hunk(after_at_prefix: &str, lines: &mut Lines<'_>) -> PatchHunk {
     let header = after_at_prefix.trim_start_matches('-');
     let (span, heading) = split_hunk_header(header);
@@ -204,10 +179,6 @@ fn parse_hunk(after_at_prefix: &str, lines: &mut Lines<'_>) -> PatchHunk {
     hunk
 }
 
-/// `@@@ -l,s -l,s +l,s @@@ heading`, git's combined header for an unmerged
-/// path: one range per parent, then the new side's. The value has two sides, so
-/// this keeps the first parent's range and the new one — enough to place the
-/// hunk, and the section says where it came from.
 fn parse_combined_hunk(after_three_at: &str, lines: &mut Lines<'_>) -> PatchHunk {
     let mut old = (1usize, 1usize);
     let mut new = (1usize, 1usize);
@@ -240,7 +211,6 @@ fn parse_combined_hunk(after_three_at: &str, lines: &mut Lines<'_>) -> PatchHunk
     hunk
 }
 
-/// A hunk's body lines, consuming through the next header or section.
 fn parse_hunk_body(hunk: &mut PatchHunk, lines: &mut Lines<'_>) {
     let mut pending_no_newline = false;
     while let Some(line) = lines.peek() {
@@ -250,7 +220,6 @@ fn parse_hunk_body(hunk: &mut PatchHunk, lines: &mut Lines<'_>) {
         let line = line.to_string();
         lines.next();
         if line.starts_with('\\') {
-            // The marker annotates the line it followed.
             match hunk.lines.last_mut() {
                 Some(last) => last.no_newline = true,
                 None => pending_no_newline = true,
@@ -273,8 +242,6 @@ fn parse_hunk_body(hunk: &mut PatchHunk, lines: &mut Lines<'_>) {
     }
 }
 
-/// The section's lines with a cursor: a hunk consumes its own body and hands
-/// the rest back, which is what keeps this one pass over one format.
 struct Lines<'a> {
     all: Vec<&'a str>,
     at: usize,
@@ -294,7 +261,6 @@ impl<'a> Lines<'a> {
     }
 }
 
-/// `-l,s +l,s @@` (whatever follows the first `@@`) → spans and heading.
 fn split_hunk_header(after: &str) -> ((usize, usize, usize, usize), Option<String>) {
     let body = after.strip_prefix('@').unwrap_or(after);
     let mut tokens = body.split_whitespace();
@@ -314,7 +280,6 @@ fn split_hunk_header(after: &str) -> ((usize, usize, usize, usize), Option<Strin
     ((old_start, old_count, new_start, new_count), heading)
 }
 
-/// The paths on a `diff --git` line, git's quoted form resolved.
 fn split_git_paths(rest: &str) -> (Option<String>, Option<String>) {
     let rest = rest.trim();
     if let Some(tail) = rest.strip_prefix(Q)
@@ -331,7 +296,7 @@ fn split_git_paths(rest: &str) -> (Option<String>, Option<String>) {
 }
 
 /// One path from a header line: git's quoting undone, then its `a/`/`b/` side
-/// prefix dropped. Order matters — the prefix is inside the quotes.
+/// prefix dropped. Order matters, the prefix is inside the quotes.
 fn side(raw: &str) -> String {
     let bare = unquote(raw.trim());
     bare.strip_prefix("a/")
@@ -340,9 +305,6 @@ fn side(raw: &str) -> String {
         .to_string()
 }
 
-/// Unescape one quoted-or-plain path as git wrote it in a header line. The quote
-/// marker is this reader's business — which header line means what — and the
-/// escaping inside it is the grammar's.
 fn unquote(raw: &str) -> String {
     let raw = raw.trim();
     if let Some(quoted) = raw.strip_prefix(Q).and_then(|b| b.strip_suffix(Q)) {
@@ -353,14 +315,6 @@ fn unquote(raw: &str) -> String {
 
 const Q: char = '"';
 
-/// Where one patch came from, as the patch itself says.
-///
-/// A `git format-patch` file carries the commit's own header ahead of its first
-/// `diff --git` section — author, date, subject — and a patch read out of the
-/// clipboard or a file is the one artifact a developer can hand across machines
-/// with its provenance intact. Discarding it is what makes an applied patch an
-/// anonymous local change; [`read_provenance`] exists so the apply surface can
-/// fill the destination's fields from the source rather than asking again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatchProvenance {
     /// `Name <email>` from `From:` (a format-patch) or `Author:` (a `git show`
@@ -371,14 +325,12 @@ pub struct PatchProvenance {
     pub date: Option<String>,
     /// The `Subject:` line with git's `[PATCH 2/3]` decoration removed.
     pub subject: Option<String>,
-    /// The commit the patch was made from, when the file names one — `From <sha>`
-    /// or `commit <sha>`.
+    /// The commit the patch was made from, when the file names one
+    /// (`From <sha>` or `commit <sha>`).
     pub commit: Option<String>,
 }
 
 impl PatchProvenance {
-    /// Carries no provenance at all: a plain `git diff` patch, whose header is
-    /// two paths and nothing else.
     pub fn is_empty(&self) -> bool {
         self.author.is_none()
             && self.date.is_none()
@@ -387,8 +339,6 @@ impl PatchProvenance {
     }
 }
 
-/// Read a git-format patch's provenance header.
-///
 /// Only the lines BEFORE the first `diff --git` section are candidates, which is
 /// what keeps this a reader of the header and not a second pass over the body:
 /// a patch's file content is free to contain a line that reads `Subject: anything`,
@@ -443,9 +393,6 @@ pub fn read_provenance(text: &str) -> Option<PatchProvenance> {
     (!out.is_empty()).then_some(out)
 }
 
-/// The trimmed value after one of `names`, if this line opens with any of them.
-/// `names` rather than one spelling because the two git dump formats disagree:
-/// `format-patch` writes `From:`, `git show` writes `Author:`.
 fn value_after<'a>(line: &'a str, names: &[&'a str]) -> Option<&'a str> {
     names
         .iter()
@@ -458,8 +405,6 @@ fn value_after<'a>(line: &'a str, names: &[&'a str]) -> Option<&'a str> {
 /// only when it looks like git's own decoration, so a subject that genuinely
 /// begins with a bracketed reference survives.
 fn strip_patch_decoration(subject: &str) -> String {
-    // `close` indexes the `]` within `subject`, so the decoration is
-    // `subject[1..close]` and the text starts after it.
     let Some(close) = subject
         .strip_prefix('[')
         .and_then(|rest| rest.find(']'))

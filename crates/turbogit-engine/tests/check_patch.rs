@@ -1,8 +1,3 @@
-//! Issue 16 — `check_patch`: would this patch apply? through the engine
-//! seam, over real git (tempdir + system `git`). The prediction for the
-//! cherry-pick-across targets table is built on this; the repo is never
-//! touched by a check.
-
 use std::path::PathBuf;
 
 use test_support::git_seed::git;
@@ -11,11 +6,6 @@ use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-// `repo_with_file` stays local, deliberately NOT `repo_with_one_commit`: the
-// recipe tracks `README.md`, this fixture must track `file.txt` at "one\n",
-// because both tests hand `check_patch` a patch written against `a/file.txt`.
-
-/// Fresh repo on `main` with `file.txt` at "one\n". Returns (guard, path).
 fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -36,8 +26,6 @@ fn engine() -> CliExecutor {
 }
 
 fn patch(context: &str, added: &str) -> turbogit_domain::model::Patch {
-    // One physical line each: a `\n\` continuation would swallow the
-    // context line's significant leading space.
     turbogit_engine_api::patch::parse_patch(&format!(
         "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1,2 @@\n {context}\n+{added}\n"
     ))

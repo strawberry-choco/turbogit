@@ -6,8 +6,8 @@ struct holds the single token set and `configure_style` maps it into egui's
 `Visuals` in one call, widgets never branch on mode, and the settings dialog
 loses the theme row.
 
-The obvious alternative — keeping the old light/high-contrast visuals "until a
-light palette is designed" — was rejected because maintaining three palettes
+The obvious alternative, keeping the old light/high-contrast visuals "until a
+light palette is designed", was rejected because maintaining three palettes
 doubles every widget's color-mapping work for modes no mockup validates.
 Consequence: there is genuinely no light mode until someone designs one; the
 `ThemeMode` enum and per-mode `configure_style` branches are gone rather than

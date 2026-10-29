@@ -1,19 +1,3 @@
-//! Issue #14 — Branches popup: groups, row actions, keyboard flow.
-//!
-//! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
-//! driving [`turbogit_ui::ui::render`] over a **real temp git repository**.
-//! Asserts only on public surfaces: painted text/geometry and public
-//! `AppState` transitions.
-//! Covered (spec §8.5, ADR-0012):
-//! - RECENT / LOCAL / REMOTE / TAGS groups render with correct members
-//! - current branch pinned top of LOCAL, check-marked and emphasized
-//! - checkout via row click AND via Enter on the highlighted row
-//! - New Branch… flow creates + checks out a branch
-//! - Rename / Delete / Compare… / New Worktree… render inert (no-op)
-//! - starred rows sort first; star uses the STATE_WARNING token
-//! - multi-root sync notice states the N repositories count
-//! - Esc closes; typing filters live
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -30,8 +14,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_widget;
 
-// --- git fixture -------------------------------------------------------------
-
 // Identity is pinned per call through the fixture crate's runner, which is not
 // belt-and-braces: no repository here configures `user.*`, so that pin is the
 // ONLY source of identity for the seeded commits. `commit_pinned` below pins
@@ -44,9 +26,6 @@ fn commit_readme(repo: &Path) {
     git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
-/// A project dir holding one real repo `alpha` on `main` with local branches
-/// `feature-a`, `feature-b`, `zebra`, tag `v1.0`, and a bare remote `origin`
-/// that carries a remote-only branch (`remote-only`) fetched locally.
 fn single_repo_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -62,7 +41,6 @@ fn single_repo_project() -> (TempDir, PathBuf) {
     }
     git_with_env(&alpha, &["tag", "v1.0"], &GitEnv::fixture());
 
-    // Bare remote with a branch that exists only remotely.
     git_with_env(
         &project,
         &["clone", "--bare", "alpha", "origin.git"],
@@ -82,7 +60,6 @@ fn single_repo_project() -> (TempDir, PathBuf) {
     (tmp, project)
 }
 
-/// Like [`single_repo_project`] plus a second root `beta` (multi-root).
 fn two_repo_project() -> (TempDir, PathBuf) {
     let (tmp, project) = single_repo_project();
     let beta = project.join("beta");
@@ -95,14 +72,10 @@ fn two_repo_project() -> (TempDir, PathBuf) {
     (tmp, project)
 }
 
-// --- harness -----------------------------------------------------------------
-
-/// The shared `shell_harness_over` at this suite's 1024×768 box.
 fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
-/// Step frames until `pred` holds on public state (async op completion).
 fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&AppState) -> bool) {
     for _ in 0..600 {
         if pred(harness.state()) {
@@ -127,9 +100,6 @@ fn open_popup(harness: &mut Harness<'_, AppState>) {
     settle_quiet(harness);
 }
 
-/// The recents store behind the RECENT group is a global config file
-/// (ADR-0005), so earlier runs leak into a fresh harness. Tests that need a
-/// stable row set clear it before opening the popup.
 fn clear_recents(harness: &mut Harness<'_, AppState>) {
     harness.state_mut().ui.recent_branches.clear();
 }
@@ -148,14 +118,11 @@ fn set_favorite(harness: &mut Harness<'_, AppState>, name: &str) {
     }
 }
 
-// --- Cycle 1: groups ----------------------------------------------------------
-
 #[test]
 fn popup_groups_render_with_members() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
 
-    // Seed one recent branch so all four groups have members.
     harness.state_mut().ui.recent_branches = vec!["feature-b".into()];
     open_popup(&mut harness);
 
@@ -179,10 +146,8 @@ fn current_branch_pinned_top_and_checkmarked() {
     let mut harness = branches_harness(dir);
     open_popup(&mut harness);
 
-    // Check-marked pinned row…
     assert_painted(&harness, "✓ main");
     let pinned = galley_origin(&harness, "✓ main").expect("pinned current row painted");
-    // …sits above the LOCAL heading and every other listed row.
     let local_title = galley_origin(&harness, "LOCAL").expect("LOCAL group title painted");
     let feature_a = galley_origin(&harness, "feature-a").expect("local row painted");
     assert!(
@@ -193,8 +158,6 @@ fn current_branch_pinned_top_and_checkmarked() {
         feature_a
     );
 }
-
-// --- Cycle 2: wired actions ----------------------------------------------------
 
 #[test]
 fn checkout_via_click_switches_branch() {
@@ -223,8 +186,6 @@ fn checkout_via_enter_checks_out_highlighted_row() {
     let mut harness = branches_harness(dir);
     open_popup(&mut harness);
 
-    // Cursor defaults to the first selectable row (feature-a: alphabetically
-    // first local below the pinned current branch, no favorites seeded).
     harness.key_press(Key::Enter);
     pump_until(&mut harness, "checkout via Enter", |s| {
         s.selected_root
@@ -254,10 +215,6 @@ fn new_branch_flow_creates_and_checks_out() {
         "New Branch… must open the New Branch dialog"
     );
 
-    // Type into the dialog's first input (Name:). The Commit window's file
-    // filter (spec R7) also matches Role::TextInput but carries an
-    // accessible label ("Filter files"); the dialog's raw fields are
-    // unlabeled.
     {
         let name_field = harness
             .get_all_by_role(egui::accesskit::Role::TextInput)
@@ -280,16 +237,12 @@ fn new_branch_flow_creates_and_checks_out() {
     });
 }
 
-// --- Cycle 3: row action gating (issue 32 supersedes ADR-0012 inertness) ---
-
 #[test]
 fn row_actions_render_per_gating_and_delete_dispatches() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_popup(&mut harness);
 
-    // Filter to exactly one row so action labels are unambiguous: the
-    // remote-only branch exists on no local ref, so nothing else matches.
     {
         let search = harness.get_by_label("Search branches");
         search.focus();
@@ -297,8 +250,6 @@ fn row_actions_render_per_gating_and_delete_dispatches() {
     }
     settle_quiet(&mut harness);
 
-    // Remote rows: check out, delete (remote ref), compare — Rename is a
-    // local-branch verb, so it stays rendered but disabled.
     for label in ["Checkout", "Rename", "Delete", "Compare…", "New Worktree…"] {
         assert_painted(&harness, label);
     }
@@ -317,8 +268,6 @@ fn row_actions_render_per_gating_and_delete_dispatches() {
         "Delete on a remote row must stay enabled"
     );
 
-    // Delete dispatches the remote-branch confirmation (issue 32): the
-    // rich confirmation from issue 02, not a no-op.
     harness.get_by_label("Delete").click();
     settle_quiet(&mut harness);
     assert!(
@@ -327,8 +276,6 @@ fn row_actions_render_per_gating_and_delete_dispatches() {
     );
     assert_painted(&harness, "Delete remote branch");
 }
-
-// --- Cycle 4: stars -------------------------------------------------------------
 
 #[test]
 fn starred_rows_sort_first_and_star_uses_warning_token() {
@@ -344,11 +291,8 @@ fn starred_rows_sort_first_and_star_uses_warning_token() {
         zebra.y < feature_a.y,
         "starred rows must sort above plain rows within LOCAL"
     );
-    // Token contract: the star color is the central warning token.
     assert_eq!(branch_widget::STAR_COLOR, Palette::STATE_WARNING);
 }
-
-// --- Cycle 5: keyboard ------------------------------------------------------------
 
 #[test]
 fn esc_closes_popup() {
@@ -372,7 +316,6 @@ fn typing_filters_live() {
     let mut harness = branches_harness(dir);
     open_popup(&mut harness);
 
-    // No Enter pressed — the list narrows as characters land.
     {
         let search = harness.get_by_label("Search branches");
         search.focus();
@@ -384,8 +327,6 @@ fn typing_filters_live() {
     assert_not_painted(&harness, "zebra");
     assert_not_painted(&harness, "v1.0");
 }
-
-// --- Cycle 6: multi-root sync notice ----------------------------------------------
 
 #[test]
 fn multi_root_sync_notice_states_n_repositories() {
@@ -406,12 +347,6 @@ fn multi_root_sync_notice_states_n_repositories() {
     );
 }
 
-// --- Cycle 7: issue 32 row actions end to end ---------------------------------
-
-/// Issue 32 sync fixture: `alpha` on `main` (c1, 21 days old) with `feat`
-/// tracking `origin/main` (ahead 2, behind 1), `ghost` tracking a pruned
-/// `origin/ghost` (gone), and untracked `zebra` sitting on the old commit
-/// (stale badge "3w").
 fn sync_repo_project() -> (TempDir, PathBuf) {
     let now = chrono::Utc::now().timestamp();
     let old = now - 21 * 24 * 60 * 60;
@@ -444,7 +379,6 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
         &GitEnv::fixture(),
     );
 
-    // ghost: tracked upstream that will be deleted and pruned.
     git_with_env(&alpha, &["branch", "ghost"], &GitEnv::fixture());
     git_with_env(
         &alpha,
@@ -452,10 +386,8 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
         &GitEnv::fixture(),
     );
     git_with_env(&alpha, &["fetch", "-q", "origin"], &GitEnv::fixture());
-    // zebra: stale untracked branch on the old commit.
     git_with_env(&alpha, &["branch", "zebra"], &GitEnv::fixture());
 
-    // feat: two fresh commits past the fork; main advances one fresh commit.
     git_with_env(&alpha, &["branch", "feat"], &GitEnv::fixture());
     git_with_env(
         &alpha,
@@ -473,8 +405,6 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
         &GitEnv::fixture(),
     );
 
-    // Delete the remote ghost branch and prune its tracking ref: the local
-    // ghost branch still tracks it, so the popup shows `origin/ghost  gone`.
     git_with_env(
         &project.join("origin.git"),
         &["update-ref", "-d", "refs/heads/ghost"],
@@ -488,8 +418,6 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
     (tmp, project)
 }
 
-/// Commit with both author and committer dates pinned (git internal format);
-/// each commit touches a file so no commit is empty.
 fn commit_pinned(repo: &Path, msg: &str, epoch: i64) {
     std::fs::write(repo.join("f.txt"), format!("{msg}\n")).unwrap();
     git_with_env(repo, &["add", "."], &GitEnv::fixture());
@@ -514,14 +442,10 @@ fn stale_badge_remote_arrows_and_gone_render() {
     clear_recents(&mut harness);
     open_popup(&mut harness);
 
-    // Stale badge: zebra (and ghost) sit on the 3-week-old commit.
     assert_painted(&harness, "3w");
-    // Remote rows: origin/main diverged from feat (↑2 ↓1), origin/ghost
-    // synthesized from the local tracking with its upstream pruned (gone).
     assert_painted(&harness, "↑2 ↓1");
     assert_painted(&harness, "gone");
     assert_painted(&harness, "origin/ghost");
-    // Fresh branches carry the "now" badge, not a stale one.
     assert_painted(&harness, "now");
 }
 
@@ -533,8 +457,6 @@ fn protected_rows_render_lock_gate_delete_and_offer_hover_actions() {
     clear_recents(&mut harness);
     open_popup(&mut harness);
 
-    // Narrow to the protected zebra row: its destructive action is gated
-    // (no Delete offered), but checkout stays.
     {
         let search = harness.get_by_label("Search branches");
         search.focus();
@@ -543,7 +465,6 @@ fn protected_rows_render_lock_gate_delete_and_offer_hover_actions() {
     settle_quiet(&mut harness);
     assert_painted(&harness, "zebra");
     assert_painted(&harness, "Checkout");
-    // The destructive action stays rendered but gated (issue 32).
     assert_painted(&harness, "Delete");
     assert!(
         harness
@@ -560,14 +481,11 @@ fn protected_rows_render_lock_gate_delete_and_offer_hover_actions() {
         "checkout stays available on a protected branch"
     );
 
-    // Hover reveals the pull / merge quick actions.
     harness.get_by_label("zebra").hover();
     settle_quiet(&mut harness);
     assert_painted(&harness, "Pull");
     assert_painted(&harness, "Merge");
 
-    // Merge is wired: it presets the existing merge dialog with the protected
-    // branch as the source and closes the popup.
     harness.get_by_label("Merge").click();
     settle_quiet(&mut harness);
     assert_eq!(harness.state().ui.dialog, Some(Dialog::Merge));
@@ -588,17 +506,12 @@ fn delete_flow_confirms_and_refreshes_the_list() {
         search.type_text("feature-a");
     }
     settle_quiet(&mut harness);
-    // The filter also matches the remote-tracking `origin/feature-a` row the
-    // fixture's bare clone created; LOCAL rows precede REMOTE ones, so the
-    // first Delete is the local branch's.
     let deletes: Vec<_> = harness.get_all_by_label("Delete").collect();
     deletes[0].click();
     settle_quiet(&mut harness);
     assert_painted(&harness, "Delete local branch 'feature-a'");
 
     harness.get_by_label("OK").click();
-    // The remote-tracking `origin/feature-a` row the fixture's bare clone
-    // created survives; only the local branch must be gone.
     pump_until(&mut harness, "branch deleted", |s| {
         !s.multi.roots[0]
             .branches
@@ -620,9 +533,6 @@ fn rename_flow_renames_through_the_dialog() {
         search.type_text("feature-b");
     }
     settle_quiet(&mut harness);
-    // The filter also matches the remote-tracking `origin/feature-b` row the
-    // fixture's bare clone created (its Rename renders disabled); LOCAL rows
-    // precede REMOTE ones, so the first Rename is the local branch's.
     let renames: Vec<_> = harness.get_all_by_label("Rename").collect();
     renames[0].click();
     settle_quiet(&mut harness);
@@ -669,7 +579,6 @@ fn compare_flow_lists_commits_and_swaps() {
         search.type_text("feat");
     }
     settle_quiet(&mut harness);
-    // Row action first ("Compare…" also lives in the popup footer).
     let rows: Vec<_> = harness.get_all_by_label("Compare…").collect();
     rows[0].click();
     settle_quiet(&mut harness);
@@ -699,8 +608,6 @@ fn footer_entries_render_and_new_branch_opens_the_dialog() {
         "+ New branch must open the New Branch dialog"
     );
 }
-
-// --- Pure logic (no harness): ordering, filtering, recents --------------------------
 
 mod pure {
     use turbogit_domain::model::{Branch, BranchKind};
@@ -735,7 +642,6 @@ mod pure {
         let rows = popup_entries(&locals, &remotes, &tags, &[], None, "");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
 
-        // Locals favorites-first then alphabetical, then remotes, then tags.
         assert_eq!(
             names,
             vec!["zeta", "alpha", "main", "origin/only", "v1", "v2"]
@@ -757,8 +663,6 @@ mod pure {
             "",
         );
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
-        // RECENT group leads, starred ("a") before unstarred ("b"); the same
-        // branches still list under LOCAL afterwards.
         assert_eq!(
             &names[..4],
             &[
@@ -776,12 +680,10 @@ mod pure {
             b("main", BranchKind::Local, false),
             b("feature", BranchKind::Local, false),
         ];
-        // Current branch is pinned separately, so it never repeats under LOCAL.
         let rows = popup_entries(&locals, &[], &[], &[], Some("main"), "");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
         assert_eq!(names, vec!["feature"]);
 
-        // Live filter matches display names.
         let rows = popup_entries(&locals, &[], &[], &[], Some("main"), "feat");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
         assert_eq!(names, vec!["feature"]);
@@ -796,8 +698,6 @@ mod pure {
         push_recent(&mut recents, "c");
         assert_eq!(recents, vec!["c", "f", "e", "d", "b"]);
     }
-
-    // --- Issue 32: stale badges, remote sync markers, action gating ---------
 
     #[test]
     fn stale_badge_compacts_age_to_unit_labels() {
@@ -815,21 +715,13 @@ mod pure {
     #[test]
     fn remote_row_marker_prefers_gone_then_ahead_behind() {
         use turbogit_ui::ui::branch_widget::remote_marker;
-        // Diverged local counterpart: arrows, ahead first.
         assert_eq!(remote_marker(2, 1, false), Some("↑2 ↓1".into()));
-        // Deleted upstream wins over any count.
         assert_eq!(remote_marker(3, 0, true), Some("gone".into()));
-        // One-sided pairs still mark: the marker means *either* side moved, the
-        // same loose reading the status bar's counter uses, so an ahead-only or
-        // a behind-only counterpart is not in sync and must say so.
         assert_eq!(remote_marker(3, 0, false), Some("↑3 ↓0".into()));
         assert_eq!(remote_marker(0, 2, false), Some("↑0 ↓2".into()));
-        // In sync: no marker.
         assert_eq!(remote_marker(0, 0, false), None);
     }
 
-    /// Gated actions stay RENDERED with a hover explanation (the repo's
-    /// disabled-with-reason convention), so each gate has pinned wording.
     #[test]
     fn gated_actions_explain_themselves() {
         use turbogit_ui::ui::branch_widget::{PopupEntry, delete_gate, rename_gate};
@@ -841,16 +733,13 @@ mod pure {
             gone: false,
             last_touched: None,
         };
-        // Enabled actions have no reason.
         assert_eq!(delete_gate(&local, Some("main"), false, true), None);
         assert_eq!(rename_gate(&local, Some("main"), false, true), None);
-        // Protected: Delete explains the gate, Rename stays open.
         assert_eq!(
             delete_gate(&local, Some("main"), true, true),
             Some("protected branches cannot be deleted")
         );
         assert_eq!(rename_gate(&local, Some("main"), true, true), None);
-        // The current branch, a vanished recent, tags and remote rows.
         assert_eq!(
             delete_gate(&local, Some("feature"), false, true),
             Some("check out another branch first")
@@ -892,14 +781,10 @@ mod pure {
             gone: false,
             last_touched: None,
         };
-        // Ordinary local: every action offered.
         let a = row_actions(&local, Some("main"), false, true);
         assert!(a.delete && a.rename && !a.protected);
-        // Protected: delete gated (destructive), lock set, rename+compare stay.
         let a = row_actions(&local, Some("main"), true, true);
         assert!(!a.delete && a.rename && a.protected);
-        // The current branch cannot be deleted (git refuses) nor renamed by
-        // itself from the list (the pinned row carries no actions).
         let cur = PopupEntry::Local {
             name: "main".into(),
             favorite: false,
@@ -910,11 +795,9 @@ mod pure {
         };
         let a = row_actions(&cur, Some("main"), false, true);
         assert!(!a.delete && !a.rename);
-        // Tags: neither delete nor rename.
         let tag = PopupEntry::Tag { name: "v1".into() };
         let a = row_actions(&tag, None, false, true);
         assert!(!a.delete && !a.rename && !a.protected);
-        // A recent whose branch was deleted offers nothing destructive.
         let recent = PopupEntry::Recent {
             name: "gone-branch".into(),
             favorite: false,

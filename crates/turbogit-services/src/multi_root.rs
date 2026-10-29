@@ -1,18 +1,9 @@
-//! Multi-root project model: root discovery (the Root scanner), `Root`
-//! snapshot construction, registration, and aggregated status rollups.
-//!
-//! Root discovery and snapshots are the deep part of the old pass-through
-//! tier — they live here, behind the engine seam (`GitExecutor`), per ADR-0001.
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
 
-/// Maximum directory depth to walk while scanning for repo roots.
 const SCAN_MAX_DEPTH: usize = 3;
-
-// ------------------------------------------------------- root scanner ----
 
 /// Discover candidate repo roots beneath `project_dir`.
 ///
@@ -72,9 +63,6 @@ fn scan_dir(
         if !is_dir {
             continue;
         }
-        // A directory containing `.git` is a repo root. Recurse before pushing
-        // so `path` can move; order is irrelevant because the caller sorts and
-        // dedups the result.
         scan_dir(_engine, &path, depth + 1, max_depth, found);
         if path.join(".git").exists() {
             found.push(path);
@@ -84,7 +72,7 @@ fn scan_dir(
 
 /// Is `dir`, or any ancestor of it, a git work tree?
 ///
-/// The marker test is [`scan_dir`]'s — `.git` present, as a directory in an
+/// The marker test is [`scan_dir`]'s, `.git` present, as a directory in an
 /// ordinary checkout and as a *file* in a worktree or a submodule. It is a
 /// filesystem question rather than an engine call on purpose:
 /// [`GitExecutor::is_repo`] is backend-dependent, and the git2 adapter's
@@ -100,7 +88,6 @@ pub fn is_inside_work_tree(dir: &Path) -> bool {
     dir.ancestors().any(|a| a.join(".git").exists())
 }
 
-/// Build a full [`Root`] snapshot for `path` through the engine seam.
 pub fn root_snapshot(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     Ok(Root {
         id: RootId(path.into()),
@@ -113,14 +100,10 @@ pub fn root_snapshot(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     })
 }
 
-// -------------------------------------------------------- registration ----
-
-/// Discover candidate repo roots under `project_dir` via the Root scanner.
 pub fn discover_roots(engine: &dyn GitExecutor, project_dir: &Path) -> Vec<PathBuf> {
     scan_for_roots(engine, project_dir)
 }
 
-/// Build a single [`Root`] snapshot for `path`.
 pub fn build_root(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     root_snapshot(engine, path)
 }
@@ -161,9 +144,6 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
     }
 
-    /// A `Root` snapshot for a directory that is a repo marker on disk but has
-    /// no engine ready to read through — the tests that only need the
-    /// manager's data shape snapshot by hand.
     fn root_snapshot_at(path: &Path) -> Root {
         Root {
             id: RootId(path.into()),
@@ -176,9 +156,6 @@ mod tests {
         }
     }
 
-    /// The ancestor walk is the whole point: a directory *inside* a checkout is
-    /// "under Git", while an untouched sibling tree is not. A `.git` **file**
-    /// (worktree / submodule shape) counts exactly like a directory.
     #[test]
     fn is_inside_work_tree_walks_up_to_the_marker() {
         let tmp = tempfile::tempdir().unwrap();
@@ -210,8 +187,6 @@ mod tests {
     fn scan_deep_finds_repos_beyond_the_bounded_scan_depth() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
-        // Nest one repo strictly deeper than SCAN_MAX_DEPTH: the bounded
-        // scanner must skip it, the unbounded deep scan must find it.
         let deep = base.join("a").join("b").join("c").join("d").join("deep");
         repo_at(&deep);
 
@@ -234,7 +209,6 @@ mod tests {
     fn scanner_finds_repos_within_depth_and_skips_deeper_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
-        // depth 1 and depth 2 repos exist; a depth-3 nested repo must be skipped
         let d1 = base.join("one");
         let d2 = base.join("a").join("two");
         let d3 = base.join("a").join("b").join("c").join("three");
@@ -244,8 +218,7 @@ mod tests {
 
         let engine = FakeExecutor::new();
         let mut found = scan_for_roots(&engine, base);
-        found.retain(|p| p != base); // drop the tempdir root itself
-
+        found.retain(|p| p != base);
         assert!(found.contains(&d1), "depth-1 repo should be found");
         assert!(found.contains(&d2), "depth-2 repo should be found");
         assert!(
@@ -303,10 +276,6 @@ mod tests {
         assert_eq!(mgr.roots.len(), 1, "same id registered once");
     }
 
-    /// The one surviving registration rule is replace-in-place: the leaf used
-    /// to own an append-if-absent copy of this operation, and a re-registration
-    /// through it silently kept a stale snapshot. Now every caller reaches
-    /// this rule, so the second registration must leave the later snapshot.
     #[test]
     fn register_replaces_the_earlier_snapshot_of_the_same_root_id() {
         let tmp = tempfile::tempdir().unwrap();

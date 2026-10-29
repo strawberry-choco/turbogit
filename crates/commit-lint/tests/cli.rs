@@ -29,9 +29,6 @@ fn assert_rejected(path: &Path) {
     );
 }
 
-// Run from the crate directory, cocogitto discovers the repo root from cwd and loads its
-// `cog.toml` — the plain cases exercise the repo settings; only
-// `falls_back_to_default_settings_without_a_repository` (cwd = tempdir) is on the default path.
 #[test]
 fn valid_message_passes_silently() {
     let dir = TempDir::new().expect("tempdir");

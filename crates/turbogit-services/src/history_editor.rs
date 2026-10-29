@@ -1,9 +1,3 @@
-//! Interactive-rebase plan builder / editor for F5 / I-series history editing.
-//!
-//! Operates purely on the [`model::RebasePlanEntry`] rows surfaced by the UI:
-//! building a plan from `base..HEAD`, mutating actions, reordering, and
-//! dispatching the final plan to [`GitExecutor::rebase_interactive`].
-
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
@@ -32,7 +26,6 @@ pub fn build_plan(
         .map(|c| RebasePlanEntry {
             action: RebaseAction::Pick,
             commit: c.id,
-            // `c.id` moved above, so the accessor is out of reach here.
             subject: subject_of_message(&c.message).to_string(),
             message: None,
         })
@@ -45,7 +38,7 @@ pub fn build_plan(
 /// Set the [`RebaseAction`] of the plan entry at `index`, if in range.
 ///
 /// Setting [`RebaseAction::Pick`] RESETS the row ("this commit is applied as
-/// is" — the reference's per-row way back): the replacement message goes with
+/// is", the reference's per-row way back): the replacement message goes with
 /// it, so a reworded row clicked back to pick replays the commit untouched.
 /// Every other verb is a retarget, not a reset, and keeps the message.
 pub fn set_action(plan: &mut [RebasePlanEntry], index: usize, action: RebaseAction) {
@@ -73,7 +66,6 @@ pub fn reorder(plan: &mut Vec<RebasePlanEntry>, from: usize, to: usize) {
     plan.insert(to, entry);
 }
 
-/// Execute a rebase plan.
 pub fn execute(vcs: &dyn GitExecutor, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
     vcs.rebase_interactive(root, plan)
 }
@@ -102,7 +94,7 @@ pub fn execute_with_backup(
 /// parent through the current tip, with exactly one row set to `action`.
 ///
 /// Built over the FIRST PARENT rather than the target so the target itself is
-/// in the replayed set — which is what lets one row carry the verb while every
+/// in the replayed set, which is what lets one row carry the verb while every
 /// descendant is replayed on top of it unchanged. A commit that is not an
 /// ancestor of the tip has no row here, so it gets an error rather than a todo
 /// git rejects; the menu states that bound on the item before it is reached.
@@ -176,7 +168,7 @@ pub fn reword_commit(
 /// Abort the running rebase and restore the pre-rebase state from the engine's
 /// rewrite backup (screen 17's RECOVERY action): an in-progress rebase is
 /// aborted first, then the branch returns to the backup, and the spent backup is
-/// discarded. Errors when no backup exists — the net is only present while an
+/// discarded. Errors when no backup exists, the net is only present while an
 /// [`execute_with_backup`] replay is the last rewrite.
 pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
     if crate::integrate_service::operation_in_progress(vcs.holding_operation(root)) {
@@ -188,13 +180,13 @@ pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
 }
 
 /// Post-hoc undo of the last targeted rewrite: restore the branch
-/// from the engine's rewrite backup and discard the spent backup — the same
+/// from the engine's rewrite backup and discard the spent backup, the same
 /// two verbs [`abort_to_backup`] runs once an abort is out of the way, without
 /// the reconstruction a `git reflog` walk would need.
 ///
 /// `expected_tip` is the HEAD the rewrite finished on, captured when the undo
 /// was armed. The guard runs HERE, at undo time, never at rewrite time: if
-/// HEAD has moved since — a second operation in the same root — the undo is
+/// HEAD has moved since, a second operation in the same root, the undo is
 /// refused and NOTHING is restored, because `restore_rewrite_backup` resets
 /// hard and would destroy whatever landed on top. The backup ref survives the
 /// refusal; refusing is not discarding.
@@ -234,7 +226,7 @@ pub fn render_todo(plan: &[RebasePlanEntry]) -> String {
 /// Parse an edited REBASE-TODO back into a plan (screen 17's Log tab):
 /// `<verb> <sha> <subject>` per line; comment (`#`) and blank lines are
 /// skipped. A verb the parser does not recognise falls back to
-/// [`RebaseAction::Unknown`] — the row survives so the editor can render it
+/// [`RebaseAction::Unknown`], the row survives so the editor can render it
 /// and the engine can refuse the plan, rather than the line being dropped or
 /// silently rewritten as a verb it never was.
 pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
@@ -257,11 +249,6 @@ pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
             "fixup" | "f" => RebaseAction::Fixup,
             "drop" | "d" => RebaseAction::Drop,
             "update-ref" | "u" => RebaseAction::UpdateRef,
-            // The parser's fallback (`rebase.entry.action.name.unknown`): a
-            // verb the editor did not write survives as an `Unknown` row the
-            // plan can render, instead of being coerced to a valid-looking
-            // verb. The engine refuses such a plan, so a typo still cannot
-            // silently rewrite history.
             _ => RebaseAction::Unknown,
         };
         let Some((commit, subject)) = rest.split_once(' ') else {
@@ -269,8 +256,6 @@ pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
                 "malformed rebase-todo line: {line}"
             )));
         };
-        // A rendered todo has no slot for a replacement message, so parsing one
-        // back loses it deliberately rather than erroring (ADR-0025).
         plan.push(RebasePlanEntry {
             action,
             commit: commit.to_string(),
@@ -288,13 +273,9 @@ pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
 pub struct FoldSummary {
     /// The entries folded away, in plan order.
     pub folded: Vec<String>,
-    /// The surviving commit they fold into.
     pub into: String,
 }
 
-/// What running a plan will produce, computed before anything runs
-/// (screen 17's RESULT PREVIEW): the surviving commit sequence, the
-/// before → after counts, the fold groups, and the dropped count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanPreview {
     /// Entries in the plan (the "N" in "N → M COMMITS").
@@ -305,7 +286,6 @@ pub struct PlanPreview {
     pub kept: Vec<RebasePlanEntry>,
     /// Consecutive squash/fixup runs grouped by their fold target.
     pub folds: Vec<FoldSummary>,
-    /// Entries removed by the Drop action.
     pub dropped: usize,
 }
 
@@ -331,8 +311,6 @@ pub fn plan_preview(plan: &[RebasePlanEntry]) -> PlanPreview {
             }
             RebaseAction::Squash | RebaseAction::Fixup => {
                 match kept.last().map(|k| k.commit.clone()) {
-                    // A run of consecutive folds shares one summary; an
-                    // intervening pick starts a new one.
                     Some(into) => match folds.last_mut() {
                         Some(f) if f.into == into => f.folded.push(e.commit.clone()),
                         _ => folds.push(FoldSummary {
@@ -340,7 +318,6 @@ pub fn plan_preview(plan: &[RebasePlanEntry]) -> PlanPreview {
                             into,
                         }),
                     },
-                    // Nothing above to fold into — the entry survives as-is.
                     None => kept.push(e.clone()),
                 }
             }
@@ -356,11 +333,9 @@ pub fn plan_preview(plan: &[RebasePlanEntry]) -> PlanPreview {
     }
 }
 
-/// A pre-flight warning the editor's CAUTIONS rail renders (screen 17),
-/// computed from the plan and the live repository before anything runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RebaseCaution {
-    /// Files touched by more than one planned commit — replaying them in
+    /// Files touched by more than one planned commit, replaying them in
     /// sequence may conflict.
     ConflictRisk { files: usize },
     /// The planned commits carry more than one author identity.
@@ -370,7 +345,7 @@ pub enum RebaseCaution {
 /// Compute the CAUTIONS (screen 17) for a plan over `root`: the conflict
 /// likelihood (files touched by several planned commits, via
 /// [`GitExecutor::commit_files`]) and mixed committer identities (distinct
-/// author names, via the log). Only computable cautions are returned — a
+/// author names, via the log). Only computable cautions are returned, a
 /// clean single-author plan yields an empty list.
 pub fn cautions(
     vcs: &dyn GitExecutor,
@@ -379,7 +354,6 @@ pub fn cautions(
 ) -> Vec<RebaseCaution> {
     let mut cautions = Vec::new();
 
-    // Conflict likelihood: a file touched by more than one planned commit.
     let mut per_file: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for e in plan {
         if e.action == RebaseAction::Drop {
@@ -396,7 +370,6 @@ pub fn cautions(
         cautions.push(RebaseCaution::ConflictRisk { files: risky });
     }
 
-    // Mixed identities: distinct author names across the planned commits.
     let shas: std::collections::HashSet<&str> = plan.iter().map(|e| e.commit.as_str()).collect();
     let mut authors: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Ok(commits) = vcs.log(root, &LogOpts::default()) {
@@ -415,7 +388,7 @@ pub fn cautions(
     cautions
 }
 
-/// The selected commit's first parent — the default rebase base when the
+/// The selected commit's first parent, the default rebase base when the
 /// editor opens (screen 17's "Interactive rebase onto …"). `None` for an
 /// unknown commit or a rootless commit.
 pub fn base_of(vcs: &dyn GitExecutor, root: &Path, commit: &str) -> Option<String> {
@@ -429,7 +402,7 @@ pub fn base_of(vcs: &dyn GitExecutor, root: &Path, commit: &str) -> Option<Strin
 }
 
 /// The footer's time estimate (screen 17): roughly three seconds per
-/// actually replayed commit — dropped entries never run.
+/// actually replayed commit, dropped entries never run.
 pub fn estimate(plan: &[RebasePlanEntry]) -> String {
     let replays = plan
         .iter()

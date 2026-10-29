@@ -1,16 +1,3 @@
-//! IDE shell frame (issue #9, spec §6): workspace sidebar, tool tab strip,
-//! status bar.
-//!
-//! The shell is the always-present frame of the main window (CONTEXT.md:
-//! "Shell"); every page renders inside it. Region metrics come from spec
-//! §4.2 and are exposed as constants so tests can assert them.
-//!
-//! Frozen keyboard shortcuts (ADR-0009) are dispatched here unchanged:
-//! Ctrl+K commit · Ctrl+Shift+K push · Ctrl+T refresh · Ctrl+Shift+A find ·
-//! Alt+` VCS operations. Spec R7 adds F7/Shift+F7 hunk navigation and the
-//! `/` file-filter focus behind a three-tier input gate (dialogs → popups →
-//! focused text fields) — see [`handle_shortcuts`].
-
 use egui::{
     Align, Color32, Frame, Key, Layout, Margin, Panel, Pos2, Rect, RichText, Ui, UiBuilder,
     WidgetInfo, WidgetType,
@@ -22,28 +9,14 @@ use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::{Affected, LogRead};
 use turbogit_app::state::{AppState, Dialog, Tab};
-// --- Spec metrics (§4.2 fixed heights) --------------------------------------
-/// Status bar height.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 /// Minimum work-area width at which the workspace sidebar renders
 /// (issue #05): below it the log's minimum pane sizes cannot hold.
 pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 
-/// Compose the whole shell: frozen shortcuts, the shell frame regions
-/// (center tabs / status bar) around the workspace sidebar, then the
-/// central body (Welcome placeholder or active tool window). The tool
-/// window spans the full content width — the third metadata column was
-/// removed in the local-changes redesign (its information moved to the
-/// status bar).
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     handle_shortcuts(ui, state);
 
-    // Issue 14: the tab-strip badges and both tool tabs read the focused
-    // root's worktree & submodule caches — keep them filled (fetch on
-    // miss, i.e. first frame and after every refresh invalidation).
-    // Ticket 03: the cheap list is always kept for the badge, but the
-    // per-worktree dirty probes run only while the Worktrees window is
-    // open — they are never part of the badge / eager-fill path.
     if !state.show_welcome() {
         ensure_worktree_data(state);
         if state.ui.tab == Tab::Worktrees {
@@ -51,48 +24,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         }
     }
 
-    // Panel order fixes the geometry: the status bar claims the bottom
-    // and the central body takes the rest, with the tab strip laid out
-    // inside it — the tool window spans the whole content width (the
-    // metadata rail that once split it was removed, issue 03). Nothing
-    // claims the top window edge: the CentralPanel starts there, and the
-    // tab strip is the first band inside it.
-    //
-    // The blocked-reason line is TAKEN here, before the bottom panel is laid
-    // out: whatever a menu row raised last frame is what this frame reports, and
-    // raising nothing means the line goes back to the workspace counters. The
-    // take runs whether the region is showing or not, so a hidden status bar
-    // cannot accumulate reasons behind itself.
     let status_hint = widgets::take_status_hint(ui.ctx());
     if state.ui.show_status_bar {
         render_status_bar(ui, state, status_hint.as_deref());
     }
 
-    // The central panel carries egui's stock central-panel frame minus the
-    // default 8px inner margin: the shell's regions lay out their own edges
-    // (tab strip flush with the top, sidebar on the left, status bar at the
-    // bottom), so an inset here would read as a floating island of content
-    // inside the window.
     let shell_frame = egui::Frame::central_panel(ui.style()).inner_margin(Margin::ZERO);
     egui::CentralPanel::default()
         .frame(shell_frame)
         .show(ui, |ui| {
             if state.show_welcome() {
-                // Welcome page: no project is open, so the tool-window tab strip
-                // (Changes / Log / Branches / Worktrees / Submodules) is dead
-                // chrome — skip it and show only the page itself.
                 super::welcome::show(ui, state);
             } else {
-                // The tool window, the activity log panel (issue #04), and the
-                // workspace sidebar (issue #05) share the central body with the
-                // tab strip. Reserve explicit rects: a `ui.horizontal` would size
-                // its children to one interact row, collapsing every ScrollArea
-                // inside the tool window. The sidebar claims the left edge of the
-                // work area and runs the full height of it; the tab strip starts
-                // at the sidebar's right edge and is the content column's
-                // topmost band, since the repo header above it was deleted; the
-                // activity log keeps its full-width strip at the bottom (screen
-                // 01).
                 let body = ui.available_rect_before_wrap();
                 let activity_h = if state.ui.activity.expanded {
                     super::activity_panel::ACTIVITY_HEIGHT
@@ -103,10 +46,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     Rect::from_min_max(Pos2::new(body.min.x, body.max.y - activity_h), body.max);
                 let work_rect =
                     Rect::from_min_max(body.min, Pos2::new(body.max.x, activity_rect.min.y));
-                // The sidebar is a wide-window region: below the threshold the
-                // remaining tool area can no longer hold the log's four panes at
-                // their minimum sizes (issue #23), so the rail hides and the
-                // pre-sidebar geometry holds (issue #05).
                 let sidebar_visible = work_rect.width() >= MIN_SIDEBAR_WINDOW_WIDTH;
                 let sidebar_w = if sidebar_visible {
                     super::sidebar::SIDEBAR_WIDTH
@@ -131,12 +70,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     super::sidebar::show(&mut sidebar_ui, state);
                 }
                 ui.advance_cursor_after_rect(sidebar_rect);
-                // The tab strip took the deleted header's place at the top of
-                // the content column: it starts at the sidebar's right edge and
-                // is flush with the window's top edge. The strip and the tool
-                // window below it are one `tab_view` over the whole right
-                // column — the component splits the band from the body, so the
-                // shell never computes a strip internal.
                 let mut column_ui = ui.new_child(
                     UiBuilder::new()
                         .max_rect(right_rect)
@@ -151,9 +84,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     active,
                     switch_tab,
                     |ui, state| {
-                        // The end region lays out right-to-left: the first
-                        // widget added lands at its right edge, so the visual
-                        // order (shortcuts, then settings) is unchanged.
                         let settings = widgets::icon_button(ui, Icon::SETTINGS);
                         settings.widget_info(|| {
                             WidgetInfo::labeled(WidgetType::Button, true, "Open settings")
@@ -184,7 +114,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     // While an async op or a keyed read is in flight, keep frames coming so its
     // completion (OpCompleted → refresh → reload, or a settled cache value)
-    // lands without waiting for unrelated input — the headless harness relies
+    // lands without waiting for unrelated input, the headless harness relies
     // on the same signal `app.rs` gets from drain_events in production
     // (spec R2 story 8). `busy` is dispatch's; `read_pending` is the reads',
     // and it says only that *a* surface is working, not which.
@@ -193,23 +123,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-// --- Composition (helpers) ---------------------------------------------------
-
-/// Shortcut dispatch (ADR-0009 frozen five + spec R7's F7/Shift+F7 and `/`),
-/// behind the three-tier input gate:
-///
-/// - **Tier 1** — a dimmed modal dialog (dialog, Settings, shortcuts help,
-///   confirm prompt, conflict editor) is open: every shell shortcut is
-///   suppressed.
-/// - **Tier 2** — a floating popup (VCS operations, command palette,
-///   Branches) is open: the popup owns plain typing through its own widgets,
-///   and the R7 keys pause. The frozen five keep their dispatch-first
-///   contract — they read raw input before any widget by design
-///   (`redesign_polish.rs` pins it), so they still fire here; Alt+` stays
-///   live as the VCS popup's owning key and toggles it closed.
-/// - **Tier 3** — a text field holds keyboard focus: `/` goes to that input
-///   instead of arming the file filter, while F7/Shift+F7 stay live (they
-///   are not text keys).
 fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
     let dialog_open = state.ui.dialog.is_some()
         || state.ui.settings_open
@@ -219,14 +132,10 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         || state.ui.bulk_op.is_some()
         || state.ui.bulk_run.is_some();
 
-    // Alt+` opens the VCS operations popup — and closes it again while it is
-    // itself open (its owning key), unless a modal dialog swallowed input.
     if !dialog_open && ui.input(|i| i.key_pressed(Key::Backtick) && i.modifiers.alt) {
         state.ui.vcs_popup = !state.ui.vcs_popup;
     }
 
-    // The branch context menu joins the popup gate: while it is open the
-    // R7 keys pause (the frozen five keep their dispatch-first contract).
     let popup_open = state.ui.vcs_popup
         || state.ui.command_palette
         || state.ui.branches_popup
@@ -248,8 +157,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         state.ui.dialog = Some(Dialog::Push);
     }
     if ks.refresh {
-        // Manual refresh (decision 8): the full scoped refresh — drops every
-        // cache entry (decorations and path history included) and rescans.
         state.refresh(Affected::All);
     }
     if ks.find {
@@ -261,9 +168,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    // `/` arms the Commit tool window's file filter (spec R7) — only over
-    // the Commit window itself, and never while any text field (including
-    // the filter input) holds the keyboard: then `/` types into it.
     let slash = ui.input(|i| i.key_pressed(Key::Slash) && !i.modifiers.any());
     if slash
         && state.ui.tab == Tab::Commit
@@ -273,7 +177,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         state.ui.focus_file_filter = true;
     }
 
-    // F7 / Shift+F7 hunk navigation (spec R7).
     let (f7_next, f7_prev) = ui.input(|i| {
         (
             i.key_pressed(Key::F7) && !i.modifiers.shift,
@@ -286,11 +189,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         apply_hunk_nav(state, super::hunk_nav::Dir::Prev);
     }
 
-    // The diff viewer's three verbs: `⌃⇧D` opens its settings menu,
-    // `⌃⇧⇥` moves the caret to the opposite pane (`Diff.FocusOppositePane`), `F4`
-    // jumps to the caret's line on the source surface with that line preserved.
-    // All three are meaningless with no diff previewed, so that is their gate —
-    // the same gate `apply_hunk_nav` reads, not a new one.
     let diff_keys = ui.input(|i| {
         (
             i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::D),
@@ -306,8 +204,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         }
         if diff_keys.1 {
             state.ui.diff_pane = state.ui.diff_pane.opposite();
-            // The caret is painted from the model, so moving it is a repaint, not
-            // a re-read: nothing about the comparison changed.
             ui.ctx().request_repaint();
         }
         if diff_keys.2 {
@@ -315,10 +211,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         }
     }
 
-    // Space toggles the staging checkbox of the file being previewed — the
-    // keyboard route to the same whole-file stage/un-stage a checkbox click
-    // performs. Gated exactly like `/` above, because both are keys that type
-    // into whatever text field holds the keyboard.
     let space = ui.input(|i| i.key_pressed(Key::Space) && !i.modifiers.any());
     if space
         && state.ui.tab == Tab::Commit
@@ -329,13 +221,7 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// Apply one F7/Shift+F7 press (spec R7): decide via the pure
-/// [`hunk_nav::advance_hunk`] over the active Commit sub-tab's changed-file
-/// list, then move the current hunk, show the transient edge hint, or cross
-/// files by retargeting the preview — the same path a file-list click uses,
-/// so the diff read loads the new diff and lands on its first hunk.
 fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
-    // Only meaningful over a loaded diff preview in the Commit tool window.
     if state.ui.tab != Tab::Commit || state.show_welcome() || state.ui.preview_change.is_none() {
         return;
     }
@@ -344,10 +230,6 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
         return;
     }
 
-    // Cross-file traversal list: the active sub-tab's changed files in
-    // display order. Hunk counts are known only for the previewed file's
-    // loaded diff; every other listed entry is presumed navigable (it is
-    // listed because it changed).
     let files = super::commit_window::active_subtab_files(state);
     let current_file = files
         .iter()
@@ -395,27 +277,25 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
                 && let Some(path) = files.get(target)
             {
                 state.ui.preview_change = Some(path.clone());
-                // Landing hunk: the diff read resets to the first hunk on
-                // its fresh load.
             }
         }
     }
 }
 
-/// `F4` — Jump to Source, with the caret preserved.
+/// `F4`. Jump to Source, with the caret preserved.
 ///
 /// The line is **derived** from the display model on the pane that holds the caret
 /// (`preview_caret_line`), which is what makes the jump land where the
 /// reader was looking instead of at the top of the file. Blame is this app's
-/// source surface — one row per line of the file, with the commit that introduced
-/// it — and it floats in its own window over the tab the reader is on, so the
+/// source surface, one row per line of the file, with the commit that introduced
+/// it, and it floats in its own window over the tab the reader is on, so the
 /// tab stays put and the line travels in `blame_caret_line` for the window to
 /// aim at.
 ///
 /// Working-tree preview only, and so blame at `HEAD`: the pair being read here is
 /// the working tree's, and the committed side is the only side with an author per
-/// line. A pane with no numbered row at the caret — an insertion read as the
-/// `Before` side — has no line to jump to, and the key does nothing.
+/// line. A pane with no numbered row at the caret, an insertion read as the
+/// `Before` side, has no line to jump to, and the key does nothing.
 fn jump_to_source(state: &mut AppState) {
     let Some((change, line)) = super::diff::preview_caret_line(state) else {
         return;
@@ -434,9 +314,6 @@ struct Shortcut {
     refresh: bool,
     find: bool,
 }
-/// The live badge count for a shell tab (issue 14): the focused root's
-/// cached worktree / submodule list length when loaded and non-zero,
-/// `None` otherwise (no badge for tabs without a count).
 fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {
     let id = state.selected_root.as_ref()?;
     let n = match tab {
@@ -447,8 +324,6 @@ fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {
     (n > 0).then_some(n)
 }
 
-/// Keep the focused root's worktree & submodule caches filled (issue 14).
-/// Fetches are async; the caches fill through the event pump.
 fn ensure_worktree_data(state: &mut AppState) {
     if let Some(id) = state.selected_root.clone() {
         if state.caches.worktrees(&id).is_none() {
@@ -460,26 +335,14 @@ fn ensure_worktree_data(state: &mut AppState) {
     }
 }
 
-/// Change the active tool tab and persist the choice. `pub(crate)` because
-/// surfaces outside the shell's own dispatch also land the user on a tab —
-/// the blame window's row click navigates to the log.
 pub(crate) fn switch_tab(state: &mut AppState, tab: Tab) {
     state.ui.tab = tab;
     if tab == Tab::Branches {
-        // Focus lands in the Branches search box when the tab opens (issue 06).
         state.ui.branches_focus_search = true;
     }
     state.save_durable_ui();
 }
 
-// --- Shared painting helpers ---------------------------------------------------
-
-/// Shell tabs in strip order (issue #03). The legacy History tab was
-/// deleted in issue #19 (file history lives in Git Log's path-scoped
-/// view), and Settings left the strip in issue #16: it is a gear-only
-/// modal now (spec §9.1 correction). Branches is unimplemented in v1 and
-/// renders a labeled placeholder pane (ADR-0008); Worktrees / Submodules
-/// are real browsers since issue 14, with live count badges.
 const SHELL_TAB_ITEMS: [widgets::TabItem<'static, Tab>; 5] = [
     widgets::TabItem {
         id: Tab::Commit,
@@ -518,9 +381,6 @@ const SHELL_TAB_ITEMS: [widgets::TabItem<'static, Tab>; 5] = [
     },
 ];
 
-/// The per-frame tab list: the const vocabulary with this frame's live badge
-/// counts filled in (issue 14). `TabItem` is `Copy`, so this is a table copy
-/// plus a badge fill, not a rebuild.
 fn shell_tabs(state: &AppState) -> [widgets::TabItem<'static, Tab>; 5] {
     let mut tabs = SHELL_TAB_ITEMS;
     for item in tabs.iter_mut() {
@@ -529,23 +389,6 @@ fn shell_tabs(state: &AppState) -> [widgets::TabItem<'static, Tab>; 5] {
     tabs
 }
 
-// --- Status bar -----------------------------------------------------------------------
-
-/// Status bar (issue #03, screen 01): the version / git-status line, then
-/// aggregated workspace state across every registered root — diverged,
-/// conflicts, unpulled, archived, dirty totals on the left; total root
-/// count on the right; busy spinner at the far right. The version line
-/// came here with the topbar's deletion so it paints on Welcome and in
-/// the shell alike.
-///
-/// `hint` is the one thing the pointer is blocked on right now, raised by a
-/// disabled menu row on the previous frame (see
-/// [`crate::ui::widgets::take_status_hint`]). It is the status text region the
-/// reference documents as the home of "why can't I do this", and it paints as
-/// its own line at the head of the left cluster, ahead of the version line and
-/// the counters: a reason that arrives after three aggregate chips reads as
-/// another chip, and the developer is looking for the sentence about the item
-/// under the pointer.
 fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
     let agg = AggregatedStatus::compute(&state.multi.roots, &|id| state.caches.ahead_behind(id));
 
@@ -558,25 +401,13 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
         )
         .show(ui, |ui| {
             ui.style_mut().spacing.button_padding = crate::theme::DENSITY_DENSE_BUTTON;
-            // Two clusters on one row, each given its **own** rect rather than
-            // a nested `right_to_left` inside a `left_to_right`.
-            //
-            // The nested form does not hold its right edge: the left cluster is
-            // measured first, the nested layout takes whatever remains, and the
-            // total lands *past* the panel's right inset — at the default
-            // 1024 headless width it painted at x 1008..1040 in a panel whose
-            // content ends at 1008, so 32 points of the "1 total" label were
-            // off the window. Two explicit halves cannot drift that way: the
-            // right one is measured from the panel's own right edge, so the
-            // total's right edge is the inset no matter what the left cluster
-            // grows to.
             let band = ui.max_rect();
             // The right cluster gets a rect **measured from the panel's own
             // right edge** and sized to its own content, then lays out left to
             // right inside it. A `Layout::right_to_left` cannot do this job: a
             // `ui.label` is a *wrapping* label, so it claims the whole
             // remaining width and then anchors its galley at that rect's
-            // **right** edge — which puts the text's left edge at the panel's
+            // **right** edge, which puts the text's left edge at the panel's
             // right inset and runs it off the window. At the default 1024
             // headless width "1 total" painted at x 1008..1040 inside a panel
             // whose content ends at 1008, so 32 points of the label were
@@ -608,14 +439,6 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
                     if let Some(reason) = hint {
                         status_hint(ui, reason);
                     }
-                    // The in-flight operation items, one per holding root. They
-                    // are NOT this band's one-frame hint slot:
-                    // the hint is a hover echo taken once per frame, and a
-                    // persistent announcement routed through it would flicker and
-                    // be dropped by the next hover. This channel has no slot and
-                    // no producer — it reads git's own markers every frame — which
-                    // is what keeps the hint's one-producer/one-consumer invariant
-                    // provable.
                     super::status_inflight::render(ui, state);
                     version_line(ui, state);
                     aggregated_status_chips(ui, &agg);
@@ -643,11 +466,6 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
         });
 }
 
-/// Paint the blocked-reason line: the sentence a disabled menu row states, in
-/// the primary ink — the only text in this cluster that is about the thing under
-/// the pointer rather than about the workspace — and followed by the same
-/// hairline separator the aggregate chips are divided by, so it reads as the
-/// line's head rather than as one more counter.
 fn status_hint(ui: &mut Ui, reason: &str) {
     ui.label(
         RichText::new(reason)
@@ -662,14 +480,14 @@ fn status_hint(ui: &mut Ui, reason: &str) {
 }
 
 /// Version / git-status line (issue #34): app version, resolved git
-/// version, and the total indexed repo count — leftmost in the cluster,
+/// version, and the total indexed repo count, leftmost in the cluster,
 /// ahead of the aggregated counters, at the same quiet ink every other status
 /// line wears. It paints on every screen: the status bar is the one chrome
 /// band Welcome keeps.
 ///
 /// **The ink is `INK_2`, not `INK_3`, and that is a legality answer rather than
-/// a preference.** The band this line paints on is `Palette::SURFACE` — a
-/// *raised* surface — and ticket 02 narrowed `INK_3`'s legal set to the app
+/// a preference.** The band this line paints on is `Palette::SURFACE`, a
+/// *raised* surface, and ticket 02 narrowed `INK_3`'s legal set to the app
 /// background, the content surface and the sidebar surface. On `SURFACE` it
 /// measures 4.20:1, under AA, and the token layer's own instruction for a
 /// caller in that position is to step *up*. `INK_2` measures 6.58:1 there. The
@@ -688,18 +506,8 @@ fn version_line(ui: &mut Ui, state: &AppState) {
     );
 }
 
-/// The status bar's one separator ink.
-///
-/// `INK_2` for the same reason [`version_line`] uses it: the bar's band is
-/// `Palette::SURFACE`, a raised surface, and `INK_3` is not legal there
-/// (4.20:1). One named value for the bar's quiet text means a fourth status
-/// line added later inherits the step-up instead of re-deciding it.
 const STATUS_BAR_INK: Color32 = Palette::INK_2;
 
-/// Granular-staging status bar (issue 19, screen 06): how many repos granular
-/// ops reach. Only over an open project — the welcome
-/// page has nothing in scope. An empty multi-repo selection means the focused
-/// single root.
 fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     if state.show_welcome() {
         return;
@@ -724,16 +532,6 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     );
 }
 
-/// The three aggregated counters the status bar surfaces (issue #03).
-///
-/// **Not a colour map.** It used to be: a local enum whose `color()` spelled
-/// `STATUS_DIVERGED` / `COUNTER` / `COUNTER` out as bare tokens, sitting beside
-/// `theme::RepoState::color()` — two answers to "what colour is a diverged
-/// root" in the same file, one of them three lines from the other. This type
-/// now carries no colour at all; it names *which* aggregate a chip reports, and
-/// [`CounterChip::state`] answers through the one repository-state map. The
-/// consequence is the property worth having: a fourth aggregate added here
-/// cannot pick a colour, because there is nowhere to pick one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CounterChip {
     Diverged,
@@ -742,7 +540,6 @@ enum CounterChip {
 }
 
 impl CounterChip {
-    /// This chip's repository state, and through it the one colour map.
     fn state(self) -> crate::theme::RepoState {
         use crate::theme::RepoState as S;
         match self {
@@ -757,7 +554,6 @@ impl CounterChip {
     }
 }
 
-/// Workspace aggregates used by the status bar (issue #03).
 #[derive(Default)]
 struct AggregatedStatus {
     diverged: usize,
@@ -769,9 +565,6 @@ struct AggregatedStatus {
 }
 
 impl AggregatedStatus {
-    /// Aggregate across the registered roots; `ahead_behind` reads the root
-    /// caches (absent entries → `(0, 0)`). Pure over its inputs so the
-    /// counting semantics are unit-testable (issue 02).
     fn compute(
         roots: &[turbogit_domain::model::Root],
         ahead_behind: &dyn Fn(&turbogit_domain::model::RootId) -> Option<(usize, usize)>,
@@ -783,27 +576,12 @@ impl AggregatedStatus {
         for root in roots {
             if !root.status.conflicted.is_empty() {
                 agg.conflicts += 1;
-                // A conflicted root counts as dirty as well as conflicted, so it
-                // paints two chips where the owner's precedence ranks conflict
-                // above dirty and could only ever produce one state. Preserved
-                // on purpose (contradiction 2): dropping this increment is a
-                // chip the user sees disappear, which is a human ruling, not a
-                // refactor.
                 agg.dirty += 1;
             }
             if crate::theme::RepoState::is_dirty(&root.status) {
                 agg.dirty += 1;
             }
-            // Archived roots: spec definition is "frozen / excluded from
-            // cascades" — v1 has no archived concept yet, so the count
-            // stays at zero (the chip appears once a real signal lands).
             if let Some((ahead, behind)) = ahead_behind(&root.id) {
-                // The loose reading: any root whose branch has moved relative
-                // to its upstream counts. It contradicts the repository dot one
-                // screen away, which means *both* sides moved — and it is kept
-                // that way deliberately, so the loose polarity is named
-                // (`DivergenceMeaning::AnyDrift`) rather than an inline `||`
-                // that reads as an accident.
                 if crate::theme::DivergenceMeaning::AnyDrift.is_diverged(ahead, behind) {
                     agg.diverged += 1;
                 }
@@ -816,9 +594,6 @@ impl AggregatedStatus {
     }
 }
 
-/// Left-cluster chips — each only paints when its count > 0 so a quiet
-/// project doesn't drown in zeros. Order matches screen 01:
-/// diverged · conflicts · unpulled · archived.
 fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
     let mut first = true;
     let mut chip = |ui: &mut Ui, color: Color32, text: String| {
@@ -840,9 +615,6 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
         );
     }
     if agg.conflicts > 0 {
-        // A conflicted root is a *conflict*, so its chip reads the conflict
-        // state out of the one map too — the same error red as diverged, by
-        // design, with the word beside it saying which of the two it is.
         chip(
             ui,
             crate::theme::RepoState::Conflict.color(),
@@ -872,25 +644,10 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
     }
 }
 
-/// The right cluster's one line, as words: the total root count.
-///
-/// Split from the painting so the bar can **measure** it before laying out the
-/// cluster that holds it. The split exists because of a real bug: a wrapping
-/// `ui.label` inside a right-to-left layout anchors its galley at the rect's
-/// right edge and runs the text off the window, so the bar has to know the
-/// line's width *before* it decides where the right cluster starts. One
-/// function builds the string, one paints it, and there is no second spelling
-/// of the words.
 fn status_total_text(agg: &AggregatedStatus) -> String {
     format!("{} total", agg.total)
 }
 
-// --- Tool window body --------------------------------------------------------------------
-
-/// Dispatch the active tool window inside the central panel. Log data is
-/// fetched lazily exactly as the pre-shell layout did. While a multi-repo
-/// selection is live (issue #08) the summary surface takes the body —
-/// clearing the selection returns the tool window.
 fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.repo_selection.is_empty() {
         super::multi_selection::show_summary(ui, state);
@@ -898,14 +655,6 @@ fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     }
     if state.ui.tab == Tab::Log && state.selected_root.is_some() {
         let id = state.selected_root.clone().unwrap();
-        // A failed read is NOT re-asked every frame. The body asks while the
-        // cache is cold, a failing read leaves it cold, and the cold cache is
-        // then indistinguishable from a first paint — so without this gate the
-        // log retries a command that just failed as fast as the pump can drain
-        // it, and the state it paints alternates between the error and its own
-        // loading. `Refresh` on the state the failure produced is the ask that
-        // clears the gate, because that is when the developer says the reason
-        // may have gone away.
         if state.caches.log(&id).is_none()
             && !state.caches.has_log_failure(&LogRead::Commits(id.clone()))
         {
@@ -915,8 +664,6 @@ fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     match state.ui.tab {
         Tab::Commit => super::commit_window::show(ui, state),
         Tab::Log => super::log_window::show_log(ui, state),
-        // Branches (issues 03+): the grouped list + detail panel spine. No
-        // longer a placeholder since issue 03.
         Tab::Branches => super::branches::show(ui, state),
         Tab::Worktrees => super::worktrees::show(ui, state),
         Tab::Submodules => super::submodules::show(ui, state),
@@ -954,9 +701,6 @@ mod tests {
 
     #[test]
     fn counter_chip_reserves_orange_for_unpulled_and_dirty() {
-        // Issue 02 (design doc §6-7): the three status-bar counters paint
-        // diverged in the error red and unpulled/dirty in the reserved
-        // counter orange — the orange is never any other counter or chip.
         assert_eq!(CounterChip::Diverged.color(), Palette::STATUS_DIVERGED);
         assert_eq!(CounterChip::Unpulled.color(), Palette::COUNTER);
         assert_eq!(CounterChip::Dirty.color(), Palette::COUNTER);
@@ -964,9 +708,6 @@ mod tests {
 
     #[test]
     fn counter_orange_only_colors_the_unpulled_and_dirty_surfaces() {
-        // Orange is reserved for dirty/unpulled counters in this surface and
-        // no general accent usage — for every counter chip, COUNTER is used
-        // exactly when the chip is Unpulled or Dirty.
         for kind in [
             CounterChip::Diverged,
             CounterChip::Unpulled,
@@ -983,15 +724,12 @@ mod tests {
 
     #[test]
     fn computes_diverged_unpulled_and_dirty_counts_from_root_state() {
-        // The three counter chips read the real status + ahead/behind data:
-        // diverged = any upstream drift, unpulled = behind, dirty = conflicted
-        // or modified/unversioned work. Archived stays zero in v1.
         let mut dirty = root("/w/dirty", Some("main"));
         dirty.status.changes = vec![change("a.txt", ChangeStatus::Modified)];
         let mut conflicted = root("/w/conflicted", Some("main"));
         conflicted.status.conflicted = vec![PathBuf::from("c.txt")];
-        let diverged = root("/w/diverged", Some("main")); // ahead 1, behind 1
-        let unpulled = root("/w/unpulled", Some("main")); // behind 2 only
+        let diverged = root("/w/diverged", Some("main"));
+        let unpulled = root("/w/unpulled", Some("main"));
         let clean = root("/w/clean", Some("main"));
         let roots = vec![dirty, conflicted, diverged, unpulled, clean];
 

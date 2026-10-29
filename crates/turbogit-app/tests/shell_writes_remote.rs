@@ -1,13 +1,3 @@
-//! The Manage Remotes dialog's five writes are named entries, and each one
-//! still runs the git the closure ran.
-//!
-//! Driven through the Headless harness against a repository with a real bare
-//! `origin`, and asserted as **what the repository becomes**: `remote -v` carries
-//! the new URL, the renamed name, the fetch/push split, and the configured
-//! upstream. The labels ride along because they are what the user reads in the
-//! toast — including the add verb's asymmetry, whose label names the *fetch*
-//! name while the worker writes the push name.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{git, repo_with_origin};

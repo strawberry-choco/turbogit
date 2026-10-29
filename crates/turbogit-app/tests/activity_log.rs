@@ -1,11 +1,3 @@
-//! Issue #04 — Activity log: every dispatched git operation and its outcome
-//! appends an entry to the session-durable feed.
-//!
-//! Headless over a real temp repository (git on PATH): operations are
-//! dispatched through the production [`AppState::dispatch`] path and events are
-//! pumped through `drain_events`. Assertions are on the public
-//! `state.ui.activity` surface — never on internals.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,25 +8,12 @@ use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 
-// --- git fixture ---------------------------------------------------------------
-
-// No repository `user.*` here, so every commit this fixture makes is pinned per
-// call through the fixture crate's runner: a headless machine has no global
-// identity to borrow. That includes the whole `plant_merge_conflict` sequence —
-// the first commit here used to pin the author and two variable names git does
-// not have, so on a machine with no global identity it died in fixture
-// construction with `Committer identity unknown` and a diagnostic naming
-// `git must be on PATH`. The merge that plants the conflict needs one too, and
-// takes it the same way rather than borrowing the machine's.
-
 fn commit_readme(repo: &Path) {
     std::fs::write(repo.join("README.md"), "x\n").unwrap();
     git_with_env(repo, &["add", "."], &GitEnv::fixture());
     git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
-/// One bare local remote (`origin`) plus one local repo `alpha` on `main`
-/// with `origin` configured, so a fetch is a real, valid operation.
 fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -64,10 +43,6 @@ fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     (tmp, project, alpha)
 }
 
-// --- tests ---------------------------------------------------------------------
-
-/// Contract: a dispatched git operation that completes successfully appends
-/// exactly one activity entry naming the repo and the human-readable outcome.
 #[test]
 fn successful_op_appends_one_activity_entry() {
     let (_tmp, project, alpha) = repo_project();
@@ -80,8 +55,6 @@ fn successful_op_appends_one_activity_entry() {
         move |v| v.fetch(&alpha_path, Some("origin")),
     ));
 
-    // The harness runs the operation inline, so one drain settles it and the
-    // activity entry is already there — no thread, no deadline.
     state.drain_events();
     assert!(
         !state.ui.activity.entries.is_empty(),
@@ -101,8 +74,6 @@ fn successful_op_appends_one_activity_entry() {
     assert_eq!(e.message, "Fetch from origin");
 }
 
-/// Contract: a dispatched git operation that fails appends an Error entry
-/// whose message carries the op label and the git error.
 #[test]
 fn failed_op_appends_error_entry() {
     let (_tmp, project, alpha) = repo_project();
@@ -115,8 +86,6 @@ fn failed_op_appends_error_entry() {
         move |v| v.fetch(&missing, Some("origin")),
     ));
 
-    // The harness runs the operation inline, so one drain settles it and the
-    // activity entry is already there — no thread, no deadline.
     state.drain_events();
     assert!(
         !state.ui.activity.entries.is_empty(),
@@ -134,20 +103,10 @@ fn failed_op_appends_error_entry() {
     );
 }
 
-/// `git` that tolerates failure — used to plant a merge conflict. Deliberately
-/// NOT the fixture crate's runner, which asserts: `plant_merge_conflict`'s
-/// `git merge` is *supposed* to be refused.
-///
-/// It takes its identity from the owner's builder, because a merge that *would*
-/// have written a commit needs a committer before git runs its merge machinery:
-/// with none, git refused the merge for the wrong reason and planted no
-/// conflict at all.
 fn git_ok_or_fail(dir: &Path, args: &[&str]) {
     let _ = GitEnv::fixture().command(dir, args).output();
 }
 
-/// Put `alpha` into an in-progress merge with one conflicted file, as if a
-/// merge just stopped mid-resolution.
 fn plant_merge_conflict(alpha: &Path) {
     git_with_env(
         alpha,
@@ -180,8 +139,6 @@ fn plant_merge_conflict(alpha: &Path) {
     );
 }
 
-/// Contract: an op that completes but leaves conflicts behind logs a
-/// Warning entry — success coloring would hide the unresolved state.
 #[test]
 fn op_leaving_conflicts_logs_warning_entry() {
     let (_tmp, project, alpha) = repo_project();
@@ -195,8 +152,6 @@ fn op_leaving_conflicts_logs_warning_entry() {
         move |v| v.fetch(&alpha_path, Some("origin")),
     ));
 
-    // The harness runs the operation inline, so one drain settles it and the
-    // activity entry is already there — no thread, no deadline.
     state.drain_events();
     assert!(
         !state.ui.activity.entries.is_empty(),
@@ -212,5 +167,3 @@ fn op_leaving_conflicts_logs_warning_entry() {
         e
     );
 }
-
-// --- pure feed semantics (repo / time filters, clear) ---------------------------

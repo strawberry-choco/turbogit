@@ -1,10 +1,3 @@
-//! Issue 28 — the merge dialog's cascade hand-off: `BulkOp::Merge` joins the
-//! bulk machinery so the cascade preflight matrix and run monitor can carry
-//! "merge the same source branch into the sibling repos" as a plan.
-//!
-//! Headless integration tests over real git repositories (tempdir + system
-//! `git`).
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -13,7 +6,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan};
 use turbogit_services::multi_root::{build_root, register};
 
-/// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
 fn commit(dir: &Path, name: &str, text: &str) -> String {
     let file = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
@@ -35,8 +27,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Repo on `main` (one base commit) with a `feature` branch one commit
-/// ahead — strictly fast-forwardable.
 fn ff_repo(tmp: &Path, name: &str) -> PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
@@ -49,8 +39,6 @@ fn ff_repo(tmp: &Path, name: &str) -> PathBuf {
     git(&repo, &["checkout", "-q", "main"]);
     repo
 }
-
-// -- Preflight ----------------------------------------------------------------
 
 #[test]
 fn merge_preflight_skips_dirty_worktrees_but_runs_without_an_upstream() {
@@ -88,8 +76,6 @@ fn dirty_path(tmp: &Path) -> PathBuf {
     tmp.join("dirty")
 }
 
-// -- Run step -----------------------------------------------------------------
-
 #[test]
 fn merge_step_merges_the_source_branch_with_the_given_options() {
     let engine = engine();
@@ -98,8 +84,6 @@ fn merge_step_merges_the_source_branch_with_the_given_options() {
     let before = git(&repo, &["rev-parse", "main"]).trim().to_string();
     let root = build_root(&engine, &repo).expect("root snapshot");
 
-    // The dialog builds its options through merge_flags — use the same
-    // pairing here so the step exercises the flags the dialog would send.
     let opts = turbogit_services::integrate_service::merge_flags(
         turbogit_domain::model::MergeStrategy::NoCommit,
         false,
@@ -123,8 +107,6 @@ fn merge_step_merges_the_source_branch_with_the_given_options() {
     )
     .expect("the step should succeed");
 
-    // --no-commit semantics: the working tree carries the merge, staged, but
-    // main itself has not moved.
     assert_eq!(
         git(&repo, &["rev-parse", "main"]).trim(),
         before,

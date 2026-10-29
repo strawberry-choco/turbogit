@@ -1,11 +1,3 @@
-//! The confirmation module's effect side: what a control in a pending
-//! question's row does, driven through `apply` over a real repository.
-//!
-//! These are the actions the renderer used to perform itself, so it was the
-//! only caller and the only coverage. Reaching them through the app's entry
-//! point is what makes them testable without a window, and it is also what
-//! stops presentation code from doing git work at all.
-
 use std::path::PathBuf;
 
 use test_support::git_seed::{commit, git, repo_with_one_commit};
@@ -13,9 +5,6 @@ use turbogit_app::confirm::{ConfirmAction, apply};
 use turbogit_app::state::{AppState, Dialog, PendingConfirm, UnmergedCommit, UnmergedCommits};
 use turbogit_domain::model::{BranchKind, Change, ChangeStatus};
 
-/// A repo `alpha` with `main` pushed to a bare `origin.git`, and a local
-/// `work` off `main` carrying one commit **and tracking `origin/work`**, so a
-/// delete of it has an upstream to capture as well as a tip.
 fn tracking_project() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -37,15 +26,6 @@ fn tracking_project() -> (tempfile::TempDir, PathBuf) {
     (tmp, project)
 }
 
-/// The two facts a delete destroys with the ref, read before it runs.
-///
-/// The upstream half is the one that cannot be recovered afterwards: the delete
-/// removes the local ref, and with it the upstream entry and the commits the
-/// branch alone reached, so a capture taken after the delete would be a record
-/// of nothing. The consequence line and the unmerged count are the dialog's own
-/// state, armed when the delete was asked for and cleared when it is answered —
-/// whichever way it is answered, or the next delete inherits this one's
-/// warnings.
 #[test]
 fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
     let (_tmp, project) = tracking_project();
@@ -108,7 +88,6 @@ fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
         "the unmerged disclosure belongs to the answered question"
     );
 
-    // The verb itself ran, in the same breath as the reads above.
     state.drain_events();
     assert!(
         state.branch_tip(&root, "work").is_none(),
@@ -116,8 +95,6 @@ fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
     );
 }
 
-/// A repo with three tracked files, each modified in the working tree and
-/// nowhere else.
 fn dirty_project() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -132,7 +109,6 @@ fn dirty_project() -> (tempfile::TempDir, PathBuf) {
     (tmp, project)
 }
 
-/// The listed files as the commit window's table hands them to a discard.
 fn modified(names: &[&str]) -> Vec<Change> {
     names
         .iter()
@@ -147,9 +123,6 @@ fn modified(names: &[&str]) -> Vec<Change> {
         .collect()
 }
 
-/// A repo on `main` with one committed file, a local `work` branch to switch
-/// to, and that file modified in the working tree — so a checkout of `work` has
-/// to answer the dirty-checkout question.
 fn dirty_checkout_project() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -160,8 +133,6 @@ fn dirty_checkout_project() -> (tempfile::TempDir, PathBuf) {
     (tmp, project)
 }
 
-/// The dirty-checkout question a branch row raises: the working tree has changes
-/// and the developer asked for `work`.
 fn checkout_dirty(root: turbogit_domain::model::RootId) -> PendingConfirm {
     PendingConfirm::CheckoutDirty {
         root,
@@ -171,9 +142,6 @@ fn checkout_dirty(root: turbogit_domain::model::RootId) -> PendingConfirm {
     }
 }
 
-/// "Set aside" is the answer that promises the changes will still be there
-/// afterwards, so the promise is the assertion: the switch happened, and the
-/// changes are parked rather than left behind.
 #[test]
 fn the_dirty_checkouts_set_aside_parks_the_changes_and_switches() {
     let (_tmp, project) = dirty_checkout_project();
@@ -203,9 +171,6 @@ fn the_dirty_checkouts_set_aside_parks_the_changes_and_switches() {
     );
 }
 
-/// "Bring along" is the answer that promises nothing is set aside, and the
-/// difference between the two answers is only visible in the repository: same
-/// switch, changes still in the working tree, no stash entry.
 #[test]
 fn the_dirty_checkouts_bring_along_carries_the_changes_and_stashes_nothing() {
     let (_tmp, project) = dirty_checkout_project();
@@ -234,8 +199,6 @@ fn the_dirty_checkouts_bring_along_carries_the_changes_and_stashes_nothing() {
     );
 }
 
-/// The link's click is a thing the app does: it opens the viewer over the
-/// disclosure the dialog was holding, and it dispatches nothing of its own.
 #[test]
 fn the_unmerged_link_opens_the_viewer_over_the_disclosure_it_carried() {
     let (_tmp, project) = tracking_project();
@@ -278,10 +241,6 @@ fn the_unmerged_link_opens_the_viewer_over_the_disclosure_it_carried() {
     );
 }
 
-/// The discard question's non-destructive alternative parks the changes instead
-/// of destroying them. Destroying them would leave the same clean tree, so the
-/// fact that distinguishes the two is what the parked entry holds: the three
-/// files are in it, and they are still recoverable.
 #[test]
 fn the_discard_questions_shelve_first_parks_the_changes_rather_than_destroying_them() {
     let (_tmp, project) = dirty_project();

@@ -1,41 +1,3 @@
-//! Issue #13 — diff viewer restyle: modes, tokens.
-//!
-//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] over real
-//! temp repositories (system `git`) seeded with staged/unstaged edits.
-//! Asserts only on public surfaces:
-//!
-//! - **Painted output** — text galleys carry their strings; filled rects
-//!   carry geometry + token color (`Palette::DIFF_*`).
-//! - **State transitions** — public `AppState` fields after the frames.
-//!
-//! Covered (spec §8.4):
-//! - segmented control toggles side-by-side/unified rendering
-//! - hunk nav ‹ n/N › counts and steps correctly
-//! - hunk nav aims the hunk it names, from any scroll position, in both modes
-//! - The whitespace policy stops painting the line pair it calls equal
-//! - add/del rows paint token-exact backgrounds; gutters show muted numbers
-//! - the row's staged-ness reaches both render modes, both cells of a
-//!   side-by-side pair, and the gutter's hover step
-//! - a conflicted path claims no state in paint, in the header, or in words
-//! - a row's staged-ness label follows the click that moves the index, while the
-//!   patch on screen does not move at all
-//! - the diff's ghost icon buttons (nav pair, gutter pair) are two scale
-//!   settings of one shared primitive and keep their labels and enabled flags
-//! - no surface offers a comparison-axis chip group: the pane answers one fixed
-//!   read, so `Repo`, `Staged` and `Local` never appear as mode selectors
-//! - a single-file pane shows no plumbing rows and counts on the toolbar; a
-//!   multi-file patch's sections keep their counts on the file rows
-//! - the diff options menu's trigger paints on the toolbar row, in every state
-//! - the file row's band height and its label origin are the row shell's
-//! - the synthesised rename header is one muted band across the row
-//!
-//! **Ticket 12's "no diff token changed" assertion now lives in
-//! `tests/design_tokens.rs`**, with the rest of the token contract: it pins six
-//! diff values by hex, measures both text-on-band pairs against AA, and asserts
-//! the pane paints them. It was here first because this file was another agent's
-//! partition while that ticket was in flight; the token contract is where a
-//! palette belongs, and this suite keeps the diff's *behaviour*.
-
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,15 +17,10 @@ use turbogit_domain::error::TgError;
 use turbogit_domain::model::{ChangeRef, RootId};
 use turbogit_ui::theme::Palette;
 
-// --- git seeding -------------------------------------------------------------
-
 fn write_file(repo: &Path, name: &str, content: &str) {
     std::fs::write(repo.join(name), content).expect("writing file");
 }
 
-/// An initialized repository on `main` with **no commit at all** — the floor every
-/// builder writes its own first commit into. Not a `git_seed` recipe: its committed
-/// file would be swept into each builder's `git add .` and these assert on file sets.
 fn init_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -74,14 +31,6 @@ fn init_repo() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Repo where `file.txt` carries BOTH a staged edit (line 2 `beta`→`BETA`)
-/// and an unstaged edit (line 8 `gamma`→`GAMMA`). The edits sit far enough
-/// apart that each of git's three diffs shows its own change without the
-/// other's content leaking into surrounding context lines:
-///
-/// - `git diff HEAD`    (HEAD↔worktree):  `BETA` and `GAMMA`, the pinned read
-/// - `git diff --cached` (HEAD↔index):     `BETA` only
-/// - `git diff`          (index↔worktree): `GAMMA` only
 fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(
@@ -91,14 +40,12 @@ fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
     );
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "c1"]);
-    // Staged edit: beta → BETA.
     write_file(
         &repo,
         "file.txt",
         "alpha\nBETA\ndelta\nepsilon\nzeta\neta\ntheta\ngamma\niota\n",
     );
     git(&repo, &["add", "file.txt"]);
-    // Unstaged edit on top: gamma → GAMMA.
     write_file(
         &repo,
         "file.txt",
@@ -107,8 +54,6 @@ fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Repo where `one.txt` is fully staged (no unstaged part): the pinned read has
-/// nothing left to show for it.
 fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "one.txt", "one\ntwo\n");
@@ -119,10 +64,6 @@ fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Repo whose only change is a whitespace-only unstaged edit
-/// (`gamma` → `g amma`): under `Ignore whitespaces` the pair becomes one
-/// unchanged line, and under `Trim whitespaces` — which reads the same fixture —
-/// it stays the difference it is.
 fn repo_whitespace() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "ws.txt", "alpha\nbeta\ngamma\n");
@@ -132,8 +73,6 @@ fn repo_whitespace() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Repo with two separated unstaged edits in `nav.txt` (lines 2 and 12),
-/// producing exactly two hunks for navigation tests.
 fn repo_two_hunks() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     let base: Vec<String> = (1..=16).map(|i| format!("l{i:02}")).collect();
@@ -147,9 +86,6 @@ fn repo_two_hunks() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Two commits, so a commit-to-commit target (`HEAD~1` ↔ `HEAD`) has real
-/// content to render. Working-tree-only controls (the comparison axis) have
-/// nothing to say about such a comparison.
 fn repo_two_commits() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     let base: Vec<String> = (1..=10).map(|i| format!("l{i:02}")).collect();
@@ -164,9 +100,6 @@ fn repo_two_commits() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// A commit that changes TWO files, so its patch carries two sections — the
-/// shape where file rows exist and carry their own counts, unlike the
-/// single-file panes whose plumbing the model suppresses.
 fn repo_two_file_commit() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "one.txt", "alpha\nbeta\n");
@@ -180,7 +113,7 @@ fn repo_two_file_commit() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// A commit that `git` reports as a **rename with content edits** — similarity
+/// A commit that `git` reports as a **rename with content edits**, similarity
 /// below 100%, so the pane keeps its scroller and the synthesised rename header
 /// renders as a row of it rather than taking the pure-rename shortcut.
 ///
@@ -203,16 +136,13 @@ fn repo_renamed_with_edit() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Run `git <args>` in `dir` without asserting success — a merge that
+/// Run `git <args>` in `dir` without asserting success, a merge that
 /// conflicts exits non-zero, which is exactly the state under test. Kept local
 /// because it is the opposite contract from `git_seed::git`.
 fn git_expect_failure(dir: &Path, args: &[&str]) {
     let _ = Command::new("git").args(args).current_dir(dir).output();
 }
 
-/// Repo left mid-merge on `conf.txt`, so it reports
-/// `ChangeStatus::Conflicted` and its hunk-header gutter pair renders
-/// visible-but-disabled.
 fn repo_conflicted() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "conf.txt", "one\ntwo\n");
@@ -230,23 +160,12 @@ fn repo_conflicted() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-// --- harness -----------------------------------------------------------------
-
-/// Harness rendering the full shell over a real repository. Mirrors
-/// production setup (`app.rs`): dark tokens every frame, fonts installed
-/// once, and the worker-event channel drained every frame before render.
 fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
     let state = AppState::new(repo.to_path_buf());
     assert!(
         !state.multi.roots.is_empty(),
         "repo root must be discovered"
     );
-    // Tall enough that the shell frame (issue #03: center tabs + status bar —
-    // nothing claims the top edge) leaves the preview column room for the
-    // tallest comparison diff plus the message editor below it.
-    // 1008, not 1024: kittest's outer panel carries the shell's old 8px
-    // inset, so 1024 would now flip the workspace sidebar on and squeeze the
-    // diff preview below the width the counters were painted at.
     shell_harness_over(state, egui::vec2(1008.0, 900.0))
 }
 
@@ -260,8 +179,6 @@ fn diff_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
     ));
     harness.step();
     assert_painted(&harness, "Computing diff…");
-    // The toolbar is pane chrome: its controls are on screen while the read is
-    // still computing, so the comparison toggle never waits on the rows.
     assert_painted(&harness, "Diff options");
     assert_painted(&harness, "Side-by-Side");
 }
@@ -291,14 +208,13 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         .expect("send diff failure");
     harness.step();
     assert_painted(&harness, "diff read failed");
-    // The toolbar is pane chrome: its controls survive a failed read too.
     assert_painted(&harness, "Diff options");
 }
 
 /// Step frames until painted output AND the diff read's activity stabilize
 /// (the fingerprint includes the read's verdict so a late `DiffReady` can never
-/// be mistaken for a settled frame). Budgeted by wall-clock time — not frame
-/// count — so a contended `git` subprocess cannot starve it.
+/// be mistaken for a settled frame). Budgeted by wall-clock time, not frame
+/// count, so a contended `git` subprocess cannot starve it.
 /// A **third** settle family: neither shared settle looks at `read_pending`, and
 /// a frame whose text is byte-identical while a `DiffReady` is in flight would
 /// report the loading chrome as a settled diff. Folding this in turns the
@@ -321,8 +237,6 @@ fn settle(harness: &mut Harness<'_, AppState>) {
     panic!("diff viewer did not settle within 15s");
 }
 
-/// Open the Commit tab's inline preview for one file of one repository (public
-/// state transition — the same thing clicking a row's Diff button does).
 fn open_preview(harness: &mut Harness<'_, AppState>, root: &Path, file: &Path) {
     harness.state_mut().ui.preview_change = Some(ChangeRef::new(
         RootId(root.to_path_buf().into()),
@@ -331,13 +245,6 @@ fn open_preview(harness: &mut Harness<'_, AppState>, root: &Path, file: &Path) {
     settle(harness);
 }
 
-// --- Cycle 1: one pinned read, and no control that moves it -----------------
-
-/// Contract: the pane answers with `git diff HEAD` for a file carrying both a
-/// staged and an unstaged edit, and nothing on screen can put another pair of
-/// sides under it. `GAMMA` is the unstaged edit, `BETA` the staged one: the one
-/// fixed comparison shows both halves, which is the whole reason it replaced the
-/// chip group. The worktree's text and HEAD's text are on screen at the same time.
 #[test]
 fn the_pane_answers_with_git_diff_head_and_shows_both_halves() {
     let (_tmp, repo) = repo_mixed();
@@ -366,9 +273,6 @@ fn the_pane_answers_with_git_diff_head_and_shows_both_halves() {
     );
 }
 
-/// The pinned read reaches HEAD: the line only HEAD holds is on screen as a
-/// removal, whatever the index did with it afterwards. This runs the in-process
-/// producer and grades it against git's own `git diff HEAD`.
 #[test]
 fn the_pinned_read_reaches_head() {
     for original in ["", "HEAD ONLY\n"] {
@@ -422,9 +326,6 @@ fn the_pinned_read_reaches_head() {
     }
 }
 
-/// A file with nothing unstaged still has everything the combined read shows: its
-/// staged half is on screen, where an `index ↔ worktree` read would have answered
-/// `(no differences)`.
 #[test]
 fn a_fully_staged_file_still_answers_the_combined_read() {
     let (_tmp, repo) = repo_staged_only();
@@ -448,8 +349,6 @@ fn a_fully_staged_file_still_answers_the_combined_read() {
     assert_no_comparison_chips(&h, "a fully staged file's preview");
 }
 
-// --- Cycle 2: segmented mode control -----------------------------------------
-
 #[test]
 fn segmented_control_toggles_side_by_side_and_unified() {
     let (_tmp, repo) = repo_mixed();
@@ -457,14 +356,12 @@ fn segmented_control_toggles_side_by_side_and_unified() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    // Unified is the default: no side-by-side pane headers.
     assert!(!h.state().ui.diff_side_by_side);
     assert_not_painted(&h, "After Working tree");
 
     h.get_by_label("Side-by-Side").click();
     settle(&mut h);
     assert!(h.state().ui.diff_side_by_side);
-    // Pane headers document the pinned pair (HEAD ↔ working tree).
     assert_painted(&h, "Before HEAD");
     assert_painted(&h, "After Working tree");
 
@@ -474,12 +371,6 @@ fn segmented_control_toggles_side_by_side_and_unified() {
     assert_not_painted(&h, "After Working tree");
 }
 
-// --- Cycle 2b: toolbar order --------------------------------------------------
-
-/// Contract: the mode toggle and Diff options lead the toolbar, and the counts
-/// and hunk nav close it, right-aligned — the nav is the toolbar's rightmost
-/// control, pushed to the row's trailing edge far beyond the one item gap
-/// that would read as inline, all on one row.
 #[test]
 fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() {
     let (_tmp, repo) = repo_two_hunks();
@@ -493,7 +384,6 @@ fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() 
     let prev = h.get_by_label("Previous hunk").rect();
     let next = h.get_by_label("Next hunk").rect();
 
-    // One row: the four controls share a centre line.
     let seg_y = seg.center().y;
     for (label, rect) in [
         ("Diff options", options),
@@ -508,7 +398,6 @@ fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() 
         );
     }
 
-    // Left to right: mode toggle, Diff options, then the counts+nav group.
     assert!(
         options.left() > seg.right(),
         "Diff options follows the mode toggle on the toolbar's leading edge"
@@ -518,8 +407,6 @@ fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() 
         "the counts and hunk nav close the toolbar, right of Diff options"
     );
 
-    // Right-aligned, not merely following: the group is pushed to the row's
-    // trailing edge.
     assert!(
         next.right() > options.right() + 100.0,
         "the hunk nav is right-aligned to the toolbar's trailing edge \
@@ -529,8 +416,6 @@ fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() 
     );
 }
 
-// --- Cycle 3: hunk navigation -------------------------------------------------
-
 #[test]
 fn hunk_navigation_counts_and_steps_across_two_hunks() {
     let (_tmp, repo) = repo_two_hunks();
@@ -538,7 +423,6 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("nav.txt"));
 
-    // Counter shows position 1 of 2.
     assert_painted(&h, "1/2");
     assert_eq!(h.state().ui.diff_current_hunk, 0);
 
@@ -547,7 +431,6 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     assert_eq!(h.state().ui.diff_current_hunk, 1);
     assert_painted(&h, "2/2");
 
-    // Next at the last hunk stays put.
     h.get_by_label("Next hunk").click();
     settle(&mut h);
     assert_eq!(h.state().ui.diff_current_hunk, 1);
@@ -557,21 +440,11 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     assert_eq!(h.state().ui.diff_current_hunk, 0);
     assert_painted(&h, "1/2");
 
-    // Previous at the first hunk stays put.
     h.get_by_label("Previous hunk").click();
     settle(&mut h);
     assert_eq!(h.state().ui.diff_current_hunk, 0);
 }
 
-// --- Cycle 4: the whitespace policy ------------------------------------------
-
-/// The `Ignore Differences` policy reaches the **comparison**, not only its
-/// colouring: under `Ignore whitespaces` the two sides are the same line, so the
-/// old side's row stops being painted and one unchanged row stands where the pair
-/// was. The boolean checkbox this replaces asked the question of `git` (a `-w`
-/// flag), which answered with an empty comparison; the policy is a view decision
-/// folded into the display model, and the raw patch staging composes from keeps
-/// both lines (`crates/turbogit-app/tests/diff_policies.rs` pins that half).
 #[test]
 fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
     use turbogit_domain::model::DiffWhitespace;
@@ -580,7 +453,6 @@ fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("ws.txt"));
 
-    // The menu the five values live in replaces the checkbox, on the toolbar.
     assert_painted(&h, "Diff options");
     assert_eq!(h.state().ui.diff_policies.whitespace, DiffWhitespace::None);
     assert_painted(&h, "gamma");
@@ -591,21 +463,15 @@ fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
     assert_not_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 
-    // `Trim whitespaces` is a *different* answer to this same diff: internal
-    // whitespace is significant there, so the pair comes back. Two values that
-    // behaved alike would be one value with two names.
     h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::TrimWhitespace;
     settle(&mut h);
     assert_painted(&h, "gamma");
 
-    // And back to the default, the full diff is painted again.
     h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::None;
     settle(&mut h);
     assert_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 }
-
-// --- Cycle 5: token-exact line styling ----------------------------------------
 
 #[test]
 fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
@@ -614,10 +480,6 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    // The staged pair sits on the token bands, and the unstaged pair sits on the
-    // muted roles beside them: four rows, two treatments, all painted in the same
-    // frame. `repo_mixed` stages `beta` to `BETA` and leaves `gamma` to `GAMMA` in
-    // the worktree, so the pane has no excuse for drawing them alike.
     let add_pos = galley_origin(&h, "GAMMA").expect("added line painted");
     let staged_add = galley_origin(&h, "BETA").expect("staged added line painted");
     for (who, at, band) in [
@@ -631,7 +493,6 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
             "{who} line must be backed by {band:?}"
         );
     }
-    // …and the deleted lines on their own pair of bands.
     let del_pos = galley_origin(&h, "gamma").expect("deleted line painted");
     let staged_del = galley_origin(&h, "beta").expect("staged deleted line painted");
     for (who, at, band) in [
@@ -646,14 +507,11 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
         );
     }
 
-    // Muted gutter numbers are painted alongside the changed lines
-    // (new-file line number of the GAMMA/GAMMA hunk region).
     assert!(
         galley_origin(&h, "8").is_some(),
         "gutter line numbers must be painted"
     );
 
-    // Hunk header band uses the SURFACE token.
     let hunk_header = painted_text(&h)
         .iter()
         .find(|t| t.starts_with("@@"))
@@ -668,11 +526,6 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
     );
 }
 
-// --- Cycle 6: one shared ghost icon button at two scales --------------------
-
-/// Drive the shared ghost icon-button primitive directly at both scales a
-/// host uses: the standard 24 px square (the diff nav control) and the dense
-/// 18 px rect a gutter supplies itself. One enabled, one not.
 fn ghost_primitive_harness() -> Harness<'static, ()> {
     use turbogit_ui::ui::icons::{self, Icon};
     use turbogit_ui::ui::widgets::{self, ButtonVariant};
@@ -706,16 +559,8 @@ fn ghost_primitive_harness() -> Harness<'static, ()> {
     })
 }
 
-/// Contract: the diff's ghost icon controls — the hunk-nav pair and the
-/// hunk-header gutter pair — are two scale settings of one general primitive
-/// built over the shared button-state vocabulary. What must survive that
-/// collapse is everything *not* in the ladder: the control is still findable
-/// by its accessibility label, it still reports enabled/disabled honestly,
-/// and a conflicted hunk's gutter control still reports disabled rather than
-/// disappearing.
 #[test]
 fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
-    // --- the general primitive itself, at both scales ---------------------
     let mut primitives = ghost_primitive_harness();
     primitives.step();
 
@@ -734,7 +579,6 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
         "a disabled ghost icon button must report itself disabled"
     );
 
-    // --- the migrated hosts, on a real diff ------------------------------
     let (_tmp, repo) = repo_two_hunks();
     let mut h = diff_harness(&repo);
     settle(&mut h);
@@ -747,7 +591,6 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
              while the preview carries hunks"
         );
     }
-    // The gutter pair on hunk 1 of a clean file is live.
     for label in ["Stage hunk 1", "Unstage hunk 1"] {
         assert!(
             !h.get_by_label(label).accesskit_node().is_disabled(),
@@ -756,7 +599,6 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
         );
     }
 
-    // A conflicted hunk keeps the pair visible but inert.
     let (_tmp, conflicted) = repo_conflicted();
     let mut c = diff_harness(&conflicted);
     settle(&mut c);
@@ -774,13 +616,6 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
     );
 }
 
-// --- Cycle 7: hunk navigation aims the hunk it names -------------------------
-
-/// A repo whose unstaged edit is `hunks` hunks of `changed` lines each, with
-/// `gap` unchanged lines between them — a diff far taller than the preview pane,
-/// and the shape hunk navigation needs: consecutive hunks are tens of rows
-/// apart, so the list can be scrolled deep enough that the built row window
-/// starts hundreds of rows down while a jump aims a hunk a few rows away.
 fn repo_deep_diff(hunks: usize, changed: usize, gap: usize) -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     let span = changed + gap;
@@ -801,8 +636,6 @@ fn repo_deep_diff(hunks: usize, changed: usize, gap: usize) -> (tempfile::TempDi
     (tmp, repo)
 }
 
-/// The hunk header bands `git` itself reports for `deep.txt`, newest first, so
-/// a test can name ONE hunk's header exactly as the pane paints it.
 fn diff_hunk_headers(repo: &Path) -> Vec<String> {
     git(repo, &["diff", "-U3", "--", "deep.txt"])
         .lines()
@@ -811,7 +644,6 @@ fn diff_hunk_headers(repo: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Every hunk header the last frame painted.
 fn painted_hunk_headers(harness: &Harness<'_, AppState>) -> Vec<String> {
     painted_text(harness)
         .into_iter()
@@ -821,7 +653,7 @@ fn painted_hunk_headers(harness: &Harness<'_, AppState>) -> Vec<String> {
 
 /// Settle a frame that ISSUED a scroll. The aim is applied when the scroll area
 /// ends the frame it was issued in, so the new offset first appears in the NEXT
-/// frame's paint — and `settle` returns as soon as two frames agree, which it
+/// frame's paint, and `settle` returns as soon as two frames agree, which it
 /// can do on the frame before that. So a scroll is settled by stepping past it
 /// first, then letting the layout settle.
 fn settle_after_aim(harness: &mut Harness<'_, AppState>) {
@@ -847,14 +679,6 @@ fn assert_hunk_aimed_at(painted: &[String], want: &str, must_not_see: &[&str], w
     }
 }
 
-/// Aim three hunks in one open diff and check each one arrives on screen, the
-/// list getting there from wherever the previous aim left it: the last hunk
-/// (from the top), the hunk one step above it, and the first hunk.
-///
-/// `side_by_side` picks the rendering mode, because the two modes page over
-/// DIFFERENT row streams over the same model and a hunk's row index is a slot
-/// in one of them. Both modes are asked the same question here on purpose: an
-/// aim that only works in one of them is a bug, and the mode names it.
 fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
     const HUNKS: usize = 20;
     let headers = diff_hunk_headers(repo);
@@ -871,11 +695,6 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
 
     let mut h = diff_harness(repo);
     h.state_mut().ui.diff_side_by_side = side_by_side;
-    // Note what opening a diff costs the cursor: the keyed read's dispatch puts
-    // `diff_current_hunk` back to 0, so the FIRST paint of this diff aims hunk 0
-    // and spends that hunk's one aim. The near-the-top leg below therefore aims
-    // hunk 1 — the next hunk down, still at the top of a 740-row diff — which is
-    // also the one leg an "index space" bug cannot hide behind.
     settle(&mut h);
     open_preview(&mut h, repo, &repo.join("deep.txt"));
     assert_eq!(h.state().ui.diff_side_by_side, side_by_side);
@@ -884,7 +703,6 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
         "the pane cannot show all {HUNKS} headers at once — the premise of this test"
     );
 
-    // --- the last hunk, from wherever the list is resting ---
     h.state_mut().ui.diff_current_hunk = HUNKS - 1;
     settle_after_aim(&mut h);
     let deep = painted_hunk_headers(&h);
@@ -900,8 +718,6 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
          aiming the last hunk, got {deep:?}"
     );
 
-    // --- one hunk's step UP, from deep: the built row window now starts
-    // hundreds of rows down, and the target is a few rows above the fold ---
     h.get_by_label("Previous hunk").click();
     settle_after_aim(&mut h);
     assert_eq!(h.state().ui.diff_current_hunk, HUNKS - 2);
@@ -913,7 +729,6 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
         &format!("{mode}, one step up from deep"),
     );
 
-    // --- and a hunk near the top, from down there ---
     h.state_mut().ui.diff_current_hunk = 1;
     settle_after_aim(&mut h);
     let top = painted_hunk_headers(&h);
@@ -925,43 +740,24 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
     );
 }
 
-/// Hunk navigation aims a row the list never built, so a row INDEX has to
-/// become a position correctly whether the list is at the top or hundreds of
-/// rows down — in the rendering mode the developer is actually in.
 #[test]
 fn hunk_navigation_aims_the_hunk_it_names_side_by_side() {
     let (_tmp, repo) = repo_deep_diff(20, 15, 20);
     hunk_aim_sequence(&repo, true);
 }
 
-/// The same three aims, in the unified mode the app opens in.
 #[test]
 fn hunk_navigation_aims_the_hunk_it_names_unified() {
     let (_tmp, repo) = repo_deep_diff(20, 15, 20);
     hunk_aim_sequence(&repo, false);
 }
 
-// =============================================================================
-// Ticket 12 — the two axes of scope, and the statistics that sit with what they
-// describe.
-//
-// Everything below is asserted from PAINTED GEOMETRY, never from which helper
-// painted what. A grouped control is a shape (contiguous segments, one outer
-// boundary), and a shape survives a rename; a name does not.
-// =============================================================================
-
 /// Half a pixel of slack: egui rounds UI rects, so exact float equality is the
 /// wrong question to ask about two rects that are meant to coincide.
 const EPS: f32 = 0.5;
 
-/// The toolbar's open span — between the view-mode control and the hunk
-/// navigator — which is precisely where the axes of scope live. Boundaries
-/// found here belong to an axis; the view-mode control's own track is found and
-/// excluded, so it cannot be counted as one.
 fn axis_span(harness: &Harness<'_, AppState>) -> Rect {
     let mode = harness.get_by_label("Unified").rect();
-    // The view-mode control's own track, by containment: the span starts where
-    // that control ends.
     let track = filled_rects(harness)
         .into_iter()
         .find(|(r, c)| *c == Palette::SURFACE_2 && r.contains(mode.center()))
@@ -974,15 +770,6 @@ fn axis_span(harness: &Harness<'_, AppState>) -> Rect {
     )
 }
 
-/// The axis **group frames** in the toolbar's open span.
-///
-/// Two filters, and both matter. The horizontal one is strict: the view-mode
-/// control's own track ends exactly where the span begins, and an inclusive test
-/// would count that track as a second group. The height one is what makes this
-/// "how many GROUPS are here" rather than "how many shapes are here": a group's
-/// frame stands taller than the toolbar row, while the segments it groups are
-/// row-height. An empty frame is a frame with nothing in it, so this count
-/// answers the question the missing-axis case asks.
 fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<Rect> {
     let span = axis_span(harness);
     let row_h = filled_rects(harness)
@@ -1004,12 +791,6 @@ fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<Rect> {
         .collect()
 }
 
-/// Harness rendering ONLY the diff pane, over a commit-to-commit target — the
-/// comparison the working-tree-only controls have nothing to say about.
-///
-/// Kept local as a recorded difference from `shell_harness_over`: it calls
-/// `ui::diff::render_diff` directly, so the shell's other regions are not in the
-/// frame — these assertions are about the diff pane alone.
 fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
     let state = AppState::new(repo.to_path_buf());
     let mut fonts_installed = false;
@@ -1031,7 +812,6 @@ fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-/// The three arms of the deleted axis, asserted absent from one toolbar.
 #[track_caller]
 fn assert_no_comparison_chips(harness: &Harness<'_, AppState>, surface: &str) {
     for label in ["Repo", "Staged", "Local"] {
@@ -1042,13 +822,8 @@ fn assert_no_comparison_chips(harness: &Harness<'_, AppState>, surface: &str) {
     }
 }
 
-/// Contract: the deleted axis leaves nothing behind on either surface. A
-/// grouping that assumed a comparison pad still existed would paint an empty
-/// frame in the toolbar's open span, and this says neither the working tree nor
-/// a commit pair frames one, or offers a chip.
 #[test]
 fn the_removed_axis_leaves_no_group_anywhere() {
-    // --- the working tree ---------------------------------------------------
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
@@ -1062,7 +837,6 @@ fn the_removed_axis_leaves_no_group_anywhere() {
         "the working-tree toolbar frames no group now that the axis is gone"
     );
 
-    // --- a commit pair -------------------------------------------------------
     let (_tmp, commits) = repo_two_commits();
     let mut c = commit_diff_harness(&commits);
     settle(&mut c);
@@ -1076,11 +850,6 @@ fn the_removed_axis_leaves_no_group_anywhere() {
     );
 }
 
-/// Contract: the side-by-side headers name the sides the read actually takes.
-/// A commit-to-commit diff prints its own two revisions. The axis hid this: the
-/// labels were chosen from the chip, and `render_diff`'s one production caller
-/// is the commit window's working-tree preview, so only a test reaches the
-/// commit pair at all.
 #[test]
 fn a_commit_pair_prints_its_own_revisions_in_the_pane_headers() {
     let (_tmp, commits) = repo_two_commits();
@@ -1094,22 +863,14 @@ fn a_commit_pair_prints_its_own_revisions_in_the_pane_headers() {
     }
 }
 
-/// The file row is a row of the row shell's height and the row shell's text
-/// origin, and gaining the statistics did not change either.
-/// Its fill is the one row-fill decision, so a file row is not a second
-/// selection treatment.
 fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
     let galley = painted_galleys(harness)
         .into_iter()
         .find(|g| g.text.starts_with("diff --git "))
         .expect("the file row's own line is painted");
-    // Inside the band, clear of the trailing zone and of the rounded corners.
     let point = Pos2::new(galley.pos.x + 1.0, galley.rect.center().y);
     harness.hover_at(point);
     harness.run();
-    // Found by the row shell's OWN hover fill — not by a colour picked here —
-    // so "the file row's fill is the one row-fill decision" is what makes this
-    // find succeed at all.
     let hover_fill = turbogit_ui::ui::components::row_fill(
         turbogit_ui::ui::components::RowState::from_flags(false, true),
     );
@@ -1121,15 +882,6 @@ fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
     (band, point)
 }
 
-/// Contract: a pane showing exactly one file section has **no plumbing block** —
-/// the pane's own chrome names the file, so git's header lines would only repeat
-/// it — and its counts paint on the **toolbar**, which has no file row to carry
-/// them. The settings menu's trigger is on the same toolbar row, pane chrome
-/// present in every state the pane can be in.
-///
-/// Scoped by position, never by string: a `+2` is a perfectly ordinary thing for
-/// another surface on screen to be painting, so the question is not "how many
-/// `+2`s are on screen" but "where are they".
 #[test]
 fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
     let (_tmp, repo) = repo_mixed();
@@ -1137,7 +889,6 @@ fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    // No plumbing row survives, in any spelling git's header block takes.
     let plumbing: Vec<_> = painted_galleys(&h)
         .into_iter()
         .filter(|g| {
@@ -1159,11 +910,6 @@ fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
         "a single-file pane paints no git plumbing: {plumbing:?}"
     );
 
-    // The counts: this file's two additions and two deletions — the staged half
-    // and the unstaged one, because the read is HEAD-based — in the stats
-    // accents, on the toolbar row right of the mode control. Scoped to the
-    // toolbar's row band, never by count: the preview card's own header still
-    // legitimately paints a `+2` of its own.
     let row = toolbar_row(&h);
     for (text, ink) in [
         ("+2", Palette::DIFF_ADD_ACCENT),
@@ -1191,8 +937,6 @@ fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
         );
     }
 
-    // The menu's trigger: one control, on the toolbar row beside the mode
-    // control.
     let toggles: Vec<Rect> = h
         .get_all_by_label("Diff options")
         .map(|n| n.rect())
@@ -1211,9 +955,6 @@ fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
     );
 }
 
-/// Contract: a multi-file patch keeps every section's plumbing row, and each
-/// section's counts paint on **its own file row** — the toolbar states no pair
-/// for a patch it cannot summarize in one.
 #[test]
 fn multi_file_sections_keep_their_counts_on_the_file_rows() {
     let (_tmp, repo) = repo_two_file_commit();
@@ -1234,8 +975,6 @@ fn multi_file_sections_keep_their_counts_on_the_file_rows() {
             .collect::<Vec<_>>()
     );
 
-    // Each file row carries its own +1 −1, on the file row's band (the label's
-    // y), and the toolbar paints no counts at all.
     let row = toolbar_row(&h);
     for stat in ["+1", "\u{2212}1"] {
         let galleys: Vec<_> = painted_galleys(&h)
@@ -1265,9 +1004,6 @@ fn multi_file_sections_keep_their_counts_on_the_file_rows() {
     }
 }
 
-/// Contract: a **mode-only** change has no content rows — a single-file pane
-/// suppresses the header block that was its whole content — so the pane states
-/// its emptiness instead of scrolling nothing.
 #[test]
 fn a_mode_only_change_states_its_empty_scroller() {
     let (_tmp, repo) = init_repo();
@@ -1291,8 +1027,6 @@ fn a_mode_only_change_states_its_empty_scroller() {
     assert_painted(&h, "No content changes.");
 }
 
-/// The toolbar's row band, by the view-mode control's own track: the track is
-/// painted on the toolbar row, so its y-range is the row's.
 fn toolbar_row(harness: &Harness<'_, AppState>) -> Rect {
     let mode = harness.get_by_label("Unified").rect();
     filled_rects(harness)
@@ -1302,13 +1036,6 @@ fn toolbar_row(harness: &Harness<'_, AppState>) -> Rect {
         .expect("the view-mode control paints its own track")
 }
 
-/// Contract: the file row's height and leading padding are the ROW SHELL's,
-/// after the new occupant was added. The band it paints under the pointer is
-/// the same band every other diff row paints — the same height, the same full
-/// width — and its label starts at the same text origin as the changed rows'
-/// text. The occupant that would be hand-placed instead (a taller row, or a
-/// second text origin) breaks one of these two. Filed against a multi-file
-/// patch, the only shape that still has file rows.
 #[test]
 fn the_file_row_takes_its_geometry_from_the_row_shell() {
     let (_tmp, repo) = repo_two_file_commit();
@@ -1316,9 +1043,6 @@ fn the_file_row_takes_its_geometry_from_the_row_shell() {
     settle(&mut h);
 
     let (band, _) = hovered_file_row(&mut h);
-    // The staged added row is the one that wears `DIFF_ADD_BG`; the unstaged row
-    // beside it wears the muted role, and this claim is about the row shell's
-    // geometry, which is the same for both.
     let add_pos = galley_origin(&h, "BETA").expect("added line painted");
     let add_band = filled_rects(&h)
         .into_iter()
@@ -1350,8 +1074,6 @@ fn the_file_row_takes_its_geometry_from_the_row_shell() {
     );
 }
 
-/// Contract: the synthesised rename header reads as one muted band spanning the
-/// row, and its text is painted exactly once inside it.
 #[test]
 fn the_rename_header_reads_as_one_muted_band() {
     let (_tmp, repo) = repo_renamed_with_edit();
@@ -1381,8 +1103,6 @@ fn the_rename_header_reads_as_one_muted_band() {
         "one muted band, and the rename text is inside it: {bands:?}"
     );
 
-    // ...and the band is the ROW's band, not a band shrunk around the text: the
-    // same left edge, the same width, the same height as any other diff row.
     let edit_pos = galley_origin(&h, "line04 edited").expect("the edited line painted");
     let edit_band = filled_rects(&h)
         .into_iter()
@@ -1399,11 +1119,6 @@ fn the_rename_header_reads_as_one_muted_band() {
     );
 }
 
-/// Contract: the file row gained a trailing occupant, and it did not land on
-/// top of a row's own click targets. This is the failure mode the placement
-/// risks — a trailing zone hung at the wrong coordinate silently eats a
-/// changed row's click — so it is asserted against every band the rows paint.
-/// Filed against a multi-file patch, the only shape that still has file rows.
 #[test]
 fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     let (_tmp, repo) = repo_two_file_commit();
@@ -1434,16 +1149,8 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     }
 }
 
-/// The diff actions module's own source, read at compile time — the ratchet
-/// below is a claim about a function that must not exist in it.
 const DIFF_ACTIONS_SRC: &str = include_str!("../src/ui/diff/actions.rs");
 
-/// Contract: the previewed file's [`ChangeStatus`] is resolved at exactly one
-/// address. `turbogit_app::granular::preview_status` owns the rule — the app's
-/// off-frame diff read already routes through it — and the UI's frames call it
-/// rather than carrying a second copy of the same walk. A copy that quietly
-/// comes back would leave the question answered from two addresses in two
-/// crates, each free to drift, and nothing but this scan would say so.
 #[test]
 fn the_diff_surface_declares_no_change_status_resolver_of_its_own() {
     assert!(
@@ -1454,15 +1161,6 @@ fn the_diff_surface_declares_no_change_status_resolver_of_its_own() {
     );
 }
 
-// --- staged-ness: where the treatment reaches, and what it never claims -------
-
-/// Contract: the staged-ness treatment reaches **both cells** of a side-by-side
-/// row, and every cell answers for itself. A pair's two halves sit side by side and
-/// can be on opposite sides of the index (a staged modification re-edited in the
-/// worktree answers its deletion one way and its addition the other), so the left
-/// cell's band and the right cell's band come from two different answers. A pane
-/// that painted the pair as one state would draw a staged half beside an unstaged
-/// one and call them the same thing.
 #[test]
 fn side_by_side_paints_each_cells_own_staged_ness() {
     let (_tmp, repo) = repo_mixed();
@@ -1509,8 +1207,6 @@ fn side_by_side_paints_each_cells_own_staged_ness() {
         );
     }
 
-    // And the two cells of one row are two different colours, because they are two
-    // different git states sitting beside each other on one line.
     let del_band_of = |who: &str| {
         let at = galley_origin(&h, who).expect("row painted");
         filled_rects(&h)
@@ -1528,15 +1224,6 @@ fn side_by_side_paints_each_cells_own_staged_ness() {
     );
 }
 
-/// Contract: a muted row that is also hovered does not collapse into one
-/// indistinguishable state.
-///
-/// The pointer answers in the gutter's line number, stepping `INK_3` to `INK_2`,
-/// and the row's staged-ness keeps its own two colours underneath it. The app's
-/// hover fill could not carry this: `SURFACE_2` against a muted band measures
-/// 1.01:1, so an interaction fill laid over a muted row is invisible on exactly the
-/// rows that need it, and a hover that brightened the row's ink instead would make
-/// an unstaged row look staged the moment the pointer crossed it.
 #[test]
 fn hover_stays_visible_on_a_muted_row() {
     let (_tmp, repo) = repo_mixed();
@@ -1544,7 +1231,6 @@ fn hover_stays_visible_on_a_muted_row() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    // `GAMMA` is the worktree's line 8, and 8 is the number its gutter paints.
     let gutter_ink = |h: &Harness<'_, AppState>, row: Rect| {
         painted_galleys(h)
             .into_iter()
@@ -1660,17 +1346,6 @@ fn a_conflicted_file_claims_no_staged_ness_anywhere() {
     );
 }
 
-/// Contract: a row's accessibility label follows the index, and not the pixels.
-///
-/// The label is the only staged-ness channel that is not colour, so a stale one is
-/// the pane telling a screen reader something false about the index while telling a
-/// sighted user something true. This click moves the index and moves nothing the
-/// pane shows: the displayed `HEAD ↔ worktree` patch is byte-identical on both
-/// sides of it, and both halves of the clicked pair stay on screen. What moves is
-/// the oracle's answer, because every completed operation drops the root's
-/// `hunk_stats` entry, so the next frame re-resolves staged-ness against the index
-/// the click just wrote. A label that kept saying `unstaged` is invisible to every
-/// colour census in this suite, which is why it is asserted here as a word.
 #[test]
 fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
     let (_tmp, repo) = repo_mixed();
@@ -1678,8 +1353,6 @@ fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    // The bytes the pane renders, taken from git's own answer for the one
-    // comparison the read is pinned to.
     let displayed = git(&repo, &["diff", "HEAD", "--", "file.txt"]);
     let words = |h: &Harness<'_, AppState>| -> Vec<String> {
         h.query_all_by_label_contains("stag")
@@ -1720,25 +1393,17 @@ fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
         "and the quiet word is gone rather than shadowed by a second node, got {:?}",
         words(&h)
     );
-    // A stage is one ordinal, so the clicked addition's own deletion keeps the
-    // word it had: the label states the row's state and never the consequence of
-    // the click, which is the only wording that stays true when a row's click
-    // reaches a pair, a whole file, or one line.
     assert!(
         words(&h).contains(&"gamma (unstaged)".to_string()),
         "the partner row of a staged line is still its own answer, got {:?}",
         words(&h)
     );
-    // And the header word tracks the same fold: one line staged out of a hunk
-    // holding four changed rows leaves the hunk mixed, so it must still say so
-    // rather than claim `staged` for a row the index never took.
     assert_eq!(
         suffixes(&h),
         ["· part".to_string()],
         "the clicked hunk still holds both states, and its header must name that"
     );
 
-    // git, independently of the pane: the word flipped because the index moved.
     assert!(
         git(&repo, &["diff", "--cached", "--", "file.txt"]).contains("+GAMMA"),
         "the label claims the line is staged, so git must say so too"
@@ -1753,8 +1418,6 @@ fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
         assert_painted(&h, row);
     }
 
-    // The word and the paint answer from one resolution, so they cannot disagree
-    // about which row the click reached.
     let at = galley_origin(&h, "GAMMA").expect("the clicked row still paints");
     assert!(
         filled_rects(&h)

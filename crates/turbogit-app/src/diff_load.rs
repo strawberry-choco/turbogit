@@ -1,13 +1,3 @@
-//! The diff surface's off-frame loads that are *not* cached values.
-//!
-//! The patch and the pane bytes both used to be loaded from here by name
-//! (`ensure_diff`, `ensure_pane_bytes`), each with the staleness rule written
-//! out at its own call site. Both now cross the keyed read
-//! ([`crate::keyed_read`]) — the patch as a value. What stays is the sourcing an
-//! image/binary pane does for itself: the side specs a fetch reads, the decode
-//! limits that decide whether a pane shows pixels or the binary caption, and the
-//! untracked creation patch the read synthesizes instead of asking git.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::Patch;
@@ -15,15 +5,13 @@ use turbogit_engine_api::GitExecutor;
 
 use crate::events::{DecodedImage, FetchedBlob};
 
-/// A byte size at which an image stops being decoded — beyond it the pane
+/// A byte size at which an image stops being decoded, beyond it the pane
 /// falls back to the binary-change caption, which needs a length, not pixels.
 pub const IMAGE_CAP_BYTES: u64 = 20 * 1024 * 1024;
 
-/// A pixel count at which an image stops being decoded, for the same reason:
-/// the decode itself would cost more than the frame budget allows.
 pub const IMAGE_MAX_PIXELS: u64 = 80_000_000;
 
-/// Where one pane side's bytes come from — mirroring exactly how the viewer's
+/// Where one pane side's bytes come from, mirroring exactly how the viewer's
 /// diff text is requested (`PaneTarget`'s side derivation, and the CLI diff):
 ///
 /// | comparison       | old side   | new side     |
@@ -43,19 +31,14 @@ pub enum SideSpec {
     Missing,
 }
 
-/// One side of a non-text pane: the raw bytes behind it, and the repository
-/// path they belong to. Owned data because the load runs off the frame path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneSideRequest {
     pub root: PathBuf,
     pub spec: SideSpec,
-    /// Repo-relative, slash-separated — the form `git show` wants.
+    /// Repo-relative, slash-separated, the form `git show` wants.
     pub path: String,
 }
 
-/// Fetch one side's bytes (worker-thread only): engine blob for rev specs,
-/// filesystem for the worktree — metadata-only when no decode is needed,
-/// since the binary caption wants lengths, not content.
 pub(crate) fn fetch_side(
     exec: &dyn GitExecutor,
     side: &PaneSideRequest,
@@ -84,10 +67,6 @@ pub(crate) fn fetch_side(
     Some(FetchedBlob { byte_len, decoded })
 }
 
-/// Decode raw bytes into a [`DecodedImage`] when they are an in-cap image.
-/// SVG can never reach this — the extension sniff gates decoding — and a blob
-/// over [`IMAGE_CAP_BYTES`] or with more than [`IMAGE_MAX_PIXELS`] counts as
-/// undecodable so the pane falls back to the binary change.
 fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
     if bytes.len() as u64 > IMAGE_CAP_BYTES {
         return None;
@@ -104,11 +83,6 @@ fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
     })
 }
 
-/// A creation patch for an untracked file, from worktree content, as the
-/// **Git engine** answers it: the same producer the in-process diff path uses,
-/// so an untracked preview is not a second hand-written rendering of git's
-/// format. `None` falls back to engine behaviour (unreadable, binary, or empty
-/// files).
 pub(crate) fn synthetic_untracked_patch(root: &Path, rel: &Path) -> Option<Patch> {
     let (display, content) = turbogit_services::diff_engine::untracked_content(root, rel)?;
     Some(turbogit_services::diff_engine::file_patch(
@@ -138,8 +112,6 @@ mod tests {
         }
     }
 
-    /// The caps are the fallback rule: anything the decoder cannot handle
-    /// cheaply becomes the binary-change caption rather than a stalled frame.
     #[test]
     fn decoding_gates_on_size_and_pixel_count() {
         assert!(decode_image(b"not an image").is_none());
@@ -147,8 +119,6 @@ mod tests {
         assert!(decode_image(&png()).is_some());
     }
 
-    /// A rev side reads through the engine; a worktree side reads the file when
-    /// the pane wants pixels and only its length when it wants a caption.
     #[test]
     fn one_side_resolves_its_bytes_from_wherever_it_lives() {
         let png = png();
@@ -205,8 +175,6 @@ mod tests {
         );
     }
 
-    /// An untracked file is invisible to `git diff`, so its preview is
-    /// synthesized in the exact shape the partial-staging path appliates.
     #[test]
     fn an_untracked_preview_is_built_as_a_whole_file_addition() {
         let dir = tempfile::tempdir().unwrap();
@@ -222,11 +190,8 @@ mod tests {
             ),
             "patch headers are repo-relative and slash-separated: {text}"
         );
-        // One line on the new side, and git's spelling of a count of one is no
-        // count at all — the same text `git diff` would have written.
         assert!(text.contains("@@ -0,0 +1 @@\n+fn a() {}\n"), "{text}");
 
-        // Empty, binary and absent sides stay the engine's problem.
         std::fs::write(dir.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
         assert!(synthetic_untracked_patch(dir.path(), Path::new("blob.bin")).is_none());
         std::fs::write(dir.path().join("empty.md"), "").unwrap();
@@ -234,8 +199,6 @@ mod tests {
         assert!(synthetic_untracked_patch(dir.path(), Path::new("absent.md")).is_none());
     }
 
-    /// A file without a trailing newline says so, or the last row of the patch
-    /// would claim a line break that is not in the content.
     #[test]
     fn a_missing_final_newline_is_disclosed_in_the_patch() {
         let dir = tempfile::tempdir().unwrap();

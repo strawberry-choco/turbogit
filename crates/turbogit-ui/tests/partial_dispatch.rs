@@ -1,14 +1,3 @@
-//! Partial staging dispatch lane (spec R2) — headless harness tests.
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over a
-//! temporary repository with a [`RecordingExecutor`] injected at the
-//! executor boundary (after synchronous registration, per the
-//! `push_dialog.rs` pattern), asserting **what the engine was asked to do**
-//!
-//! Covers the spec's harness layer: gutter stage/unstage actions, palette
-//! `s`/`u` verbs, commit-with-partial-selection semantics, conflicted-file
-//! blocking.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,19 +11,10 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, RootId, VcsSettings};
 use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
-// ---------------------------------------------------------------- helpers --
-
 struct Repo {
     path: PathBuf,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly. The caller
-/// keeps `parent` (a `TempDir`) alive for the duration of the test.
-/// Local repo builder, deliberately NOT a `test_support::git_seed` recipe: it runs
-/// `init -q` with no `-b main` (so the default branch is whatever
-/// `init.defaultBranch` says, which every recipe pins to `main`) and commits
-/// `base.txt` not `README.md`.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -72,8 +52,6 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-/// Seed `words.txt` committed at BASE, then diverge the worktree with two
-/// single-line edits → a two-hunk working-tree diff.
 fn seed_two_hunk_change(repo: &Repo) {
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
@@ -82,8 +60,6 @@ fn seed_two_hunk_change(repo: &Repo) {
     std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
 }
 
-/// [`app_state`] with an injected recording engine — the swap happens AFTER
-/// synchronous registration, so setup reads never reach the recorder.
 fn app_state_with_recorder(
     project_dir: &Path,
     roots: &[PathBuf],
@@ -96,23 +72,11 @@ fn app_state_with_recorder(
     (state, recorder)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// Kept as [`shell_harness_over_unstyled`]: the changelist column's geometry is read
-/// off the frame, and the dark tokens plus the embedded JetBrains Mono stack would
-/// re-measure it. Measured — [`shell_harness_over`] turns **9 of 12 tests red**.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    // Sized like the commit_window suite: the changelist column needs the
-    // full two-pane width once the workspace sidebar (issue #05) claims
-    // the left edge. The first frames also relayout (embedded fonts take
-    // effect at pass 2), so settle before any clicks (test-support
-    // `settle`'s rationale).
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
 }
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn gutter_stage_button_dispatches_forward_patch_application() {
@@ -124,11 +88,9 @@ fn gutter_stage_button_dispatches_forward_patch_application() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Select the file so its diff preview renders.
     h.get_by_label("words.txt").click();
     h.run();
 
-    // Wait for the async diff load to land and the gutter controls to paint.
     assert!(
         wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
         "gutter stage control for hunk 1 should appear once the diff loads"
@@ -149,13 +111,6 @@ fn gutter_stage_button_dispatches_forward_patch_application() {
     );
 }
 
-/// Stage hunk 1 of `words.txt` (the `bravo` edit) with git itself, leaving hunk 2
-/// (`quebec`) as an unstaged worktree change.
-///
-/// The gutter `−` has nothing to reverse-apply unless something is staged, and
-/// the combined view makes that visible: the pane shows the staged row beside the
-/// unstaged one. So an unstage test needs a staged half, and this puts one there
-/// without going through the app's own stage path first.
 fn stage_first_hunk_by_hand(repo: &Repo, parent: &Path) {
     let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
     std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
@@ -191,7 +146,6 @@ fn stage_first_hunk_by_hand(repo: &Repo, parent: &Path) {
 fn gutter_unstage_button_dispatches_reverse_patch_application() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "gutter-unstage");
-    // Committed at BASE, then hunk 1 staged by hand and hunk 2 left unstaged.
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "words"]);
@@ -201,7 +155,6 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Select the file so its diff preview renders.
     h.get_by_label("words.txt").click();
     h.run();
 
@@ -211,9 +164,6 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
     );
 
     h.get_by_label("Unstage hunk 1").click();
-    // The op's completion lands over several frames: dispatch, the worker, the
-    // `OpCompleted` → refresh → settle route, and the harness only pumps them
-    // when asked.
     for _ in 0..8 {
         h.run();
     }
@@ -228,11 +178,6 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
          composed patch against the index, recorded={:?}",
         recorder.recorded()
     );
-    // Graded on git's answer, not on the dispatch: before the preview was pinned
-    // this same click reached git as a reverse apply of an `index ↔ worktree`
-    // hunk, was refused with `error: patch failed`, and left the index alone.
-    // Here the staged hunk is the only staged content, so success is an index
-    // that matches HEAD again with the worktree still diverging.
     assert!(
         wait_until(15_000, || git(&repo.path, &["diff", "--cached"]).is_empty()
             && git(&repo.path, &["status", "--porcelain"]).trim_end()
@@ -254,19 +199,10 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
     );
 }
 
-// ------------------------------------------------------- palette s/u verbs --
-
-/// A changed diff row's accessibility label, spelled the way the pane spells it:
-/// the row's text, then the state the per-line oracle answers for it. The state is
-/// what a click is *about*, and it is the only thing in the label that a click
-/// changes, so this is both the handle a test addresses a row by and the assertion
-/// that the row's own report moved.
 fn row(text: &str, staged: bool) -> String {
     format!("{text} ({})", if staged { "staged" } else { "unstaged" })
 }
 
-/// Open the palette filtered to `query` and click `label` (the
-/// `feedback_chrome.rs` pattern: reachable through search + click).
 fn run_palette_entry(h: &mut Harness<'_, AppState>, query: &str, label: &str) {
     {
         let st = h.state_mut();
@@ -289,7 +225,6 @@ fn palette_stage_verb_dispatches_forward_apply_for_current_hunk() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Select the file so its diff preview renders.
     h.get_by_label("words.txt").click();
     h.run();
     assert!(
@@ -297,7 +232,6 @@ fn palette_stage_verb_dispatches_forward_apply_for_current_hunk() {
         "diff preview should load"
     );
 
-    // Aim the current hunk at hunk 1 (0-based index 0).
     h.state_mut().ui.diff_current_hunk = 0;
     h.run();
 
@@ -325,7 +259,6 @@ fn palette_stage_verb_no_ops_without_a_previewed_file() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // No file selected for preview: the verb must be a silent no-op.
     assert!(h.state().ui.preview_change.is_none());
     run_palette_entry(&mut h, "stage hunk", "Stage Hunk");
 
@@ -362,7 +295,6 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
         "diff preview should load"
     );
 
-    // Aim the current hunk at hunk 1 (0-based index 0).
     h.state_mut().ui.diff_current_hunk = 0;
     h.run();
 
@@ -380,10 +312,6 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
     );
 }
 
-// ------------------------------------------ commit-with-partial-selection --
-
-/// The primary Commit action's main part (issue 07: the `Commit ▾` split
-/// button, labeled "Commit changes" via `WidgetInfo`).
 fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
     h.get_by_label("Commit changes")
 }
@@ -392,8 +320,6 @@ fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<
 fn commit_with_partially_staged_file_commits_index_without_restaging() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "partial-commit");
-    // Committed at BASE, worktree diverged by two edits, first hunk already
-    // staged by hand → the file sits partially staged (MM) before the app opens.
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "words"]);
@@ -430,7 +356,6 @@ fn commit_with_partially_staged_file_commits_index_without_restaging() {
         h.run();
     }
 
-    // Include the partially staged file and commit.
     h.get_by_label("words.txt").click();
     h.state_mut().ui.commit_message = "partial: index as-is".into();
     h.run();
@@ -455,13 +380,10 @@ fn commit_with_partially_staged_file_commits_index_without_restaging() {
     );
 }
 
-// --------------------------------------------------- untracked partial stage --
-
 #[test]
 fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "untracked-gutter");
-    // An untracked file whose staged subset is narrower than the whole file.
     std::fs::write(
         repo.path.join("new.txt"),
         "one\ntwo\nthree\nfour\nfive\nsix\n",
@@ -472,8 +394,6 @@ fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Untracked files are ordinary rows of the one flat list — select one for
-    // preview.
     h.get_by_label("new.txt").click();
     h.run();
 
@@ -511,12 +431,6 @@ fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
     );
 }
 
-// ---------------------------------------------------- conflicted blocking --
-
-/// Run `git` without asserting success (a merge that conflicts).
-/// Run `git` WITHOUT asserting success, and deliberately NOT
-/// `test_support::git_seed::git`, which asserts it: `seed_conflict` ends in an
-/// expected merge failure, and the unresolved state is the precondition.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -524,7 +438,6 @@ fn git_unchecked(repo: &Path, args: &[&str]) {
         .output();
 }
 
-/// Create a real merge conflict in `conf.txt` on `repo`'s default branch.
 fn seed_conflict(repo: &Repo, branch: &str) {
     git(&repo.path, &["checkout", "-q", "-b", "side"]);
     std::fs::write(repo.path.join("conf.txt"), "side\n").unwrap();
@@ -534,7 +447,7 @@ fn seed_conflict(repo: &Repo, branch: &str) {
     std::fs::write(repo.path.join("conf.txt"), "main line\n").unwrap();
     git(&repo.path, &["add", "conf.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "main commit"]);
-    git_unchecked(&repo.path, &["merge", "--no-edit", "side"]); // conflicts
+    git_unchecked(&repo.path, &["merge", "--no-edit", "side"]);
 }
 
 #[test]
@@ -550,11 +463,9 @@ fn conflicted_file_gutter_controls_are_disabled_and_never_dispatch() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Select the conflicted file from the Merge conflicts group.
     h.get_by_label("C conf.txt").click();
     h.run();
 
-    // Granular controls render (disabled) rather than disappearing…
     assert!(
         wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
         "conflicted files must still render their granular controls"
@@ -566,7 +477,6 @@ fn conflicted_file_gutter_controls_are_disabled_and_never_dispatch() {
         "gutter stage control must be disabled on a conflicted file"
     );
 
-    // …and activating one must never reach the engine.
     h.get_by_label("Stage hunk 1").click();
     h.run();
     std::thread::sleep(Duration::from_millis(300));
@@ -582,19 +492,10 @@ fn conflicted_file_gutter_controls_are_disabled_and_never_dispatch() {
     );
 }
 
-// ---------------------------------------------------- post-op diff refresh --
-
-/// Story 9's settlement is a file-list question now: a row click cannot empty the
-/// preview, because the preview reads `HEAD ↔ worktree` and staging does not change
-/// it. What "this file is finished" means is git's status for the file, which is
-/// what the flat list's buckets are keyed on. Fully staging `words.txt` therefore
-/// records its completion and advances preview focus, while the pane beside it
-/// keeps showing both hunks until the second one is clicked.
 #[test]
 fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "focus-advance");
-    // Two changed files: words.txt (two hunks) and base.txt (one change).
     seed_two_hunk_change(&repo);
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
@@ -609,9 +510,6 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
         "diff preview should load"
     );
 
-    // Stage every hunk of words.txt. After the first click the combined view
-    // neither relabels nor renumbers: hunk 2 is still "Stage hunk 2", because
-    // staging a line cannot change `git diff HEAD`.
     h.get_by_label("Stage hunk 1").click();
     h.run();
     assert!(
@@ -624,10 +522,6 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     h.get_by_label("Stage hunk 2").click();
     h.run();
 
-    // Story 9: with no unstaged changes left, words.txt is fully staged. The
-    // completion is recorded (it drives focus advancement — the flat list
-    // keeps the fully staged file visible with a ticked box), and preview
-    // focus advances to the next changed file.
     assert!(
         wait_until(15_000, || !h.state().ui.granularly_completed.is_empty()),
         "the granular completion must be recorded"
@@ -650,13 +544,10 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     );
 }
 
-// ------------------------------------------------- partial-stage indicator --
-
 #[test]
 fn a_partially_staged_file_renders_the_checkbox_middle_state() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "partial-indicator");
-    // words.txt partially staged by hand (MM); base.txt plainly modified.
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "words"]);
@@ -696,9 +587,6 @@ fn a_partially_staged_file_renders_the_checkbox_middle_state() {
 
     h.get_by_label("words.txt");
 
-    // The partially staged file's box is in its middle state and says so; the
-    // plainly modified one beside it is empty. The coarse warning dot is gone:
-    // the checkbox is where partial staging is said now.
     assert!(
         wait_until(15_000, || h
             .query_by_label("Stage all of words.txt (partially staged)")
@@ -714,9 +602,6 @@ fn a_partially_staged_file_renders_the_checkbox_middle_state() {
     );
 }
 
-/// **Partial staging is reachable from the diff viewer and lands in the index**
-/// — the path that makes the middle checkbox state reachable at all. Read back
-/// out of git, not out of the window's own state.
 #[test]
 fn staging_one_hunk_from_the_diff_viewer_makes_the_row_partially_staged() {
     let parent = tempfile::tempdir().unwrap();
@@ -750,8 +635,6 @@ fn staging_one_hunk_from_the_diff_viewer_makes_the_row_partially_staged() {
     );
 }
 
-// ----------------------------------------------------- line-level staging --
-
 #[test]
 fn per_line_clicks_stage_each_line_end_to_end() {
     let parent = tempfile::tempdir().unwrap();
@@ -769,9 +652,6 @@ fn per_line_clicks_stage_each_line_end_to_end() {
         "diff preview should load"
     );
 
-    // Click the `-bravo` deletion row: the click IS the stage, one git
-    // operation, no second control. The row is addressed by the label the pane
-    // gives a changed line: its text and the state the per-line oracle answers.
     h.get_by_label(&row("bravo", false)).click();
     h.run();
     assert!(
@@ -783,12 +663,6 @@ fn per_line_clicks_stage_each_line_end_to_end() {
         git(&repo.path, &["diff", "--cached"])
     );
 
-    // The clicked row is still on screen, and so is its pair. A pinned
-    // `index ↔ worktree` preview would have lost the staged row to the next
-    // click, because a staged line is absent from that patch; the assertion here
-    // is that the combined view is byte-stable under the action the pane offers,
-    // which is what makes an immediate click survivable at all. The round trip
-    // back out of the index is graded in `combined_preview_toggle.rs`.
     assert!(
         wait_until(15_000, || {
             h.run();
@@ -799,8 +673,6 @@ fn per_line_clicks_stage_each_line_end_to_end() {
          does: the click moved one line, not the row's own state report"
     );
 
-    // Click the `-quebec` deletion row of the other hunk: one operation per
-    // line, and both deletions are now staged while both additions are not.
     h.get_by_label(&row("quebec", false)).click();
     h.run();
     assert!(
@@ -824,23 +696,6 @@ fn per_line_clicks_stage_each_line_end_to_end() {
     );
 }
 
-/// An unstage of a hunk with nothing staged is no operation at all.
-///
-/// The defect this surface can produce, and the one the shape of the composed
-/// patch decides: a gutter `−` whose reverse apply is cut from the
-/// `index ↔ worktree` patch reaches git with a new side the index never held,
-/// because that patch's post-image is the worktree and a reverse apply matches
-/// new sides against the index. git refuses it with
-/// `error: patch failed: words.txt:1`, the pane surfaces an error toast, and the
-/// repository is untouched.
-///
-/// The preview reads `HEAD ↔ worktree` and the unstage composes from the retained
-/// `HEAD ↔ index` section, so the click is only dispatched when there is a staged
-/// line to take out. Nothing is staged on this fixture, so the honest answer is no
-/// operation at all: no engine call,
-/// no toast, no settlement armed. The half where git is actually asked and accepts
-/// is `gutter_unstage_button_dispatches_reverse_patch_application`, which stages a
-/// hunk first and grades the index afterwards.
 #[test]
 fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_untouched() {
     let parent = tempfile::tempdir().unwrap();
@@ -860,9 +715,6 @@ fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_unto
     );
 
     h.get_by_label("Unstage hunk 1").click();
-    // The op's completion lands over several frames: dispatch, the worker, the
-    // `OpCompleted` → refresh → settle route, and the harness only pumps them
-    // when asked.
     for _ in 0..8 {
         h.run();
     }
@@ -890,8 +742,6 @@ fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_unto
         "a no-op must not arm completion settlement"
     );
 
-    // And git itself untouched: nothing was staged before, nothing is staged
-    // after, and the worktree never moved.
     assert!(
         git(&repo.path, &["diff", "--cached"]).is_empty(),
         "index moved"
@@ -908,10 +758,6 @@ fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_unto
     );
 }
 
-/// The visible half of the pin, and the reason the pending set could be deleted:
-/// a row click leaves the combined view showing the whole file. Both rows of the
-/// edited line stay on screen after one of them is staged, so no row shifts,
-/// disappears or renumbers under the only action the pane offers.
 #[test]
 fn the_pinned_preview_keeps_the_staged_and_the_unstaged_row_both_visible() {
     let parent = tempfile::tempdir().unwrap();
@@ -935,20 +781,6 @@ fn the_pinned_preview_keeps_the_staged_and_the_unstaged_row_both_visible() {
         "the combined view shows the staged half and the unstaged half at once"
     );
 
-    // The pane header labels come from the target's own revisions, so the pinned
-    // read prints `HEAD` and `Working tree`; that half is the snapshot surface
-    // (`pane_labels` in `view.rs` is the code, and the side-by-side band it paints
-    // is not in this harness's default view mode).
-
-    // Toggle the STAGED row back out. The frames are pumped inside the poll,
-    // because the post-op refresh answers `Waiting` for a frame or two before the
-    // rows are painted again. Staging the *other* hunk instead would finish the
-    // file and let story 9's settlement move the preview, which is
-    // `fully_staged_file_leaves_changelist_and_focus_advances_to_next_change`.
-    //
-    // The label addresses it *because* it is staged: this row was put into the
-    // index by hand before the app started, so the pane calls it `staged` and no
-    // other row on screen carries that word.
     let before = painted_text(&h).join("\n");
     h.get_by_label(&row("BRAVO", true)).click();
     assert!(

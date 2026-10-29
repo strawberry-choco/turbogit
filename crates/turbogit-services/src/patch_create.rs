@@ -12,7 +12,7 @@
 //!
 //! Three facts hold the shape of the surface:
 //!
-//! * **Base path** decides the directory the patch's paths are read from — they are
+//! * **Base path** decides the directory the patch's paths are read from, they are
 //!   written *relative to it*, which is why moving the base up out of the repository
 //!   adds the repository's own name and moving it into a subdirectory drops that
 //!   subdirectory.
@@ -27,8 +27,8 @@
 //!   file name, so the name is a *derived* value: sanitized so that a comment can
 //!   never select a directory, escape one, or name nothing.
 //!
-//! Patch paths are **bytes** throughout. Only the base directory and the project root
-//! — typed by the developer or handed over by the OS — go through text, and they meet a
+//! Patch paths are **bytes** throughout. Only the base directory and the project root,
+//! typed by the developer or handed over by the OS, go through text, and they meet a
 //! patch path only when the base sits above or below the root.
 
 use std::path::{Component, Path, PathBuf};
@@ -40,20 +40,12 @@ use turbogit_domain::model::PatchEncoding;
 /// extension. A comment is free to be a paragraph; a name is not.
 const NAME_LIMIT: usize = 48;
 
-/// The bytes written for the patch file when a comment names nothing at all.
 const FALLBACK_NAME: &str = "patch";
 
-/// One component of a path this module assembles with. Owned bytes, because a rewritten
-/// patch path is a *new* path: it borrows from git's output, from the base the
-/// developer typed, or from both.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Part {
-    /// The only absolute form a patch path ever carries — a leading `/`.
     Root,
-    /// A parent step. Base relativization produces these, and removal never consumes
-    /// one: the directories being counted are the ones *below* the base.
     Parent,
-    /// A name.
     Name(Vec<u8>),
 }
 
@@ -63,15 +55,11 @@ impl Part {
     }
 }
 
-/// When a rewritten path is written with git's C-style quoting.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Quoting {
     /// Quote if the result needs it. A `diff --git` line is read as two tokens, so a
     /// space the rewrite introduced would merge them into one wrong path.
     AsNeeded,
-    /// Keep whatever quoting the line already had. `---`/`+++` and `rename from` carry
-    /// one path, and a consumer that read the unquoted form must not be handed a quoted
-    /// one and back.
     AsWritten,
 }
 
@@ -81,7 +69,7 @@ enum Quoting {
 /// directory, leaves git's repo-relative paths exactly as they came; a directory above
 /// the project makes every path carry the project's own name; a directory inside it
 /// strips that prefix. `strip_leading` then drops that many leading names from every
-/// path — what the dialog's bracketed count states, and what
+/// path, what the dialog's bracketed count states, and what
 /// [`removable_leading_directories`] bounds, so no press can take a path past the point
 /// where it stops naming a file.
 pub fn rewrite_paths(bytes: &[u8], root: &Path, base_path: &str, strip_leading: usize) -> Vec<u8> {
@@ -95,9 +83,6 @@ pub fn rewrite_paths(bytes: &[u8], root: &Path, base_path: &str, strip_leading: 
     out
 }
 
-/// One line of the patch, its ending newline and all: paths rewritten when it is a path
-/// header, copied verbatim when it is anything else — every content line, and every
-/// header this surface has no business touching (`index`, mode, `Binary files`, `@@`).
 fn rewrite_line(line: &[u8], base: &[Part], root: &[Part], strip: usize) -> Vec<u8> {
     let newline = line.ends_with(b"\n");
     let body = if newline {
@@ -108,8 +93,6 @@ fn rewrite_line(line: &[u8], base: &[Part], root: &[Part], strip: usize) -> Vec<
     let mut out: Vec<u8> = Vec::with_capacity(line.len());
 
     if let Some(rest) = after(body, b"diff --git ") {
-        // git names both sides of a section on its opening line; the pair is one path
-        // fact and is rewritten twice or not at all.
         let (old, new) = split_section_paths(rest);
         out.extend_from_slice(b"diff --git ");
         out.extend_from_slice(&path_field(
@@ -166,7 +149,6 @@ fn null_or(rest: &[u8], marker: &[u8], base: &[Part], root: &[Part], strip: usiz
     path_field(path, marker, base, root, strip, Quoting::AsWritten)
 }
 
-/// `rename from`/`to`, `copy from`/`to`, as the label and the rest of the line.
 fn rename_line(body: &[u8]) -> Option<(&'static str, &[u8])> {
     for (label, prefix) in [
         ("rename from ", b"rename from ".as_slice()),
@@ -181,8 +163,6 @@ fn rename_line(body: &[u8]) -> Option<(&'static str, &[u8])> {
     None
 }
 
-/// One path field as the rewritten patch writes it: git's side marker, then the path,
-/// quoted under `quoting`.
 fn path_field(
     raw: &[u8],
     marker: &[u8],
@@ -208,12 +188,8 @@ fn path_field(
     }
 }
 
-/// One patch path as this patch will write it: related to the base, then with the
-/// counted directories taken off the front.
 fn rewritten(logical: &[u8], base: &[Part], root: &[Part], strip: usize) -> Vec<u8> {
     let parts = parts_of(logical);
-    // An absolute path in a patch is already stated from nowhere; a base has no claim on
-    // it, and inventing one would move the file.
     if parts.first() == Some(&Part::Root) {
         return join(&drop_leading(&parts, strip));
     }
@@ -222,13 +198,6 @@ fn rewritten(logical: &[u8], base: &[Part], root: &[Part], strip: usize) -> Vec<
     join(&drop_leading(&relativize(base, &absolute), strip))
 }
 
-/// How many leading directories every path in this patch can lose.
-///
-/// The **minimum** over the patch's paths, because one removal is one removal on every
-/// path: a count that left `README.md` with nothing to name would not be a shorter path
-/// but a broken patch. A patch with no path header can lose nothing, which is why a
-/// surface disables the button at this bound rather than clamping a press that would
-/// mean something else.
 pub fn removable_leading_directories(bytes: &[u8]) -> usize {
     let mut least: Option<usize> = None;
     for line in bytes.split_inclusive(|b| *b == b'\n') {
@@ -248,8 +217,6 @@ pub fn removable_leading_directories(bytes: &[u8]) -> usize {
                 continue;
             }
             let names = parts_of(&path).iter().filter(|p| p.is_name()).count();
-            // A parent step is not a directory being counted, and the file's own name is
-            // the last segment and never removable.
             let depth = names.saturating_sub(1);
             least = Some(least.map_or(depth, |d| d.min(depth)));
         }
@@ -278,8 +245,6 @@ pub fn file_name(comment: &str) -> String {
             c => name.push(c),
         }
     }
-    // A separator collapsed to `_` at the end survives trimming: `fix/` and `fix` name
-    // the same patch, which is all a derived file name can mean.
     let name = name.trim_matches(|c| c == '_' || c == '.');
     let name = if name.is_empty() { FALLBACK_NAME } else { name };
     if name.ends_with(".patch") {
@@ -291,7 +256,7 @@ pub fn file_name(comment: &str) -> String {
 
 /// The patch bytes as they are written, after the `Encoding` field.
 ///
-/// `Utf8` — the default — is **no transformation at all**, which is the whole reason a
+/// `Utf8`, the default, is **no transformation at all**, which is the whole reason a
 /// patch travels as bytes: what git emitted is what lands. The other two decode first
 /// and refuse rather than guess, because a BOM over undecodable bytes claims an encoding
 /// for them, and ISO-8859-1 has no byte for a code point above its range. A refusal
@@ -326,7 +291,7 @@ pub fn encode(bytes: &[u8], encoding: PatchEncoding) -> TgResult<Vec<u8>> {
 /// The patch as clipboard text.
 ///
 /// A text clipboard holds characters, so this is the one place a created patch is
-/// decoded — and the one place a non-UTF-8 patch can legitimately stop the clipboard
+/// decoded, and the one place a non-UTF-8 patch can legitimately stop the clipboard
 /// route. Losing bytes silently to make a copy succeed would hand the developer an
 /// artifact differing from the file the same action writes.
 pub fn clipboard_text(bytes: &[u8]) -> TgResult<String> {
@@ -339,7 +304,6 @@ pub fn clipboard_text(bytes: &[u8]) -> TgResult<String> {
     })
 }
 
-/// Why a byte sequence could not be written in `encoding`.
 fn decode(bytes: &[u8], encoding: PatchEncoding) -> TgResult<&str> {
     std::str::from_utf8(bytes).map_err(|_| {
         TgError::Other(format!(
@@ -350,9 +314,6 @@ fn decode(bytes: &[u8], encoding: PatchEncoding) -> TgResult<&str> {
     })
 }
 
-/// The base directory the patch's paths are read from: the field as typed, taken
-/// relative to the project unless it is absolute. Empty is the project itself —
-/// "normally, this is your project directory".
 fn base_dir(root: &Path, base_path: &str) -> PathBuf {
     let typed = base_path.trim();
     if typed.is_empty() || typed == "." {
@@ -365,14 +326,6 @@ fn base_dir(root: &Path, base_path: &str) -> PathBuf {
     root.join(candidate)
 }
 
-/// A filesystem path as the components this module assembles with.
-///
-/// A parent step is **resolved against the name before it** rather than carried along:
-/// the base directory is typed, and `..` is the normal way of saying "the directory above
-/// the project". Leaving the step in place would relate a file to a directory that is not
-/// the one the developer named. Names are taken as lossy text, because this is the
-/// project's own location and the base the developer typed — the patch's paths never come
-/// through here.
 fn path_parts(path: &Path) -> Vec<Part> {
     let mut out = Vec::new();
     for component in path.components() {
@@ -400,7 +353,6 @@ fn path_parts(path: &Path) -> Vec<Part> {
     out
 }
 
-/// A patch path's bytes as components, with git's quoting resolved.
 fn parts_of(raw: &[u8]) -> Vec<Part> {
     let raw = unquote(raw);
     let mut out = Vec::new();
@@ -417,8 +369,6 @@ fn parts_of(raw: &[u8]) -> Vec<Part> {
     out
 }
 
-/// `to` seen from `from`, in `..` form — lexical, the rule git itself uses for a path it
-/// has never opened. Both sides are already component lists.
 fn relativize(from: &[Part], to: &[Part]) -> Vec<Part> {
     let shared = from
         .iter()
@@ -430,10 +380,6 @@ fn relativize(from: &[Part], to: &[Part]) -> Vec<Part> {
     out
 }
 
-/// The first `strip` leading names dropped, which is the removal the dialog counts.
-/// Parent steps survive — they say where the base is, not what the file is called — and
-/// the last name always survives, because a path with no name is not a shorter path but a
-/// patch that names nothing.
 fn drop_leading(parts: &[Part], strip: usize) -> Vec<Part> {
     let last_name = parts.iter().rposition(Part::is_name);
     let mut remaining = strip;
@@ -448,7 +394,6 @@ fn drop_leading(parts: &[Part], strip: usize) -> Vec<Part> {
     out
 }
 
-/// Components back into the bytes a patch line carries.
 fn join(parts: &[Part]) -> Vec<u8> {
     let mut out = Vec::new();
     for part in parts {
@@ -467,7 +412,6 @@ fn join(parts: &[Part]) -> Vec<u8> {
     out
 }
 
-/// A header line's rest after `prefix`, when the line opens with it.
 fn after<'a>(line: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
     if line.starts_with(prefix) {
         Some(&line[prefix.len()..])
@@ -489,7 +433,7 @@ fn one_path(rest: &[u8]) -> &[u8] {
 }
 
 /// Both ends of a byte slice trimmed of the spaces and tabs git pads a header line with.
-/// A patch path may *contain* a space — which is why quoting exists — but never begin or
+/// A patch path may *contain* a space, which is why quoting exists, but never begin or
 /// end with one.
 fn trim(bytes: &[u8]) -> &[u8] {
     let pad = |b: &u8| *b == b' ' || *b == b'\t';
@@ -522,7 +466,6 @@ fn split_section_paths(rest: &[u8]) -> (Vec<u8>, Vec<u8>) {
     }
 }
 
-/// A header token's bytes with git's `a/`/`b/` side marker and any quoting removed.
 fn without_side(raw: &[u8], marker: &[u8]) -> Vec<u8> {
     let bare = unquote(raw);
     if !marker.is_empty() && bare.starts_with(marker) {
@@ -532,9 +475,6 @@ fn without_side(raw: &[u8], marker: &[u8]) -> Vec<u8> {
     }
 }
 
-/// A quoted header token resolved to its bytes; anything else is already plain.
-/// The quote marker is this reader's business — which header line means what — and
-/// the escaping inside it is the grammar's.
 fn unquote(raw: &[u8]) -> Vec<u8> {
     if let Some(inner) = raw.strip_prefix(b"\"")
         && let Some(inner) = inner.strip_suffix(b"\"")

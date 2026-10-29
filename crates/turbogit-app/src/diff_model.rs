@@ -1,17 +1,3 @@
-//! The diff display model: the **Git engine**'s patch value in, renderable rows
-//! out.
-//!
-//! Plain data owned by the application layer, imported back up by the UI
-//! modules (the same DDD split that put [`crate::diff_data`]'s pane types
-//! here): nothing in this file references egui, and every layout constant and
-//! typeface stayed with the painters.
-//!
-//! It reads a [`Patch`], so git's unified-diff syntax is interpreted in exactly
-//! one place — the engine's parser — and no line of this file tests a string
-//! prefix to decide what a line is. It is built once per diff *content*, beside
-//! the patch text, and handed out as the display model the keyed read's diff
-//! answer carries (ADR-0014, ADR-0021).
-
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -21,13 +7,9 @@ use turbogit_domain::model::{
 use turbogit_services::diff_policy::{self, Chunk};
 use turbogit_services::hunk_stats::HunkSpan;
 
-// --- row model ---------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
     Meta,
-    /// Rename metadata (CONTEXT.md "Rename header"), synthesized from the
-    /// section scan: leads the content as its own full-width display row.
     RenameHeader,
     Hunk,
     Context,
@@ -35,20 +17,10 @@ pub enum RowKind {
     Add,
 }
 
-/// How one changed row is highlighted, decided by the viewer's
-/// [`DiffHighlighting`] before the model is built.
-///
-/// The three shapes are what a painter has to be able to tell apart: a band
-/// across the whole row, one band per changed run, or no band at all. A row the
-/// model does not consider a difference carries [`Highlight::Off`] and is never
-/// asked.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Highlight {
-    /// The whole row is the highlight — TurboGit's pre-existing rendering.
     Row,
-    /// Char-offset runs of the row's own text, one band each.
     Runs(Vec<Range<usize>>),
-    /// Nothing is highlighted.
     #[default]
     Off,
 }
@@ -56,31 +28,21 @@ pub enum Highlight {
 pub struct Row {
     pub kind: RowKind,
     pub text: String,
-    /// Owning hunk index — the header's own ordinal for `Hunk` rows, and
-    /// the enclosing hunk for body rows (aiming the current hunk from the
-    /// pointer, spec R2). Meta rows own no hunk.
     pub hunk: usize,
     /// 0-based ordinal over the hunk's +/- lines in order (changed rows
-    /// only) — exactly [`turbogit_services::partial::HunkSelection::Lines`]
-    /// semantics for sub-hunk selection (spec R2 story 3).
+    /// only), exactly [`turbogit_services::partial::HunkSelection::Lines`]
+    /// semantics for sub-hunk selection.
     pub line_ord: usize,
     /// 1-based old-file line number (0 when not applicable).
     pub old_no: usize,
     /// 1-based new-file line number (0 when not applicable).
     pub new_no: usize,
     /// The hunk's span, present on a `Hunk` row and nowhere else. The paint
-    /// path classifies a hunk's staged state from this, which is what retired
-    /// the second read of git's `@@` header.
+    /// path classifies a hunk's staged state from this.
     pub span: Option<HunkSpan>,
-    /// This row's highlighting under the viewer's [`DiffHighlighting`]. Only a
-    /// changed row is ever asked.
     pub highlight: Highlight,
 }
 
-/// Build the renderable rows from the patch value: 1-based gutter numbers from
-/// each hunk's span, per-hunk changed-line ordinals for sub-hunk selection
-/// (spec R2 story 3), and each hunk's span carried on the row so the paint path
-/// asks the row rather than re-reading git's header.
 fn rows_from(patch: &Patch) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut hunk = 0usize;
@@ -103,14 +65,9 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
     };
 
     for file in &patch.files {
-        // A single-file pane's own chrome names the file, so its section keeps
-        // no plumbing block; a multi-file patch's headers are what tell its
-        // sections apart, so every row stays.
         if patch.files.len() > 1 {
             meta(file.section_header_line(), &mut rows);
             for header in &file.headers {
-                // Which of these the viewer paints as section metadata is a fact
-                // about the header, not about the text it renders to.
                 let painted_as_meta = matches!(
                     header,
                     PatchHeaderLine::Index { .. }
@@ -123,9 +80,6 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
                         meta(line, &mut rows);
                         continue;
                     }
-                    // A header the row model does not name — a similarity percent, a
-                    // rename pair, a mode change — reaches the viewer as an ordinary
-                    // line, advancing both gutters like the context it sits among.
                     rows.push(Row {
                         kind: RowKind::Context,
                         text: line,
@@ -201,40 +155,20 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
             }
         }
     }
-    // Raw paging ordinals are assigned by [`build_model`] over the
-    // header-prefixed space (ADR-0014, spec R8).
     rows
 }
 
-// --- per-file section metadata (R8) ------------------------------------------
-
-/// Metadata for one `diff --git` file section (spec R8): paths, rename
-/// detection, file-mode changes, and binary-ness — derived purely from the
-/// patch text, never the engine. Rename detection rides on git's own
-/// defaults, so rename/similarity headers may be absent; absence is handled
-/// gracefully.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileMeta {
-    /// Path before the change, from the `diff --git a/… b/…` line.
     pub old_path: Option<String>,
-    /// Path after the change, from the same line.
     pub new_path: Option<String>,
-    /// `similarity index N%` when git emitted a rename estimate.
     pub similarity: Option<u32>,
-    /// `rename from`/`rename to` headers were present.
     pub renamed: bool,
-    /// `new file mode` header was present.
     pub new_file: bool,
-    /// `deleted file mode` header was present.
     pub deleted_file: bool,
-    /// The section body carries `Binary files … differ` (no textual hunks).
     pub binary: bool,
 }
 
-/// Per-file section metadata, read off the patch value — paths, rename
-/// detection, file-mode changes and binary-ness are fields the engine answered,
-/// not a scan of git's syntax. Rename detection rides on git's own defaults, so
-/// rename/similarity headers may be absent; absence is handled gracefully.
 pub(crate) fn files_from(patch: &Patch) -> Vec<FileMeta> {
     patch
         .files
@@ -251,9 +185,6 @@ pub(crate) fn files_from(patch: &Patch) -> Vec<FileMeta> {
         .collect()
 }
 
-/// Formatted rename-header line (CONTEXT.md "Rename header") for a file
-/// section carrying rename metadata; `None` otherwise. The similarity
-/// percentage is omitted when git emitted none.
 fn rename_header_text(meta: &FileMeta) -> Option<String> {
     if !meta.renamed {
         return None;
@@ -265,11 +196,6 @@ fn rename_header_text(meta: &FileMeta) -> Option<String> {
     })
 }
 
-// --- non-text panes (R8, ADR-0015) -------------------------------------------
-
-/// Which pane renders the open diff: text rows, an image pair, or the
-/// binary-change placeholder. Only single-file sections leave the row
-/// model; multi-file texts keep their inline rendering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaneKind {
     Text,
@@ -278,11 +204,10 @@ pub enum PaneKind {
 }
 
 /// Extensions decoded as images (CONTEXT.md "Image diff"). SVG is
-/// deliberately absent — never decoded (ADR-0015); an SVG change renders
+/// deliberately absent, never decoded (ADR-0015); an SVG change renders
 /// as whatever the patch says (text rows or binary placeholder).
 const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
-/// Extension sniff (case-insensitive) deciding whether a side decodes.
 fn is_image_path(path: &str) -> bool {
     let ext = std::path::Path::new(path)
         .extension()
@@ -291,9 +216,6 @@ fn is_image_path(path: &str) -> bool {
     ext.is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.as_str()))
 }
 
-/// Pane kind of the open diff: an image pair when the single section's
-/// paths both sniff as images, else a lone binary change, else the normal
-/// text rows.
 pub fn pane_kind(files: &[FileMeta]) -> PaneKind {
     let [f] = files else {
         return PaneKind::Text;
@@ -309,45 +231,23 @@ pub fn pane_kind(files: &[FileMeta]) -> PaneKind {
     }
 }
 
-// --- display-row model (ADR-0014) --------------------------------------------
-
-/// One virtualized display row: the unit `ScrollArea::show_rows` pages
-/// over. Side-by-side mode renders each element as one row band;
-/// unified mode ignores pairing and flattens every contained row back into
-/// its own band — both modes read from this one cached vector.
 pub enum DisplayRow {
-    /// Full-width row: meta, hunk header, or context.
     Full(Row),
-    /// A side-by-side pair sharing one row band: one Del and/or one
-    /// Add (`None` fills the missing half with an empty cell).
     Pair(Option<Row>, Option<Row>),
 }
 
-/// Everything rendering needs from one diff, built with the patch text it
-/// came from (ADR-0014, ADR-0021): the display-row vector the per-frame paint
-/// plan filters into slot streams (issue 20), and the per-file section
-/// metadata R8 renders from.
 pub struct DiffModel {
     pub display: Vec<DisplayRow>,
-    /// Hunk ordinal → first display index of its header row.
     pub hunk_first_display: Vec<u32>,
-    /// Per-file section metadata (spec R8), scanned once beside the rows.
     pub files: Vec<FileMeta>,
-    /// Formatted rename header (CONTEXT.md "Rename header") of the first
-    /// renamed section, when any — rendered as the leading display row.
     pub rename_header: Option<String>,
 }
 
 impl DiffModel {
-    /// Number of parsed hunks.
     pub fn hunk_count(&self) -> usize {
         self.hunk_first_display.len()
     }
 
-    /// Whether the open diff is a pure rename: a detected rename with 100%
-    /// similarity, no content hunks, and no file-mode creation/deletion —
-    /// the header plus a "no content changes" note stands in for the empty
-    /// scroller (spec R8).
     pub fn pure_rename(&self) -> bool {
         self.hunk_count() == 0
             && self.files.first().is_some_and(|f| {
@@ -356,10 +256,9 @@ impl DiffModel {
     }
 }
 
-/// (added, removed) changed-line counts of the display model — the diff
-/// preview header's `+N −M` change-size stats (design doc §5). Changed rows
-/// always live in pairs (build_model invariant), but full-width Add/Del rows
-/// are counted too for robustness.
+/// (added, removed) changed-line counts of the display model, the diff
+/// preview header's `+N −M` change-size stats. Changed rows always live in
+/// pairs, but full-width Add/Del rows are counted too for robustness.
 pub fn line_counts(model: &DiffModel) -> (usize, usize) {
     let mut added = 0usize;
     let mut removed = 0usize;
@@ -383,12 +282,6 @@ pub fn line_counts(model: &DiffModel) -> (usize, usize) {
     (added, removed)
 }
 
-/// The two halves of one changed pair's highlighting, under `hl`.
-///
-/// The run list [`diff_policy::highlight_runs`] answers with is named on its
-/// **second** argument's text, so the two sides are asked in opposite order —
-/// which compiles identically either way and silently swaps the highlights onto
-/// the wrong pane.
 fn pair_highlight(hl: DiffHighlighting, old: &str, new: &str) -> (Highlight, Highlight) {
     match hl {
         DiffHighlighting::None => (Highlight::Off, Highlight::Off),
@@ -402,13 +295,6 @@ fn pair_highlight(hl: DiffHighlighting, old: &str, new: &str) -> (Highlight, Hig
     }
 }
 
-/// A changed run the whitespace policy considers equal, as the rows it leaves:
-/// the new side's lines, standing as ordinary unchanged content.
-///
-/// A row the viewer does not consider a difference owns no changed-line ordinal
-/// and takes no highlight — which is what keeps it out of the sub-hunk selection
-/// the granular verbs compose, since a line the user was told to ignore cannot be
-/// the line they meant to stage.
 fn equalized_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
     let shared_old = dels.len() == adds.len();
     adds.into_iter()
@@ -429,7 +315,6 @@ fn equalized_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
         .collect()
 }
 
-/// Pair a run that survived the whitespace policy, by the highlighting policy.
 fn pair_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<DisplayRow> {
     if hl == DiffHighlighting::SplitChanges {
         split_run(dels, adds)
@@ -438,9 +323,6 @@ fn pair_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<Display
     }
 }
 
-/// The run partitioned into the smaller changes it is made of: a line that
-/// appears on both sides is carried through and belongs to no change, and every
-/// remaining block is highlighted one line at a time.
 fn split_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
     let mut slots_d: Vec<Option<Row>> = dels.into_iter().map(Some).collect();
     let mut slots_a: Vec<Option<Row>> = adds.into_iter().map(Some).collect();
@@ -452,8 +334,6 @@ fn split_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
         .iter()
         .map(|s| s.as_ref().map_or("", |r| r.text.as_str()))
         .collect();
-    // The partition answers with run-relative indices only, so the borrow of the
-    // slots ends here and the walk below can take rows out of them.
     let chunks = diff_policy::split_changes(&del_texts, &add_texts);
     let mut out = Vec::new();
     for chunk in chunks {
@@ -483,14 +363,10 @@ fn split_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
             }
         }
     }
-    // Every line of the run is covered by exactly one op, so both slot lists are
-    // empty here; a leftover would be a bug in the partition, not a case to paint.
     debug_assert!(slots_d.iter().all(Option::is_none) && slots_a.iter().all(Option::is_none));
     out
 }
 
-/// One change across the whole run: the two sides paired line for line, each row
-/// carrying the highlighting its own side earned.
 fn positional_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<DisplayRow> {
     let pairs = dels.len().max(adds.len());
     let mut dels = dels.into_iter();
@@ -515,14 +391,6 @@ fn positional_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<D
         .collect()
 }
 
-/// Fold a buffered run of consecutive Del/Add rows into display rows.
-///
-/// **The order of the two policies is load-bearing** and compiles either way:
-/// the whitespace policy decides whether the run is a difference at all, and only
-/// a run that survives is cut up by the highlighting policy. Read the other way
-/// and a change the viewer was told to ignore still gets its lines partitioned
-/// into carried and changed rows — a difference that shows as nothing while
-/// still moving rows around.
 fn flush_changed_run(
     pending: &mut Vec<Row>,
     display: &mut Vec<DisplayRow>,
@@ -549,22 +417,10 @@ fn flush_changed_run(
     display.extend(pair_run(dels, adds, policies.highlighting));
 }
 
-/// Fold parsed rows plus the per-file section scan (spec R8) into the
-/// display-row model (ADR-0014): consecutive Del/Add runs collapse into
-/// paired display rows while meta/hunk/context stay full-width, and a
-/// rename header — when the scan found one — leads as its own full-width
-/// row. The per-frame paint plan (issue 20) filters this stream into the
-/// paged slot lists.
-///
-/// The viewer's policies are applied here and nowhere else: they are a property
-/// of the model, built once per content *and policy*, so no frame re-parses and
-/// no policy decision reaches the patch text the staging path composes from.
 fn build_model(rows: Vec<Row>, files: Vec<FileMeta>, policies: DiffPolicies) -> DiffModel {
     let mut display = Vec::new();
     let mut hunk_first_display = Vec::new();
 
-    // The rename header (CONTEXT.md) leads the content as its own display
-    // row, before every hunk (spec R8).
     let rename_header = files.iter().find_map(rename_header_text);
     if let Some(text) = &rename_header {
         display.push(DisplayRow::Full(Row {
@@ -604,8 +460,8 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>, policies: DiffPolicies) -> 
 }
 
 /// The diff read's value: one comparison's patch and the display model built
-/// from it, behind one handle. Cloning the handle is a refcount bump — once per
-/// frame, never per row — which is what leaves `&mut AppState` free for a
+/// from it, behind one handle. Cloning the handle is a refcount bump, once per
+/// frame, never per row, which is what leaves `&mut AppState` free for a
 /// painter to write the hunk cursor and collapse set (ADR-0021).
 pub struct DiffValue {
     pub patch: Patch,
@@ -613,10 +469,6 @@ pub struct DiffValue {
 }
 
 impl DiffValue {
-    /// Fold the patch value once, at the moment the content is settled — which
-    /// is the whole point of the read owning it: the paint path never parses,
-    /// and nothing compares patch text to decide (`ADR-0022`).
-    ///
     /// `policies` folds into the same pass. The patch stays the patch: what the
     /// policies change is which rows the viewer counts as different and how each
     /// difference is highlighted, never the bytes partial staging composes from.
@@ -627,8 +479,6 @@ impl DiffValue {
         })
     }
 
-    /// A cached entry with no visible rows is a settled answer of "nothing to
-    /// show", not a missing one (spec R2).
     pub fn is_blank(&self) -> bool {
         self.patch.is_empty()
     }
@@ -638,8 +488,6 @@ impl DiffValue {
 mod tests {
     use super::*;
 
-    /// The two readers under test, reached the only way they are reachable now:
-    /// through the engine's one patch parser.
     fn patch(text: &str) -> Patch {
         turbogit_engine_api::patch::parse_patch(text)
     }
@@ -652,7 +500,6 @@ mod tests {
         files_from(&patch(text))
     }
 
-    /// Rename with content edits: headers plus one hunk (spec R8).
     const RENAME_WITH_SIMILARITY: &str = "diff --git a/src/old.rs b/src/new.rs\n\
          similarity index 92%\n\
          rename from src/old.rs\n\
@@ -679,8 +526,6 @@ mod tests {
 
     #[test]
     fn diff_rename_header_omits_missing_similarity() {
-        // Rename detection rides on git defaults; a patch may carry the
-        // rename pair without a similarity estimate.
         let text = "diff --git a/x.txt b/y.txt\n\
                     rename from x.txt\n\
                     rename to y.txt\n";
@@ -704,7 +549,6 @@ mod tests {
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
-        // The synthesized rename header is the section's only row.
         assert_eq!(model.display.len(), 1);
         let DisplayRow::Full(row) = &model.display[0] else {
             panic!("rename header must be a full-width row");
@@ -718,7 +562,6 @@ mod tests {
         let binary = "diff --git a/logo.png b/logo.png\n\
                       index 1111111..2222222 100644\n\
                       Binary files a/logo.png and b/logo.png differ\n";
-        // A .png section is an image pair by sniff, not a bare binary pane.
         assert_eq!(pane_kind(&scan_files(binary)), PaneKind::Image);
 
         let bin_txt = "diff --git a/data.bin b/data.bin\n\
@@ -726,8 +569,6 @@ mod tests {
                        Binary files a/data.bin and b/data.bin differ\n";
         assert_eq!(pane_kind(&scan_files(bin_txt)), PaneKind::Binary);
 
-        // A binary section among text sections stays inline: the full-pane
-        // replacement is only for the single-file case (ADR-0015).
         let mixed = format!("{bin_txt}diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-a\n+b\n");
         let files = scan_files(&mixed);
         assert_eq!(files.len(), 2);
@@ -744,13 +585,9 @@ mod tests {
             DiffPolicies::default(),
         );
         assert_eq!(model.hunk_count(), 1);
-        // The synthesized rename header leads as display row 0, so the hunk
-        // header follows directly: the slot hunk navigation aims at (issue 20).
         assert_eq!(model.hunk_first_display[0], 1);
     }
 
-    /// A single-file section keeps none of git's header block, in any spelling
-    /// it takes, and its hunk bodies keep their span-derived gutter numbers.
     #[test]
     fn diff_single_file_sections_drop_their_plumbing_rows() {
         let text = "diff --git a/added.txt b/added.txt\n\
@@ -775,7 +612,6 @@ mod tests {
             "git's header block is gone in every spelling: {:?}",
             rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>()
         );
-        // The new-side gutter numbers still derive from the hunk span.
         let body: Vec<(RowKind, usize, usize)> = rows
             .iter()
             .filter(|r| r.text == "one" || r.text == "two")
@@ -821,8 +657,6 @@ mod tests {
 
     #[test]
     fn diff_sections_split_per_file_with_mode_flags() {
-        // Lines before the first `diff --git` (e.g. `git log -p` commit
-        // headers) belong to no section.
         let text = "commit header noise\n\
                     diff --git a/added.bin b/added.bin\n\
                     new file mode 100644\n\
@@ -835,11 +669,6 @@ mod tests {
         assert_eq!(files[1].old_path.as_deref(), Some("gone.txt"));
     }
 
-    /// The pair arrives as two repo-relative names. Four readers
-    /// used to split that pair out of the header themselves, and only one of
-    /// them handled git's quoted form — which is why a name git quotes (a tab,
-    /// a byte above ASCII) is the case to pin here rather than a name with a
-    /// plain space, which git does not quote at all.
     #[test]
     fn diff_git_paths_arrive_resolved_from_the_value() {
         let paths = |text: &str| {
@@ -873,17 +702,12 @@ mod tests {
             new_path: Some(new.to_owned()),
             ..FileMeta::default()
         };
-        // Case-insensitive sniff on both sides.
         assert_eq!(pane_kind(&[meta("x.PNG", "x.png")]), PaneKind::Image);
-        // SVG never decodes: a binary-flagged SVG change stays binary…
         let mut svg_bin = meta("logo.svg", "logo.svg");
         svg_bin.binary = true;
         assert_eq!(pane_kind(&[svg_bin]), PaneKind::Binary);
-        // …and a textual SVG diff keeps its text rows.
         assert_eq!(pane_kind(&[meta("logo.svg", "logo.svg")]), PaneKind::Text);
-        // A non-image text change stays text.
         assert_eq!(pane_kind(&[meta("x.rs", "x.rs")]), PaneKind::Text);
-        // No section metadata at all → text rows.
         assert_eq!(pane_kind(&[]), PaneKind::Text);
     }
 }

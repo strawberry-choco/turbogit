@@ -1,12 +1,3 @@
-//! Cherry-pick across repositories (issue 16, screen 05): a modal dialog
-//! over several repos at once. Left: the source repo's commits as a
-//! searchable checkbox list in application order. Right: a patch preview
-//! rail for the focused commit with per-file navigation. Below: the targets
-//! table with the per-repo APPLIES / RISK / OUTCOME prediction. A "Stop on
-//! first conflict" policy toggle and an Execute button dispatch through
-//! [`turbogit_app::state::AppState::run_cherry_across`]; the run reports
-//! through the cherry monitor in [`super::bulk_monitor`].
-
 use egui::{Align, Color32, FontFamily, FontId, Layout, ScrollArea, Ui};
 
 use turbogit_app::cherry_across::{PickForecast, TargetForecast, TargetRisk};
@@ -17,7 +8,6 @@ use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::widgets;
 
-/// Render the dialog while `ui.dialog` is `Dialog::CherryPickAcross`.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
@@ -31,9 +21,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn body(ui: &mut Ui, state: &mut AppState) {
-    // Snapshot the frame's read-only inputs up front so the handlers can
-    // take `&mut AppState` freely (the log window's deferred-action
-    // pattern; clicks inside a frame land on the next one).
     let source = state.ui.dlg.cherry_source.clone();
     let candidates = state.ui.dlg.cherry_candidates.clone();
     let selected: Vec<String> = state.ui.dlg.cherry_commits.clone();
@@ -70,8 +57,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Commits checklist (left) + patch preview rail (right). Sequential
-    // `&mut state` hand-offs: the panes never borrow it across frames.
     ui.columns(2, |columns| {
         commits_pane(&mut columns[0], state, &candidates, &selected);
         preview_pane(&mut columns[1], state);
@@ -84,7 +69,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(8.0);
     ui.separator();
 
-    // Policy + actions.
     ui.horizontal(|ui| {
         ui.checkbox(
             &mut state.ui.dlg.cherry_stop_on_conflict,
@@ -106,8 +90,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-// --------------------------------------------------------------- commits ---
-
 fn commits_pane(ui: &mut Ui, state: &mut AppState, candidates: &[Commit], selected: &[String]) {
     widgets::group_title(ui, "COMMITS");
     widgets::search_input(
@@ -122,11 +104,9 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState, candidates: &[Commit], select
         .show(ui, |ui| {
             for commit in candidates {
                 let matches = query.is_empty()
-                || widgets::filter_matches(&commit.message, &query)
-                || widgets::filter_matches(&commit.author.name, &query)
-                // A hash, matched as a PREFIX — a search box that accepted the
-                // middle of a sha is a search box nobody can use.
-                || commit.id.starts_with(&query);
+                    || widgets::filter_matches(&commit.message, &query)
+                    || widgets::filter_matches(&commit.author.name, &query)
+                    || commit.id.starts_with(&query);
                 if !matches {
                     continue;
                 }
@@ -139,19 +119,12 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState, candidates: &[Commit], select
         });
 }
 
-// --------------------------------------------------------------- preview ---
-
-/// One `diff --git` section of a patch: the new path, its hunk count, and the
-/// lines to paint — already classified, because the patch reached this surface
-/// as a value rather than as text to re-read (deepen-git-engine issue 11, which
-/// the ticket offers to 10 or 11 and assigns here).
 struct PreviewFile {
     path: String,
     hunks: usize,
     lines: Vec<PreviewLine>,
 }
 
-/// One preview line and the role git's prefix character used to carry.
 struct PreviewLine {
     text: String,
     role: PreviewRole,
@@ -159,9 +132,7 @@ struct PreviewLine {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PreviewRole {
-    /// Section and file-header lines: `diff --git`, `index`, `@@`, modes.
     Metadata,
-    /// The `---`/`+++` pair, dimmer than other metadata by long habit.
     Source,
     Added,
     Removed,
@@ -174,8 +145,6 @@ fn preview_file(file: &PatchFile) -> PreviewFile {
         role: PreviewRole::Metadata,
     }];
     for header in &file.headers {
-        // Which git line a header renders to is the value's; which ink it gets
-        // is a fact about the header, read off the variant.
         let role = if matches!(header, PatchHeaderLine::Sources { .. }) {
             PreviewRole::Source
         } else {
@@ -238,7 +207,6 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         ui.label("The commit touches no files.");
         return;
     }
-    // File navigation: clamp the stored index, step with the buttons.
     let idx = state.ui.dlg.cherry_preview_file.min(files.len() - 1);
     ui.horizontal(|ui| {
         if ui.add_enabled(idx > 0, egui::Button::new("‹")).clicked() {
@@ -277,8 +245,6 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
                 let color = match line.role {
                     PreviewRole::Source => Palette::INK_3,
                     PreviewRole::Added => Palette::STATE_SUCCESS,
-                    // A removal of an empty line stays dim: the same rendering the
-                    // prefix classifier produced, kept deliberately.
                     PreviewRole::Removed if line.text == "-" => Palette::INK_3,
                     PreviewRole::Removed => Palette::STATE_ERROR,
                     PreviewRole::Metadata | PreviewRole::Context => Palette::INK_2,
@@ -293,16 +259,12 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         });
 }
 
-// --------------------------------------------------------------- targets ---
-
 fn targets_table(
     ui: &mut Ui,
     state: &mut AppState,
     rows: &[(turbogit_domain::model::RootId, String, bool)],
     forecast: &Option<Vec<TargetForecast>>,
 ) {
-    // `chrome_font` is not a `const fn`, so the token goes in as the size
-    // argument rather than through the helper.
     const HEADER: FontId = FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional);
     let header = |ui: &mut Ui, text: &str| {
         ui.label(egui::RichText::new(text).font(HEADER).color(Palette::INK_3));
@@ -371,9 +333,6 @@ fn risk_color(t: &TargetForecast) -> Color32 {
     }
 }
 
-/// The prediction's display-ready outcome, following the spec's examples:
-/// "clean apply", "1 hunk overlaps — will stop for manual resolve",
-/// "skipped — already present in history", "skipped — working tree is dirty".
 fn outcome_text(t: &TargetForecast) -> String {
     if let Some(blocked) = &t.blocked {
         return format!("skipped — {blocked}");

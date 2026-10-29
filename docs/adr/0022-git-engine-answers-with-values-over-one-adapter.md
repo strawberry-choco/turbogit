@@ -6,7 +6,7 @@ shrank from three options to two is gone, and the composed adapter is the one
 engine.
 
 `ADR-0001` set the seam in the right place and described it wrongly. This record
-replaces its description — and the direction that follows from the description
+replaces its description, and the direction that follows from the description
 being wrong. The interface itself stays where 0001 put it: one trait, no
 façade, services and UI dependent on the port only.
 
@@ -22,7 +22,7 @@ Numbers are a snapshot; the conclusions below are the durable part.
   the Settings row's middle and third options selected nothing between them.
 - **The composed adapter is a delegation wrapper, not an in-process engine.** It
   implements 66 of the port's methods and delegates **41** of them to
-  `self.cli` — measured after ticket `00`; the review that opened this branch
+  `self.cli`, measured after ticket `00`; the review that opened this branch
   counted 39 of 68, and both totals have since moved.
 - **The fake answers 5 of the port's 22 typed reads**, stubs 13 with a constant,
   and leaves 4 to the port's "engines that cannot answer" default. It records 9
@@ -44,10 +44,10 @@ Tickets `00` through `12` moved the figures again, and the measurements above ar
 the 2026-09-23 snapshot they were written from. The port stood at **75 methods**
 there, not as a standing count:
 69 at the branch's start, 67 after `00` deleted the two dead ones, and eight
-raised reads since — the eight enumerated below. That is one fewer than the 76
+raised reads since, the eight enumerated below. That is one fewer than the 76
 this record first reported, because the `add_all` staging read has since been
-deleted. Of the nine raw sites, `00` raised one — the signing-key
-`git config --get`, which the port already answered — `06` raised the numstat
+deleted. Of the nine raw sites, `00` raised one, the signing-key
+`git config --get`, which the port already answered, `06` raised the numstat
 compare, and `07` raised six more: the app layer's two (`rev-list --count` behind
 a delete confirmation, `rev-parse` for its undo sha) and services' four
 reference-transaction calls behind the rebase backup. What remains is the one this
@@ -61,7 +61,7 @@ Raise the **Git engine**'s interface from git's text dialects to domain values,
 and retire the adapters that exist only because it was low.
 
 1. **Move the seam up, from git's text to the domain.** The engine answers with a
-   push plan, conflict versions, change stats, a patch value — not stdout for
+   push plan, conflict versions, change stats, a patch value, not stdout for
    services to substring. A caller should not be able to write a revspec string,
    an index stage rev, or a `@@` regex against this interface.
 2. **Retire the nominal second adapter rather than make it real.** One honest CLI
@@ -77,7 +77,7 @@ and retire the adapters that exist only because it was low.
 ## Rules this record settles
 
 **A single caller is a smell only about shape, not count.** One method, one
-call site is unremarkable when the method is an already-typed domain read —
+call site is unremarkable when the method is an already-typed domain read.
 `blame`, `worktree_dirty`. It is a smell when the method's shape is git's: argv
 in, a text format out. Under that rule the survivors stay and the text-shaped
 ones get raised; none gets deleted, because deleting a read pushes its parsing
@@ -85,7 +85,7 @@ up into a caller, which is the opposite of this decision.
 
 **A read a fixture can answer is a value the substitutable adapter supplies; a
 mutation whose only real test is git keeps a git-backed suite.** A recorded call
-is not evidence that git moved. Rejected: an in-memory git — a project, not a
+is not evidence that git moved. Rejected: an in-memory git, a project, not a
 ticket.
 
 **One raw escape is designed, the rest are accidents.** Exactly one thing runs
@@ -115,17 +115,17 @@ named test in `tests/patch_value.rs`:
 | Convention | Where the fact lives |
 |---|---|
 | git's C-style quoted path (`"a/we\tx"`) | resolved once by the reader; `old_path`/`new_path` and the source pair hold plain names, and quoting is re-derived on write |
-| `\ No newline at end of file` | `PatchLine::no_newline`, a property of the line it follows — never a line of the patch |
+| `\ No newline at end of file` | `PatchLine::no_newline`, a property of the line it follows, never a line of the patch |
 | mode-only change | `PatchFile::mode_only()`, distinct from "no hunks", which is also what a rename and a **Binary change** look like |
-| rename without a content change | a section with `RenameFrom`/`RenameTo` and no hunks — a whole answer, not an absence |
+| rename without a content change | a section with `RenameFrom`/`RenameTo` and no hunks, a whole answer, not an absence |
 
 The corpus assertion is byte-exact: for every shape, `parse(text).to_string()`
 *is* the text it was read from, including real `git diff` output over a fixture
 repository with an edit, a rename of a path containing a space, a binary change
 and a mode change. The value is not lossy in the direction that matters.
 
-**One convention is normalized rather than represented.** A combined section —
-git's `diff --cc` view of an unmerged path — carries one range per parent on its
+**One convention is normalized rather than represented.** A combined section,
+git's `diff --cc` view of an unmerged path, carries one range per parent on its
 `@@@` headers. The value has two sides, so it keeps the first parent's range and
 the new side's, and says it was combined (`PatchFile::combined`), which renders
 as an ordinary `@@` header. The pane's hunk label for a conflicted file therefore
@@ -143,12 +143,12 @@ is a list of ranges on the hunk, not a second format.
   touch the trait and adapters only. That was true of the *count* of files and
   false of the *cost*: an addition crossed four implementations, which is the
   opposite of the locality that justified deleting `VcsManager`. After move 4 the
-  claim holds in fact — the port plus two adapters.
+  claim holds in fact, the port plus two adapters.
 - The **Git engine** glossary entry stops asserting a policy no code implements.
   Production does not run an `Auto` backend that answers from libgit2 and
   delegates for the rest; it runs one composed adapter that is mostly CLI.
-- `ADR-0013`'s contract — that **Granular op** composes its patches from cached
-  raw text — is amended by this decision: patches will be composed from the spans
+- `ADR-0013`'s contract, that **Granular op** composes its patches from cached
+  raw text, is amended by this decision: patches will be composed from the spans
   of a patch value. What 0013 was protecting, that a staged selection is appliable
   because it was built from text git would accept, must be restated in terms of
   the value when that ticket lands. `ADR-0014`'s cached **Display row** model

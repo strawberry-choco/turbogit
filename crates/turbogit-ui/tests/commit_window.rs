@@ -1,18 +1,3 @@
-//! Issue #11 — Commit tool window redesign tests.
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories seeded with modified / added / unversioned /
-//! conflicted files, asserting painted labels (canonical groups, count
-//! badges, M/A/C file-row badges) and public `AppState` transitions only.
-//!
-//! Issue #18 extends this suite to the Commit window's sub-tab strip:
-//! Shelf / Stash are real Shelf and Stash panes (they superseded ADR-0008's placeholders), and
-//! the "Advanced options..."
-//! control is visible but inert (ADR-0010).
-//!
-//! Painted-text assertions come from `tests/common`; harness helpers beyond
-//! those remain local to this file (per issue spec: do not edit
-//! `tests/shell_frame.rs`).
 use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
@@ -30,11 +15,6 @@ use turbogit_domain::model::{ChangeRef, RootId};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::widgets::{CHIP_HEIGHT, PANE_HEADER_HEIGHT};
 
-/// Run `git` without asserting success (for commands that may legitimately
-/// fail, e.g. a merge that conflicts).
-///
-/// Deliberately NOT `git_seed::git`, which asserts: this exists for the command
-/// whose failure IS the fixture (`seed_conflict`'s `git merge --no-edit side`).
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -46,14 +26,6 @@ struct Repo {
     path: PathBuf,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly. The caller
-/// keeps `parent` (a `TempDir`) alive for the duration of the test.
-///
-/// Kept local, NOT `git_seed::repo_with_one_commit`: the seeded file's NAME is
-/// load-bearing (`seed_changes` rewrites `base.txt` as a modification, and half
-/// the suite asserts on the `M` badge), and the unqualified `git init -q` leaves
-/// the default branch as the machine's, which `Repo::branch` reads back.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -86,8 +58,6 @@ impl Repo {
     }
 }
 
-/// Seed one change of each tracked kind: modified (`M`), staged added (`A`)
-/// and unversioned (`?`).
 fn seed_changes(repo: &Path) {
     std::fs::write(repo.join("base.txt"), "modified content\n").unwrap();
     std::fs::write(repo.join("added.txt"), "new tracked file\n").unwrap();
@@ -95,7 +65,6 @@ fn seed_changes(repo: &Path) {
     std::fs::write(repo.join("untracked.txt"), "untracked\n").unwrap();
 }
 
-/// Create a real merge conflict in `conf.txt` on `repo`'s default branch.
 fn seed_conflict(repo: &Path, branch: &str) {
     git(repo, &["checkout", "-q", "-b", "side"]);
     std::fs::write(repo.join("conf.txt"), "side\n").unwrap();
@@ -108,9 +77,6 @@ fn seed_conflict(repo: &Path, branch: &str) {
     git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected to conflict
 }
 
-/// Headless harness over the given repository roots (see CONTEXT.md).
-/// The previewed change of these single-root fixtures: the row's repo-relative
-/// path, tied to the one repository the fixture registered.
 fn change(repo: &Path, rel: &str) -> ChangeRef {
     ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
 }
@@ -124,53 +90,20 @@ fn app_state(roots: &[PathBuf]) -> AppState {
     AppState::for_roots(&dir, roots)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-/// `max_steps` is raised well above the default because the async diff
-/// preview legitimately spins (repainting) while `git diff` runs on a
-/// worker thread.
-///
-/// ## This harness does **not** configure the app's style — read this before
-/// trusting it for anything egui-native
-///
-/// [`turbogit_ui::theme::configure_style`] is called in `src/app.rs` and **nowhere
-/// else**, so this harness — like most of the suites that drive
-/// `turbogit_ui::ui::render` directly — renders egui's *own* widgets with egui's
-/// stock dark visuals rather than with the app's tokens and spacing. The custom
-/// vocabulary is unaffected, because every shared widget paints from
-/// `Palette::*` itself; what differs is everything that leans on `egui::style()`:
-/// a bare `ui.button`, a `TextEdit`, a combo box, a scrollbar, a menu frame, and
-/// the **metrics** — `item_spacing`, `button_padding`, `window_margin`,
-/// `text_styles`. Ticket 11 observed this while reconciling the header geometry
-/// and reported it rather than fixing it.
-///
-/// The harness is deliberately the **unstyled** one: no `configure_style`, no
-/// `install_fonts`. Calling `configure_style` here would shift `item_spacing` and
-/// `button_padding` for the ~40 tests in this file, and every assertion below
-/// about a `ui.button`, `TextEdit`, combo box, scrollbar or menu frame is
-/// measured against egui's defaults. This file is not a proxy for any
-/// egui-native widget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     // Generous width so the Commit window's two zones (fixed-width commit
     // panel + diff preview) fit without clipping the multi-root select-all
     // rows. `1024` is the stated `max_steps` rather than kittest's default of 4,
     // because `Harness::run` PANICS once a run exceeds it.
     let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    // The first frames after startup relayout (embedded fonts take effect
-    // at pass 2), so clicks must only happen on a settled frame
-    // (test-support `settle`'s rationale).
     test_support::harness::settle(&mut harness);
     harness
 }
 
-/// The primary Commit action's main part (issue 07: the `Commit ▾` split
-/// button). Labeled via `WidgetInfo` — the panel heading also says "Commit",
-/// so tests target the unambiguous accessible label "Commit changes".
 fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
     h.get_by_label("Commit changes")
 }
 
-/// Open the split button's dropdown (the ▾ chevron) and return the harness,
-/// so the caller can click a menu item (e.g. "Commit and Push...") by label.
 fn open_commit_split_dropdown(h: &Harness<'_, AppState>) {
     h.get_by_label("Commit split options").click();
 }
@@ -179,18 +112,6 @@ fn commit_button_is_disabled(h: &Harness<'_, AppState>) -> bool {
     commit_action_button(h).accesskit_node().is_disabled()
 }
 
-// ------------------------- the changes header (design system v2, R7) ---------
-
-/// The changes card's header title, as the shared pane header printed it.
-///
-/// Located by its own string rather than by being "the first galley": a header
-/// band holds the title, a count chip and an action slot, and the chip's
-/// 10px mono number is painted *above* the 9px title because both are centred
-/// in the same band. "First painted" would find the number.
-///
-/// The panic spells out the mistake it is looking for, because a heading of
-/// `CHANGES (3)` is the exact regression this lookup exists to catch and the
-/// bare "not painted" would send a reader looking for a font problem.
 fn changes_title_galley(h: &Harness<'_, AppState>) -> test_support::harness::PaintedGalley {
     painted_galleys(h)
         .into_iter()
@@ -205,14 +126,6 @@ fn changes_title_galley(h: &Harness<'_, AppState>) -> test_support::harness::Pai
         })
 }
 
-/// The hairline the shared pane header paints at its band's last pixel: a 1px
-/// `RULE_STRUCTURAL` fill, found by sitting immediately under the header's title
-/// rather than by being the first one painted.
-///
-/// Scoped by position because the frame is full of rules — a `ui.separator()`
-/// is a `Line`, not a fill, but the *only* `RULE_STRUCTURAL` fills in this
-/// window are pane-header hairlines, and a new one must not be mistaken for
-/// this card's.
 fn changes_header_rule(h: &Harness<'_, AppState>) -> egui::Rect {
     let title = changes_title_galley(h);
     filled_rects(h)
@@ -231,9 +144,6 @@ fn changes_header_rule(h: &Harness<'_, AppState>) -> egui::Rect {
         })
 }
 
-/// The header's own band: the 28pt strip above its hairline, spanning the
-/// hairline's width. Derived from paint, so "a control is *in the header*" is a
-/// measured claim rather than a claim about which function was called.
 fn changes_header_band(h: &Harness<'_, AppState>) -> egui::Rect {
     let rule = changes_header_rule(h);
     egui::Rect::from_min_max(
@@ -242,8 +152,6 @@ fn changes_header_band(h: &Harness<'_, AppState>) -> egui::Rect {
     )
 }
 
-/// The accessible labels of every Button whose rect lies inside `band`,
-/// sorted, so the set is comparable without depending on the tree's walk order.
 fn button_labels_in(band: egui::Rect, h: &Harness<'_, AppState>) -> Vec<String> {
     let mut labels: Vec<String> = h
         .get_all_by_role(egui::accesskit::Role::Button)
@@ -254,14 +162,6 @@ fn button_labels_in(band: egui::Rect, h: &Harness<'_, AppState>) -> Vec<String> 
     labels
 }
 
-/// The count chip the shared pane header paints: the one chip-height
-/// `RAISED`-filled rect in the header band, at the chip radius — the shared
-/// count chip, not a fourth badge and not a parenthesised number inside the
-/// heading.
-///
-/// Scoped to `band` because the sidebar wears the same shared count chip: a
-/// frame-wide count here would describe how many chips the window happens to
-/// show rather than what this header is wearing.
 fn changes_count_chip(h: &Harness<'_, AppState>) -> (egui::Rect, egui::CornerRadius) {
     let band = changes_header_band(h);
     let hits: Vec<_> = painted_rects(h)
@@ -282,13 +182,6 @@ fn changes_count_chip(h: &Harness<'_, AppState>) -> (egui::Rect, egui::CornerRad
     (rect, radius)
 }
 
-/// Every stroked rectangle the frame painted, including the members of a
-/// `Shape::Vec`.
-///
-/// `test_support::harness::stroked_rects` sees `Shape::Rect` only, and a menu's
-/// frame is a `Shape::Vec` — its shadow plus its rounded fill-and-stroke rect —
-/// so the one stroke R2 allows on a floating surface is invisible to the shared
-/// helper. This is its sibling, for the frames that float.
 fn stroked_rects_including_vec(h: &Harness<'_, AppState>) -> Vec<(egui::Rect, egui::Color32, f32)> {
     let mut out = Vec::new();
     for clipped in &h.output().shapes {
@@ -309,13 +202,6 @@ fn stroked_rects_including_vec(h: &Harness<'_, AppState>) -> Vec<(egui::Rect, eg
     out
 }
 
-/// Everything an inert header control could possibly have touched, as a type
-/// with `PartialEq` — so "pressing it changed nothing" is one assertion over the
-/// whole surface rather than a list a future field can be added past.
-///
-/// `busy` and `pane_generation` are the two that make the claim strong: every
-/// `AppState::dispatch` sets `busy` and every refresh bumps the generation, so a
-/// control that dispatched *anything* moves at least one of them.
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct InertSnapshot {
     subtab: CommitSubTab,
@@ -358,8 +244,6 @@ fn inert_snapshot(h: &Harness<'_, AppState>) -> InertSnapshot {
     }
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn canonical_groups_count_badges_and_status_rows_paint() {
     let parent = tempfile::tempdir().unwrap();
@@ -370,16 +254,12 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Staging state is said by the checkbox and the badge letter, not by a
-    // heading: every changed file paints as a row of the one flat list, and
-    // only the `Merge conflicts` group keeps its count-badged header.
     h.get_by_label("base.txt");
     h.get_by_label("added.txt");
     h.get_by_label("untracked.txt");
     h.get_by_label("Merge conflicts (1)");
     h.get_by_label("C conf.txt");
 
-    // Single-root project: no root sub-groups / select-all checkboxes.
     assert!(
         h.query_by_label("Select all paint-repo").is_none(),
         "select-all must only appear for multi-root projects"
@@ -388,8 +268,6 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 
 #[test]
 fn the_file_row_checkbox_stages_and_unstages_the_whole_file() {
-    // The box is a control over git's index, so the answer is read back out of
-    // git — never out of the window's own state, which is the thing under test.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "toggle-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -416,20 +294,14 @@ fn the_file_row_checkbox_stages_and_unstages_the_whole_file() {
     );
 }
 
-/// Whether git reports `needle` among the repository's staged paths.
 fn staged_contains(repo: &Path, needle: &str) -> bool {
     git(repo, &["diff", "--cached", "--name-only"]).contains(needle)
 }
 
-/// The accessible label of an unstaged file's checkbox — the query handle every
-/// geometry and staging assertion in this suite addresses a row's box by. The
-/// label carries the state, so a suite that wants the *ticked* box says so.
 fn stage_label_of(name: &str) -> String {
     format!("Stage {name} (unstaged)")
 }
 
-/// Stage `name` through its row checkbox and wait for git to agree. The route
-/// every commit in this suite takes now that Commit reads the index.
 #[track_caller]
 fn stage_through_checkbox(h: &mut Harness<'_, AppState>, repo: &Path, name: &str) {
     h.get_by_label(&stage_label_of(name)).click();
@@ -441,15 +313,8 @@ fn stage_through_checkbox(h: &mut Harness<'_, AppState>, repo: &Path, name: &str
     h.run();
 }
 
-// --- the index is the commit's only input -------------------------------------
-
-/// The sentence the card adds when the empty selection is forgivable. Asserted
-/// as a fragment so the wording can be edited without rewriting the test.
 const COMMIT_ALL_NOTE: &str = "Nothing is staged";
 
-/// The Commit control's brand-filled halves, scoped to the control's own
-/// bounds. Unscoped, a `Palette::ACCENT` count would also see every other
-/// enabled primary in the shell.
 #[track_caller]
 fn accent_halves(h: &Harness<'_, AppState>) -> Vec<egui::Rect> {
     let button = egui::Rect::from_min_max(
@@ -463,14 +328,6 @@ fn accent_halves(h: &Harness<'_, AppState>) -> Vec<egui::Rect> {
         .collect()
 }
 
-/// **Commit is gated on the index, not on what the file list has selected.**
-///
-/// Both directions are load-bearing. A gate that reads the selection lets a
-/// developer press Commit over a file they merely clicked, and a file they
-/// never staged enters the commit; a gate that reads nothing leaves the
-/// control promising a commit it cannot make. The empty-index case also has to
-/// stay visibly refused rather than falling back to `git commit -a`, which is
-/// the whole-tree sweep this removed.
 #[test]
 fn commit_is_disabled_until_the_index_holds_something_and_then_enables() {
     let parent = tempfile::tempdir().unwrap();
@@ -479,7 +336,6 @@ fn commit_is_disabled_until_the_index_holds_something_and_then_enables() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // A message but an empty index: refused, and the card promises nothing.
     h.state_mut().ui.commit_message = "commit everything".into();
     h.run();
     assert!(
@@ -498,8 +354,6 @@ fn commit_is_disabled_until_the_index_holds_something_and_then_enables() {
          different colour by design"
     );
 
-    // Stage the file through its checkbox — the control that owns the index —
-    // and the gate opens.
     h.get_by_label("Stage base.txt (unstaged)").click();
     h.run();
     assert!(
@@ -523,8 +377,6 @@ fn commit_is_disabled_until_the_index_holds_something_and_then_enables() {
     );
 }
 
-/// Clicking a row is a preview, so it cannot open the gate: a developer who
-/// only browsed the list has staged nothing and still cannot commit.
 #[test]
 fn browsing_the_file_list_never_makes_a_commit_possible() {
     let parent = tempfile::tempdir().unwrap();
@@ -554,9 +406,6 @@ fn browsing_the_file_list_never_makes_a_commit_possible() {
     );
 }
 
-/// The message gate is independent of the index gate: an empty *message* is
-/// never committable however much is staged. A change that ORs the two
-/// conditions instead of ANDing them lets a message-less commit through.
 #[test]
 fn an_empty_message_still_refuses_with_a_full_index() {
     let parent = tempfile::tempdir().unwrap();
@@ -589,11 +438,6 @@ fn an_empty_message_still_refuses_with_a_full_index() {
     );
 }
 
-// --- ticket 19: the clean-tree statement --------------------------------------
-
-/// A clean repository states the clean-tree sentence rather than leaving an
-/// empty panel. The reference's `stage.default.status` is the specification:
-/// "an empty list" and "nothing to commit" are not the same information.
 #[test]
 fn a_clean_tree_states_the_clean_tree_sentence() {
     let parent = tempfile::tempdir().unwrap();
@@ -640,8 +484,6 @@ fn amend_commits_with_amend_flag() {
     assert_eq!(before, 1);
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    // Settle the async status snapshot first: clicks issued against early
-    // frames are hit-tested on geometry that still shifts as roots load.
     for _ in 0..5 {
         h.run();
     }
@@ -678,8 +520,6 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "push chain subject".into();
     h.run();
-    // Issue 07: "Commit and Push..." lives inside the split button's
-    // dropdown instead of as a sibling action.
     open_commit_split_dropdown(&h);
     h.run();
     h.get_by_label("Commit and Push...").click();
@@ -698,9 +538,6 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     );
 }
 
-/// A repository whose branch already tracks `origin`, plus the bare remote it
-/// was pushed to. The remote lives outside the scanned project directory so
-/// root discovery cannot register it as a second root.
 fn repo_tracking_origin(scratch: &Path) -> (Repo, tempfile::TempDir) {
     let remote = tempfile::tempdir().expect("temp bare remote");
     git(remote.path(), &["init", "-q", "--bare", "."]);
@@ -718,14 +555,6 @@ fn repo_tracking_origin(scratch: &Path) -> (Repo, tempfile::TempDir) {
     (repo, remote)
 }
 
-/// The push dialog must describe the commit the chain just made, not the
-/// repository as it was before the click.
-///
-/// **Only the spawned pump can show this.** `for_roots` runs git inline, so its
-/// `dispatch` returns after the commit has landed and the dialog is built from
-/// post-commit git on the very next read; `launch_in` uses the pump production
-/// runs, where the frame that opens the dialog paints while the commit worker
-/// is still going.
 #[test]
 fn commit_and_push_dialog_lists_the_commit_the_chain_just_landed() {
     let parent = tempfile::tempdir().unwrap();
@@ -762,18 +591,10 @@ fn commit_and_push_dialog_lists_the_commit_the_chain_just_landed() {
         Some(Dialog::Push),
         "commit-and-push must open the push dialog"
     );
-    // The repo node's ahead count and the empty-state line are both the
-    // dialog's own output (`outgoing_tree`), read off the snapshot it builds
-    // once when it opens. The commit message is NOT a usable assertion here:
-    // the commit window's "Recent:" chip paints the same string whatever the
-    // dialog says, so it passes from a stale dialog too.
     assert_not_painted(&h, "No outgoing commits.");
     assert_painted(&h, "tracking-repo — 1 commits ahead");
 }
 
-/// Track a new file in `repo` so it counts as a modified (M) change when
-/// its worktree content diverges afterwards — untracked files render as
-/// `? name` rows and would not exercise the modified-row assertions.
 fn seed_tracked(repo: &Path, name: &str) {
     std::fs::write(repo.join(name), "tracked\n").unwrap();
     git(repo, &["add", name]);
@@ -783,9 +604,6 @@ fn seed_tracked(repo: &Path, name: &str) {
 
 #[test]
 fn repo_groups_render_collapsible_one_tree_with_focus() {
-    // Issue 04: per-repo sections collapse into ONE tree — each repo renders
-    // as a collapsible group header. Non-focused repos are collapsed by
-    // default; the selected repo's files are the visual focus.
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "repo-a");
     let b = temp_repo(parent.path(), "repo-b");
@@ -794,13 +612,10 @@ fn repo_groups_render_collapsible_one_tree_with_focus() {
 
     let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
 
-    // Every repo paints as a group header inside the tree.
     h.get_by_label("Toggle repo-a");
     h.get_by_label("Toggle repo-b");
 
-    // Focus = expand: the selected (first) root's file row is visible…
     h.get_by_label("a.txt");
-    // …the non-focused repo is collapsed by default so its rows stay hidden.
     assert!(
         h.query_by_label("b.txt").is_none(),
         "non-focused repo-b must be collapsed by default"
@@ -823,7 +638,6 @@ fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
     );
     assert!(!h.state().ui.changes_expanded.contains(&b_id));
 
-    // Expand the collapsed group: its rows appear and the key is recorded.
     h.get_by_label("Toggle repo-b").click();
     h.run();
     h.get_by_label("b.txt");
@@ -832,7 +646,6 @@ fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
         "expanded group must be recorded in changes_expanded"
     );
 
-    // Toggle again: collapsed, key cleared.
     h.get_by_label("Toggle repo-b").click();
     h.run();
     assert!(
@@ -845,10 +658,6 @@ fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
 #[test]
 fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
     let parent = tempfile::tempdir().unwrap();
-    // Both repos share one subfolder of the project dir, so the sidebar
-    // renders a single group ("shared") whose repo rows keep unambiguous
-    // labels — with repos as direct children, the sidebar's group header and
-    // its repo row would share the same name and collide on label queries.
     let shared = parent.path().join("shared");
     std::fs::create_dir_all(&shared).unwrap();
     let a = temp_repo(&shared, "repo-a");
@@ -866,15 +675,12 @@ fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
         "first registered root starts focused"
     );
 
-    // Manually expand repo-b, then select it via its sidebar repo row.
     h.get_by_label("Toggle repo-b").click();
     h.run();
     h.get_by_label("b.txt");
     h.get_by_label("repo-b").click();
     h.run();
 
-    // Focus = expand: the newly selected repo's group is the only expanded
-    // one — the previously focused repo-a collapses.
     assert_eq!(
         h.state().selected_root,
         Some(turbogit_domain::model::RootId(b.path.clone().into()))
@@ -890,25 +696,8 @@ fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
     );
 }
 
-/// **The commit column width is unchanged, and no other pane's width moved.**
-///
-/// The header shed two icons rather than borrowing width, so this is a
-/// regression gate with a number in it: `COMMIT_PANEL_WIDTH` is 340 and lives in
-/// the commit-window module (it is deliberately *not* a theme token), and the
-/// split between the two zones is measured at that width.
-///
-/// The split is asserted *relatively* — preview edge minus changes edge equals
-/// `COMMIT_PANEL_WIDTH` — rather than against `SIDEBAR_WIDTH`. The sidebar's
-/// width belongs to another surface; what this test owns is that the column
-/// between the two cards did not move, which is exactly the claim "no other
-/// pane's width moves" makes from this side.
 #[test]
 fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
-    // Redesign 03: the Commit window is exactly two zones — a fixed-width
-    // Commit panel on the left and a flexible diff preview on the right.
-    // The diff zone is a permanent pane: it paints its heading by default
-    // (no Commit/Preview toggle to reveal it) and starts at the fixed
-    // panel's edge.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "two-zone-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -917,7 +706,6 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
     h.get_by_label("base.txt").click();
     h.run();
 
-    // The width itself: unchanged, and still owned by this module.
     assert_eq!(
         turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH,
         340.0,
@@ -925,7 +713,6 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
          the filter its own row; it did not borrow width from anywhere."
     );
 
-    // The changes card *is* the column: it fills the fixed width exactly.
     let changes_card = card_rect(&h, changes_title_galley(&h).pos);
     assert_eq!(
         changes_card.width(),
@@ -934,9 +721,6 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
         turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH
     );
 
-    // …and the preview zone starts exactly one column and one panel padding to
-    // its right. The zone names itself by the previewed file once a row is
-    // selected.
     let path = h.get_by_label("Previewing base.txt").rect();
     let preview = card_rect(&h, path.center());
     let expected_x = changes_card.left()
@@ -952,9 +736,6 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
 
 #[test]
 fn the_commit_card_docks_under_the_changes_list() {
-    // Task 3: the changes card is the pane's top and fills the space above it;
-    // the commit card docks at the pane's bottom edge, one PANEL_PADDING below
-    // the changes card.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "msg-dock-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -977,8 +758,6 @@ fn the_commit_card_docks_under_the_changes_list() {
          commit {commit_card:?}"
     );
 
-    // The commit card still holds its whole control set: the message well, the
-    // Amend option, and the action row footer.
     let amend_origin =
         galley_origin(&h, "Amend").expect("the Amend option must paint with the message box");
     assert!(
@@ -986,7 +765,6 @@ fn the_commit_card_docks_under_the_changes_list() {
         "Amend rides the docked commit card: card {commit_card:?}, amend {amend_origin:?}"
     );
 
-    // Exactly one subscriber: no per-repo commit controls anywhere.
     let labels = painted_text(&h);
     assert_eq!(
         labels
@@ -1000,23 +778,16 @@ fn the_commit_card_docks_under_the_changes_list() {
 
 #[test]
 fn staging_section_headers_and_stage_all_actions_are_removed() {
-    // Issue 07: staging lives in the per-file checkboxes (issue 05), so the
-    // per-repo `UNSTAGED (n)` / `STAGED (n)` header rows and their `Stage all`
-    // / `Unstage all` actions are gone. File rows still paint.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "sectionless-row");
     seed_changes(&repo.path);
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // File rows still paint…
     h.get_by_label("base.txt");
     h.get_by_label("added.txt");
     h.get_by_label("untracked.txt");
 
-    // …but no per-repo staging section headers or stage-all actions anywhere,
-    // and no separate group for the untracked files either: one list, one
-    // place.
     let text = painted_text(&h).join("\n");
     assert!(
         !text.contains("UNSTAGED") && !text.contains("STAGED"),
@@ -1034,9 +805,6 @@ fn staging_section_headers_and_stage_all_actions_are_removed() {
 
 #[test]
 fn merge_conflicts_group_survives_the_section_removal() {
-    // Issue 07 (seam decision): only the UNSTAGED/STAGED section headers and
-    // their Stage all actions are removed; the distinct `Merge conflicts`
-    // group with its C review row stays.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "conflict-kept");
     let branch = repo.branch();
@@ -1051,9 +819,6 @@ fn merge_conflicts_group_survives_the_section_removal() {
 
 #[test]
 fn single_primary_commit_split_button_with_grey_shelve_stash() {
-    // Issue 07: one primary action only. The panel bottom carries a single
-    // `Commit ▾` split button with small grey `Shelve…` / `Stash…` beside it —
-    // no more sibling `Commit and Push...` button or cascade queue in the row.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "split-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -1063,19 +828,14 @@ fn single_primary_commit_split_button_with_grey_shelve_stash() {
     h.state_mut().ui.commit_message = "split subject".into();
     h.run();
 
-    // The one primary Commit action (main part of the split button).
     let commit = commit_action_button(&h);
     assert!(
         !commit.accesskit_node().is_disabled(),
         "the primary Commit action must be enabled with a message and a non-empty index"
     );
 
-    // `Commit and Push...` is NOT a sibling button anymore — the alternatives
-    // live inside the split button's dropdown only.
     assert_not_painted(&h, "Commit and Push");
 
-    // Grey Shelve…/Stash… small buttons sit beside the primary action on the
-    // same row (one primary action, secondary buttons grey).
     let row_y = commit.rect().center().y;
     for label in ["Shelve…", "Stash…"] {
         let n = h.get_by_label(label);
@@ -1093,11 +853,6 @@ fn single_primary_commit_split_button_with_grey_shelve_stash() {
 
 #[test]
 fn commit_split_dropdown_offers_commit_and_push_only() {
-    // Issue 07: the split button's dropdown holds the one alternative commit
-    // surface, `Commit and Push...`. The multi-repo commit that once shared it
-    // is now the primary button driven by the options kebab's checklist, so the
-    // chevron carries only the push chain — and nothing paints the retired
-    // cascade entry.
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "dd-a");
     let b = temp_repo(parent.path(), "dd-b");
@@ -1105,9 +860,6 @@ fn commit_split_dropdown_offers_commit_and_push_only() {
     seed_tracked(&b.path, "b.txt");
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-    // Stage the focused repo's file through its checkbox, then arm the message
-    // (one click per frame — see the Amend test note). The dropdown only opens
-    // from an enabled Commit control, so the index has to hold something.
     h.get_by_label("Stage a.txt (unstaged)").click();
     h.run();
     assert!(
@@ -1120,9 +872,7 @@ fn commit_split_dropdown_offers_commit_and_push_only() {
     open_commit_split_dropdown(&h);
     h.run();
 
-    // The dropdown offers commit-and-push…
     h.get_by_label("Commit and Push...");
-    // …but no cascade entry without an active multi-repo selection.
     assert_not_painted(&h, "Also commit on");
 }
 
@@ -1134,8 +884,6 @@ fn diff_preview_reflects_selected_file() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Clicking a file row selects it for the preview pane; the header
-    // paints the previewed path (issue 06).
     h.get_by_label("base.txt").click();
     h.run();
     assert_eq!(
@@ -1144,7 +892,6 @@ fn diff_preview_reflects_selected_file() {
     );
     h.get_by_label("Previewing base.txt");
 
-    // Selecting another row swaps the preview to that file.
     h.get_by_label("added.txt").click();
     h.run();
     assert_eq!(
@@ -1156,14 +903,8 @@ fn diff_preview_reflects_selected_file() {
 
 #[test]
 fn diff_header_shows_path_and_nav_on_selection() {
-    // Issue 06 (design doc §5): selecting a changed file paints the preview
-    // header — the path and prev/next change navigation over the changed
-    // files. The header carries nothing else: status and mode are facts the
-    // changelist row and the diff toolbar already state.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "header-repo");
-    // 1 removed / 2 added: a middle line becomes two (verified against git:
-    // `-b` then `+x`, `+y`).
     std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
     git(&repo.path, &["add", "base.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "three lines"]);
@@ -1171,26 +912,20 @@ fn diff_header_shows_path_and_nav_on_selection() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // No selection: no header chrome paints, the hint text shows instead.
     assert_not_painted(&h, "Modified");
     assert!(h.query_by_label("Previewing base.txt").is_none());
 
     h.get_by_label("base.txt").click();
     h.run();
 
-    // Path and nav paint immediately on selection.
     h.get_by_label("Previewing base.txt");
     h.get_by_label("Previous change");
     h.get_by_label("Next change");
 
-    // The status pill and the mode pill are gone from the header; the mode
-    // lives on the diff toolbar's segmented control, spelled `Unified`.
     assert_not_painted(&h, "Modified");
     assert_not_painted(&h, "Unified diff");
     assert_not_painted(&h, "Side-by-side diff");
 
-    // The `+2 −1` counts land once the async diff is computed, on the diff
-    // toolbar the header no longer duplicates.
     assert!(
         wait_until(15_000, || {
             h.run();
@@ -1204,10 +939,6 @@ fn diff_header_shows_path_and_nav_on_selection() {
 
 #[test]
 fn header_nav_buttons_walk_previous_and_next_changed_files() {
-    // Issue 06 (design doc §5): the header's prev/next navigation walks the
-    // active sub-tab's changed files — the same path a file-row click uses,
-    // so the new diff loads and the header follows. The buttons disable at
-    // the ends of the list.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "nav-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -1221,7 +952,6 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
         Some(change(&repo.path, "base.txt"))
     );
 
-    // First file: Previous is disabled, Next advances.
     let prev = h.get_by_label("Previous change");
     assert!(
         prev.accesskit_node().is_disabled(),
@@ -1236,7 +966,6 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
     );
     h.get_by_label("Previewing other.txt");
 
-    // Last file: Next is disabled, Previous returns.
     let next = h.get_by_label("Next change");
     assert!(
         next.accesskit_node().is_disabled(),
@@ -1251,8 +980,6 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
     );
 }
 
-// ------------------------------------------------- issue #18 sub-tabs --
-
 #[test]
 fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     let parent = tempfile::tempdir().unwrap();
@@ -1261,9 +988,6 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // The strip is Local Changes / Shelf / Stash: the Unversioned Files
-    // sub-tab is gone (issue 04 merged it into the one tree as a bottom
-    // group — unversioned rows live in Local Changes now).
     h.get_by_label("Local Changes");
     h.get_by_label("Shelf");
     h.get_by_label("Stash");
@@ -1274,22 +998,16 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
     h.get_by_label("base.txt");
 
-    // Clicking a sub-tab switches the active sub-tab…
     h.get_by_label("Shelf").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
 
-    // …and switching back restores the active changelist data.
     h.get_by_label("Local Changes").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
     h.get_by_label("base.txt");
 }
 
-/// One frame between the click and the assertion: the sub-tab strip runs the
-/// selection before the body closure, and the body reads the state fresh, so a
-/// click switches the painted pane on the very frame the click lands. A body
-/// that read a snapshot would lag one frame and fail here.
 #[test]
 fn a_sub_tab_click_switches_the_pane_on_the_same_frame() {
     let parent = tempfile::tempdir().unwrap();
@@ -1314,16 +1032,12 @@ fn a_sub_tab_click_switches_the_pane_on_the_same_frame() {
 
 #[test]
 fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
-    // ADR-0008 made these two sub-tabs labelled placeholders because nothing
-    // was behind them. They have real panes now, so the placeholder copy is
-    // gone from the whole window and each tab shows its own listing chrome.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "real-panes-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // No placeholder copy leaks onto the active data views.
     assert_not_painted(&h, "arrives in a later phase");
 
     h.get_by_label("Shelf").click();
@@ -1331,7 +1045,6 @@ fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
     assert_painted(&h, "SHELVES");
     assert_not_painted(&h, "arrives in a later phase");
-    // The pane replaces the changelist data instead of stacking on it.
     assert_not_painted(&h, "UNSTAGED");
     assert_not_painted(&h, "base.txt");
 
@@ -1353,8 +1066,6 @@ fn untracked_files_join_the_one_flat_list_and_their_box_commits_them() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
 
-    // Untracked files are ordinary rows now — a checkbox beside them like any
-    // other file, and no group of their own to look in.
     h.get_by_label("base.txt");
     h.get_by_label("untracked.txt");
     h.get_by_label(&stage_label_of("untracked.txt"));
@@ -1363,8 +1074,6 @@ fn untracked_files_join_the_one_flat_list_and_their_box_commits_them() {
         "the separate untracked group is gone; its files are in the one list"
     );
 
-    // Ticking the box puts the file in the index, and only the ticked file
-    // lands in the commit.
     h.get_by_label(&stage_label_of("untracked.txt")).click();
     h.run();
     assert!(
@@ -1394,18 +1103,10 @@ fn untracked_files_join_the_one_flat_list_and_their_box_commits_them() {
     );
 }
 
-// ------------------------------------------- issue 04 tree toolbar row --
-
-// ------------------------------------------- issue 05 file-row redesign --
-
 #[test]
 fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
-    // Issue 05 (design doc §4): every row reads
-    // `[checkbox] [status letter] [coloured filename] … [dim location]`.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "row-layout");
-    // A root-level modification, a modified file inside `src/`, and a new
-    // untracked file.
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
     std::fs::create_dir_all(repo.path.join("src")).unwrap();
     std::fs::write(repo.path.join("src/app.rs"), "fn main() {}\n").unwrap();
@@ -1416,24 +1117,18 @@ fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Row bodies are addressable by filename (no more "M base.txt" label).
     h.get_by_label("base.txt");
     h.get_by_label("app.rs");
     h.get_by_label("untracked.txt");
-    // Each row carries a checkbox whose label carries its state, so three
-    // unstaged rows are three addressable boxes.
     h.get_by_label("Stage base.txt (unstaged)");
     h.get_by_label("Stage src/app.rs (unstaged)");
     h.get_by_label("Stage untracked.txt (unstaged)");
 
-    // Status letters paint as their own colour-coded elements and the dim
-    // location renders after the filename.
     let text = painted_text(&h).join("\n");
     assert!(
         text.contains("src/"),
         "rows must paint the dim location, got:\n{text}"
     );
-    // Hunk counts moved out of rows into the diff header (issue 05/06).
     assert!(
         !text.contains("hunk"),
         "rows must not paint hunk counts, got:\n{text}"
@@ -1442,10 +1137,6 @@ fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
 
 #[test]
 fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
-    // **Browsing is not an edit.** A clicked row selects the file for the diff
-    // preview and paints the selection background — and stages nothing, so the
-    // checkbox stays empty and git's index stays untouched. This is the whole
-    // point of separating the two gestures.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "select-row");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -1467,7 +1158,6 @@ fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
         "a clicked row drives the diff preview"
     );
 
-    // The selected row paints the selection background…
     let row_origin = galley_origin(&h, "base.txt").expect("row paints its filename");
     assert!(
         filled_rects(&h)
@@ -1476,8 +1166,6 @@ fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
         "the selected row must paint the list-row selection fill"
     );
 
-    // …and the highlight does not extend to the checkbox, which is still empty
-    // because nothing was staged.
     h.get_by_label("Stage base.txt (unstaged)");
     assert!(
         !staged_contains(&repo.path, "base.txt"),
@@ -1485,8 +1173,6 @@ fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
     );
 }
 
-/// The checkbox and the row highlight are two independent facts, so a box can
-/// be ticked without the row becoming the selection, and vice versa.
 #[test]
 fn the_checkbox_toggles_the_index_without_moving_the_selection() {
     let parent = tempfile::tempdir().unwrap();
@@ -1497,7 +1183,6 @@ fn the_checkbox_toggles_the_index_without_moving_the_selection() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     let p = repo.path.join("base.txt");
 
-    // Preview a *different* row, then tick the first one's box.
     h.get_by_label("other.txt").click();
     h.run();
     assert_eq!(
@@ -1522,16 +1207,6 @@ fn the_checkbox_toggles_the_index_without_moving_the_selection() {
     );
 }
 
-/// **The changes card is headed by the shared pane header, and its action slot
-/// holds exactly three controls.** R7 measured on a real screen: a 9px tracked
-/// `INK_3` title, the file count as a `count_chip` *beside* it, one
-/// `RULE_STRUCTURAL` hairline, and a right-aligned slot holding the three
-/// controls that actually do something.
-///
-/// The fourth name in the expected set is the `⋯` that opens the overflow menu
-/// the two inert controls moved into. It is an affordance, not a fourth thing
-/// this pane can do — and it is named here rather than left implicit, so the
-/// list below is the whole band and a new icon cannot slip into it unnoticed.
 #[test]
 fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
     let parent = tempfile::tempdir().unwrap();
@@ -1542,9 +1217,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
 
     let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
 
-    // The count is a chip BESIDE the heading, never characters inside it. Checked
-    // as painted strings FIRST, so a title of `CHANGES (2)` fails on the claim
-    // it is rather than on "the title is missing".
     let painted = painted_text(&h);
     assert!(
         !painted.iter().any(|t| t.contains("Changes (")),
@@ -1556,9 +1228,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
          beside it; painted: {painted:?}"
     );
 
-    // The heading: the pane's own word, in the app's one case, at the shared
-    // 9px title size in the muted ink — the same treatment the worktrees,
-    // submodules and log panes wear.
     let title = changes_title_galley(&h);
     assert_eq!(painted_ink(&h, "CHANGES"), Some(Palette::INK_3));
     assert_eq!(
@@ -1567,8 +1236,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
         "the heading is the shared 9px pane title, not a body-size label"
     );
 
-    // The count, as the shared count chip beside the heading: one change per
-    // repo, so `2`.
     let (chip, radius) = changes_count_chip(&h);
     assert_eq!(
         radius,
@@ -1579,7 +1246,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
         "the count chip sits BESIDE the heading, not inside it: title {:?}, chip {chip:?}",
         title.rect
     );
-    // Scoped by position: "2" is a string several parts of a frame can paint.
     let chip_ink = painted_galleys(&h)
         .into_iter()
         .find(|g| g.text == "2" && chip.contains_rect(g.rect))
@@ -1591,8 +1257,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
         "the count chip carries the shared secondary ink, not the muted one"
     );
 
-    // **Exactly three controls**, in a right-aligned slot hard against the
-    // band's trailing edge.
     let band = changes_header_band(&h);
     assert_eq!(
         button_labels_in(band, &h),
@@ -1607,8 +1271,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
          menu the two inert ones moved into — and nothing else. A fifth name \
          here means the five-icon row is coming back."
     );
-    // The two that moved paint no button anywhere in the frame while their
-    // menu is closed.
     assert!(
         h.query_by_label("Commit options").is_none(),
         "commit options is retired — it paints nowhere in the changes header"
@@ -1618,7 +1280,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
         "group by paints no button in the header — it is a menu row now"
     );
 
-    // One hairline, at the band's foot, spanning the header's own width.
     let rule = changes_header_rule(&h);
     assert!(
         (rule.top() - band.top() - PANE_HEADER_HEIGHT).abs() < 0.01
@@ -1631,8 +1292,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
         title.rect
     );
 
-    // **No stroke.** The card is a surface, so nothing in it draws a hairline
-    // around its own band; the only rule the header has is its own fill.
     let strokes: Vec<_> = stroked_rects(&h)
         .into_iter()
         .filter(|(rect, _, _)| band.intersects(*rect))
@@ -1644,23 +1303,9 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
          allowed a stroke are the ones that float. Found {strokes:?}"
     );
 
-    // The old text buttons are gone (issue 05 removes them; issue 04 ships
-    // the icon-only row).
     assert_not_painted(&h, "Unstage selected");
 }
 
-/// **The control that cannot act moved into the header's overflow menu, where
-/// it stays reachable and stays honestly inert.**
-///
-/// "Visibly inert" is asserted three ways, all from what the frame produced: the
-/// accessibility node is `is_disabled()`, the label's paint-time ink is 45 % of
-/// `INK` (the shared disabled treatment), and the reason is reachable on hover.
-/// "Inert" is then asserted the strong way — pressing it changes *nothing*,
-/// across every field a control could have reached, and leaves the repository
-/// alone.
-///
-/// The menu keeps its 1px stroke because it is a floating layer (R2): that is the
-/// rule being satisfied, not a missed one.
 #[test]
 fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
     let parent = tempfile::tempdir().unwrap();
@@ -1669,9 +1314,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // The `advanced options…` link is still gone (issue 07), the gear lives
-    // in the menu rather than in the header, and the retired `Commit options`
-    // placeholder is gone from the menu entirely.
     assert_not_painted(&h, "Advanced options");
     assert!(h.query_by_label("Commit options").is_none());
     assert!(h.query_by_label("Group by").is_none());
@@ -1692,8 +1334,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
              so in the accessibility tree rather than pretending to be live"
         );
         let rect = node.rect();
-        // The row keeps its own glyph: a gated action is still a row, not a bare
-        // string, so the icon is painted inside it.
         assert!(
             painted_paths(&h)
                 .iter()
@@ -1720,17 +1360,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
         );
     }
 
-    // The menu is a floating layer, so it keeps its 1px stroke — R2's "a
-    // stroke means this floats" holding for exactly the surface that floats.
-    // A borderless menu would be a missed rule, not a clean one.
-    //
-    // The *token* is not asserted here, and deliberately: this suite drives
-    // `ui::render` directly and never installs the app's `Visuals`
-    // (`theme::configure_style` is wired in `src/app.rs`), so the popup frame
-    // wears egui's stock chrome colour here. The token mapping
-    // `SURFACE` fill + `LINE` stroke is `theme::dark_visuals`'s and is pinned
-    // there; what belongs to this test is the shape claim — a 1px outline
-    // around the rows, not a bare surface.
     let border = stroked_rects_including_vec(&h)
         .into_iter()
         .find(|(rect, _, width)| {
@@ -1743,8 +1372,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
          rule, not a clean one. Item rects: {item_rects:?}"
     );
 
-    // The reason is reachable on hover — a blocked row explains itself rather
-    // than sitting there mute.
     h.hover_at(item_rects[0].center());
     let mut reason_painted = false;
     for _ in 0..20 {
@@ -1760,10 +1387,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
         items[0].1
     );
 
-    // **The proof: pressing either dispatches nothing.** One snapshot over every
-    // field a control could reach, compared before and after each press — and
-    // the repository itself, so a git call that changed nothing would still be
-    // visible as a changed commit list.
     for (label, _) in items {
         if h.query_by_label(label).is_none() {
             h.get_by_label("Changes header overflow").click();
@@ -1787,8 +1410,6 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
         );
         assert_eq!(repo.subjects(), subjects_before);
     }
-    // Nothing above armed a confirm, so the one toast a wired rollback would
-    // have raised is provably absent rather than merely unobserved.
     assert!(
         h.state().ui.toast.is_none(),
         "a wired `Rollback` would have toasted \"Select files to discard.\""
@@ -1810,7 +1431,6 @@ fn expand_collapse_all_toggles_every_repo_group() {
         "repo-b starts collapsed"
     );
 
-    // Expand all: every non-focused group opens.
     h.get_by_label("Expand all groups").click();
     h.run();
     h.get_by_label("b.txt");
@@ -1818,7 +1438,6 @@ fn expand_collapse_all_toggles_every_repo_group() {
         h.state().ui.changes_expanded.contains(&b_id),
         "expand-all must record every non-focused group"
     );
-    // The control flips to its collapse action while groups are open.
     h.get_by_label("Collapse all groups").click();
     h.run();
     assert!(
@@ -1836,7 +1455,6 @@ fn rollback_icon_confirms_discard_and_toasts_when_empty() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Nothing selected: rollback warns without opening the confirm.
     h.get_by_label("Rollback").click();
     h.run();
     assert!(
@@ -1844,7 +1462,6 @@ fn rollback_icon_confirms_discard_and_toasts_when_empty() {
         "rollback with an empty selection must not open the discard confirm"
     );
 
-    // A selected file: rollback opens the destructive confirm.
     h.get_by_label("a.txt").click();
     h.run();
     h.get_by_label("Rollback").click();
@@ -1876,8 +1493,6 @@ fn refresh_icon_refreshes_changes() {
     );
 }
 
-// ------------------------------------ long file names wrap onto a new line --
-
 /// `(origin, size, line count)` of the painted galley carrying exactly
 /// `text`.
 ///
@@ -1899,9 +1514,6 @@ fn galley_metrics(h: &Harness<'_, AppState>, text: &str) -> (egui::Pos2, egui::V
         .unwrap_or_else(|| panic!("no painted galley carries {text:?}"))
 }
 
-/// Height of the selection fill painted under `origin` — the selected row's
-/// own rect, so a row that wrapped a name is measurably taller than the
-/// single-line file row.
 fn selected_row_height(h: &Harness<'_, AppState>, origin: egui::Pos2) -> f32 {
     filled_rects(h)
         .into_iter()
@@ -1913,9 +1525,6 @@ fn selected_row_height(h: &Harness<'_, AppState>, origin: egui::Pos2) -> f32 {
 
 #[test]
 fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
-    // A filename wider than the commit panel's name column wraps onto the
-    // next line — the row grows with it — instead of running past the pane
-    // edge or painting over the dim location column.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "wrap-long-name");
     std::fs::create_dir_all(repo.path.join("src")).unwrap();
@@ -1928,10 +1537,8 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // The row is still addressable by its file name…
     h.get_by_label(long);
 
-    // …and the name is laid out across several lines inside its column.
     let (name_pos, name_size, name_lines) = galley_metrics(&h, long);
     assert!(
         name_lines >= 2,
@@ -1939,8 +1546,6 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
          got {name_lines} line(s)"
     );
 
-    // The dim location keeps its right-aligned first-line seat: it paints to
-    // the right of the name, on the name's first line.
     let (loc_pos, ..) = galley_metrics(&h, "src/");
     assert!(
         loc_pos.x > name_pos.x,
@@ -1962,8 +1567,6 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
         loc_pos.x - name_pos.x
     );
 
-    // Selecting the row shows the grown row: the selection fill is taller
-    // than the single-line file-row height.
     h.get_by_label(long).click();
     h.run();
     let height = selected_row_height(&h, name_pos);
@@ -1976,9 +1579,6 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
 
 #[test]
 fn renamed_rows_move_the_old_path_below_a_wrapped_new_name() {
-    // Spec R8 keeps the muted arrow + old path on the row. When the new name
-    // wraps, that marker moves onto its own line under the name instead of
-    // colliding with the continuations (or with the location column).
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "wrap-rename");
     let long = "a_renamed_file_whose_new_name_cannot_fit_the_commit_panel_column.rs";
@@ -1994,7 +1594,6 @@ fn renamed_rows_move_the_old_path_below_a_wrapped_new_name() {
         name_lines >= 2,
         "the renamed-to name must wrap, got {name_lines} line(s)"
     );
-    // The old path paints on the line after the name's last line.
     let (orig_pos, ..) = galley_metrics(&h, "old.txt");
     assert!(
         orig_pos.y >= name_pos.y + name_size.y - 1.0,
@@ -2008,8 +1607,6 @@ fn renamed_rows_move_the_old_path_below_a_wrapped_new_name() {
 
 #[test]
 fn short_file_names_keep_the_single_line_row_height() {
-    // The wrap must not disturb the common case: a name that fits stays on
-    // one line, on exactly the design's 24 px row.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "wrap-short-name");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -2028,15 +1625,8 @@ fn short_file_names_keep_the_single_line_row_height() {
     );
 }
 
-// -------------------------------- local changes redesign: card containment --
-
-/// The mockup's card surface, as hexes from the design export — deliberately
-/// literals rather than `Palette` references, so the assertion cannot be
-/// satisfied by re-aliasing a token onto something else.
 const CARD_FILL: egui::Color32 = egui::Color32::from_rgb(0x23, 0x25, 0x29);
 
-/// Every rectangle the last frame painted, as
-/// `(rect, fill, stroke, corner radius)`.
 fn painted_rects(
     h: &Harness<'_, AppState>,
 ) -> Vec<(egui::Rect, egui::Color32, egui::Stroke, egui::CornerRadius)> {
@@ -2050,17 +1640,6 @@ fn painted_rects(
         .collect()
 }
 
-/// The card containing `point`, identified by the signature the mockup still
-/// gives every card: the same rect painted once as a `#232529` content fill at
-/// the 8pt card radius.
-///
-/// The 1px `#4E5157` hairline that used to complete that signature is gone by
-/// design — a card is a surface and a stroke means the surface floats, and a
-/// content region does not float (see `turbogit_ui::ui::widgets::CardFrame`).
-/// So the card is found by its fill and rounding, and the hairline's ABSENCE
-/// at the card's own edge is asserted below instead of required as a
-/// precondition. Both halves are read off painted output; neither reads a
-/// field of the frame that produced them.
 #[track_caller]
 fn card_rect(h: &Harness<'_, AppState>, point: egui::Pos2) -> egui::Rect {
     let rects = painted_rects(h);
@@ -2077,10 +1656,6 @@ fn card_rect(h: &Harness<'_, AppState>, point: egui::Pos2) -> egui::Rect {
             panic!("no card (a {CARD_FILL:?} fill at CARD_RADIUS) contains {point:?}")
         });
 
-    // The rule the migration installs, asserted on a real screen rather than on
-    // the shared frame: nothing strokes a content region. Scoped to the card's
-    // OWN edge — a checkbox or a focus ring inside the card is a control, not
-    // the region claiming to float.
     for (rect, _, stroke, _) in &rects {
         if stroke.width > 0.0
             && stroke.color != egui::Color32::TRANSPARENT
@@ -2097,10 +1672,6 @@ fn card_rect(h: &Harness<'_, AppState>, point: egui::Pos2) -> egui::Rect {
 
 #[test]
 fn commit_message_controls_sit_inside_one_bordered_card() {
-    // Redesign Phase 1/2: the flat `ui.heading` + `ui.separator` regions get
-    // real containment, so "Commit commits the message above it" is readable
-    // from the frame rather than inferred. The message label and the Amend
-    // option are the region's top and bottom; one card must hold both.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-msg-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -2118,10 +1689,6 @@ fn commit_message_controls_sit_inside_one_bordered_card() {
 
 #[test]
 fn commit_action_row_is_the_commit_card_s_pinned_footer() {
-    // Redesign Phase 2 (mockup): the message editor, its meta row and the
-    // action bar share ONE card, so "Commit commits the message above it" is
-    // readable from containment rather than from adjacency. The action row is
-    // the card's footer — inside the border, below the message controls.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-footer-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -2157,11 +1724,6 @@ fn commit_action_row_is_the_commit_card_s_pinned_footer() {
 
 #[test]
 fn changes_tree_sits_in_a_card_with_its_toolbar_as_the_header() {
-    // Redesign Phase 3 (mockup): the file list gets its own card, and the
-    // toolbar stops being a loose row over the panel — the shared pane header
-    // becomes the card's header strip, so the controls read as "act on this
-    // list" rather than as commit-box chrome. (The card itself paints no
-    // stroke: `card_rect` asserts that at its own edge.)
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "card-changes-a");
     let b = temp_repo(parent.path(), "card-changes-b");
@@ -2173,15 +1735,12 @@ fn changes_tree_sits_in_a_card_with_its_toolbar_as_the_header() {
     let title = changes_title_galley(&h).pos;
     let card = card_rect(&h, title);
 
-    // The tree's rows are inside the same card as its header. Only the
-    // focused repo's rows show ("focus = expand").
     let row = galley_origin(&h, "a.txt").expect("the focused repo's file row paints");
     assert!(
         card.contains(row),
         "the changes tree must sit inside the card {card:?} headed at {title:?}"
     );
 
-    // Every header control is in the card, in the header band above the rows.
     for label in [
         "Expand all groups",
         "Rollback",
@@ -2203,15 +1762,6 @@ fn changes_tree_sits_in_a_card_with_its_toolbar_as_the_header() {
     }
 }
 
-/// The file filter's own painted input frame: the `SURFACE_3` fill that wraps
-/// the search icon and the edit inside it.
-///
-/// Not the label-addressable node, deliberately. `widgets::search_input` returns
-/// the inner `TextEdit`'s `Response`, so `get_by_label("Filter files").rect()` is
-/// the *edit field* — a rectangle inset from the control's own edges by the
-/// frame margin, the stroke and the icon gutter. Asserting "a full row" against
-/// that rect would be measuring the wrong rectangle; the frame is what the user
-/// sees as the control.
 fn filter_frame(h: &Harness<'_, AppState>) -> egui::Rect {
     let edit = h.get_by_label("Filter files").rect();
     let mut frames: Vec<egui::Rect> = filled_rects(h)
@@ -2226,23 +1776,6 @@ fn filter_frame(h: &Harness<'_, AppState>) -> egui::Rect {
         .unwrap_or_else(|| panic!("the filter paints no SURFACE_3 input frame around {edit:?}"))
 }
 
-/// **The file filter has a row of its own, at full height, and is not clipped.**
-///
-/// ADR-0016 keeps `Filter files` inside the changes card (mockup wins over the
-/// execution plan), but the old header could not hold it: the title plus five
-/// icon buttons left it about 24px on the title's row, so it took a second row
-/// *inside the heading*. The squeeze is gone now — the header is one 28pt band,
-/// the count moved into a chip beside the title, and the filter is the card's
-/// first **content** row under the hairline.
-///
-/// Three geometry facts, all measured off paint and the widget tree:
-///
-/// 1. it starts below the header's hairline, so it shares no pixel with the
-///    header band — a row of its own;
-/// 2. it spans the card's whole inner width, so it is a *full* row; and
-/// 3. it is drawn at its own full height — at least the app's 24px click-target
-///    floor, with the painted frame and the laid-out control the same rectangle,
-///    so nothing about it is clipped.
 #[test]
 fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
     let parent = tempfile::tempdir().unwrap();
@@ -2257,15 +1790,11 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
     let row = h.get_by_label("base.txt").rect();
     let frame = filter_frame(&h);
 
-    // Inside the card it filters…
     assert!(
         card.contains_rect(frame),
         "the file filter must sit inside the changes card {card:?}, got {frame:?}"
     );
 
-    // (1) A row of its own: no pixel of the filter is inside the header band.
-    // Asserted first, because it is the claim the whole ticket turns on — a
-    // filter that shares the heading's row is exactly the squeeze that shipped.
     assert!(
         frame.top() >= rule.bottom(),
         "the filter shares no pixel with the header band: it starts below the \
@@ -2274,13 +1803,11 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
         frame.top()
     );
 
-    // …and still above the list it filters.
     assert!(
         frame.bottom() <= row.top() + 1.0,
         "the filter must stay above the list it filters (filter {frame:?}, row {row:?})"
     );
 
-    // (2) A full row: the card's whole inner width, not the heading's leftover.
     let pad = turbogit_ui::theme::PANEL_PADDING;
     let inner_width = card.width() - 2.0 * pad;
     assert!(
@@ -2290,17 +1817,12 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
          something",
         frame.width()
     );
-    // The historical squeeze, kept as a floor: the 340px column must never cost
-    // the filter its own hint text again.
     assert!(
         frame.width() >= 96.0,
         "`Filter files` must stay wide enough to be usable, got {:.1}px ({frame:?})",
         frame.width()
     );
 
-    // (3) Its one row is drawn at full height — at least the app's 24px
-    // click-target floor, and the painted frame *is* the control: a shorter
-    // frame than the widget's own rect would be a clipped row.
     assert!(
         frame.height() >= turbogit_ui::ui::components::CLICK_TARGET_MIN,
         "the filter's row must render at full height (>= {}px), got {:.1}px",
@@ -2316,13 +1838,6 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
 
 #[test]
 fn preview_is_a_card_headered_by_the_path_and_navigation() {
-    // Redesign Phase 4 (mockup): the preview zone is a full-height card whose
-    // header states the previewed file's path alone — no zone title — with
-    // the prev/next navigation beside it, both centred on one band line. The
-    // selection→preview link the empty state used to hide stays; with no
-    // selection the header does not paint at all. Status and mode pills are
-    // deliberately absent: the changelist row already carries the status
-    // letter and the diff toolbar carries the mode.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-preview-repo");
     std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
@@ -2340,7 +1855,6 @@ fn preview_is_a_card_headered_by_the_path_and_navigation() {
         card.contains_rect(path),
         "the previewed path must sit inside the preview card {card:?}, got {path:?}"
     );
-    // The flat zone title is gone: the file's name is the header's whole text.
     assert!(
         galley_origin(&h, "Preview").is_none(),
         "the header must not paint a `Preview` title beside the path"
@@ -2361,7 +1875,6 @@ fn preview_is_a_card_headered_by_the_path_and_navigation() {
         );
     }
 
-    // The header states the file and nothing else.
     assert_not_painted(&h, "Modified");
     assert_not_painted(&h, "Unified diff");
     assert_not_painted(&h, "Side-by-side diff");
@@ -2369,14 +1882,8 @@ fn preview_is_a_card_headered_by_the_path_and_navigation() {
 
 #[test]
 fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
-    // Redesign Phase 5: file rows hang off their repo group but nothing
-    // connected them. One 1px `LINE_SUBTLE` guide now spans exactly the
-    // expanded block — and per risk R3 it sits in the gutter between the
-    // row checkbox and the status letter, never over either.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "guide-repo");
-    // Both tracked then edited, so both land in the focused repo group's one
-    // row block.
     seed_tracked(&repo.path, "base.txt");
     seed_tracked(&repo.path, "other.txt");
 
@@ -2389,8 +1896,6 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
 
     let guides: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
-        // The guide is a 1px-wide LINE_SUBTLE sliver; no other hairline fill in
-        // the tree carries that token.
         .filter(|(_, c)| *c == Palette::LINE_SUBTLE)
         .map(|(r, _)| r)
         .filter(|r| r.width() <= 2.0 && r.height() >= turbogit_ui::theme::FILE_ROW_HEIGHT)
@@ -2405,7 +1910,6 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
             )
         });
 
-    // Clear of the checkbox column, and not so far right it cuts the name.
     for name in ["base.txt", "other.txt"] {
         let checkbox = h.get_by_label(&stage_label_of(name)).rect();
         assert!(
@@ -2418,11 +1922,6 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
     }
 }
 
-// ------------------------------ issue: severity vocabulary (C2) -------------
-
-/// C2: commit-window messages use the shared semantic severity inks — the
-/// surfaced error in STATE_ERROR — via the actual commit consumers, not raw
-/// severity colors.
 #[test]
 fn commit_severity_messages_use_the_shared_semantic_inks() {
     let parent = tempfile::tempdir().unwrap();
@@ -2431,7 +1930,6 @@ fn commit_severity_messages_use_the_shared_semantic_inks() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // The last_error banner is a blocking error.
     h.state_mut().last_error = Some("push failed".into());
     h.run();
     assert_eq!(
@@ -2441,7 +1939,6 @@ fn commit_severity_messages_use_the_shared_semantic_inks() {
     );
 }
 
-/// The ink of the painted galley whose text contains `needle`.
 fn painted_ink_of(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Color32> {
     painted_galleys(h)
         .into_iter()
@@ -2449,11 +1946,6 @@ fn painted_ink_of(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Color
         .map(|g| g.color)
 }
 
-// ------------------------------ issue: shared typography roles (T2) ---------
-
-/// T2: the commit file row's name (and badge letter) render at the shared
-/// body size — the local 12.5px copy is superseded by the shared TYPE_BODY
-/// role so a central type-scale change reaches every filename consumer.
 #[test]
 fn file_row_name_renders_at_the_shared_body_size() {
     let parent = tempfile::tempdir().unwrap();
@@ -2463,7 +1955,6 @@ fn file_row_name_renders_at_the_shared_body_size() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     h.run();
 
-    // The file row is painted; its name galley carries the shared body size.
     let name_size = {
         let mut sizes = Vec::new();
         for clipped in &h.output().shapes {
@@ -2496,24 +1987,10 @@ fn file_row_name_renders_at_the_shared_body_size() {
     );
 }
 
-// ---------------- design system v2, conformance 10: the changes list ---------
-
-/// The changes card's own rect, found through the card's own signature.
-///
-/// [`card_rect`] also asserts the card paints no stroke at its own edge, so
-/// every test below inherits that half of the conformance claim from the
-/// containment lookup rather than restating it.
 fn changes_card(h: &Harness<'_, AppState>) -> egui::Rect {
     card_rect(h, changes_title_galley(h).pos)
 }
 
-/// Every row-shaped filled rect inside `card` — a band is at least as wide as
-/// the list and as tall as a file row, which is what separates it from the
-/// narrow things a row also paints (the 2px rail, the 16px checkbox, the
-/// count chip).
-///
-/// The card's own rect is excluded, so a *nested* card is reported rather
-/// than mistaken for the surface everything else sits on.
 fn row_bands(h: &Harness<'_, AppState>, card: egui::Rect) -> Vec<(egui::Rect, egui::Color32)> {
     filled_rects(h)
         .into_iter()
@@ -2526,11 +2003,6 @@ fn row_bands(h: &Harness<'_, AppState>, card: egui::Rect) -> Vec<(egui::Rect, eg
         .collect()
 }
 
-/// The one row band carrying `fill` that contains `point`.
-///
-/// Position-scoped, because a string — and therefore a band, once two rows
-/// share a state — paints more than once, and "the first band painted" is not
-/// a statement about which row is selected.
 #[track_caller]
 fn band_containing(
     h: &Harness<'_, AppState>,
@@ -2552,16 +2024,6 @@ fn band_containing(
     hits.into_iter().next().expect("one band")
 }
 
-/// **A chosen file row is the row-selected fill plus a 2px accent rail — and
-/// the loudest blue in the app is nowhere else in the list.**
-///
-/// Three claims, in the order they fail. The band's fill is the shared
-/// list-row selection token, read from the row-fill decision rather than
-/// restated as a literal. The rail is [`RAIL_WIDTH`] of [`Palette::BRAND`] at
-/// the band's **own** leading edge, full height — the one rail painter, not a
-/// second bar this view drew for itself. And no band in the list is the
-/// current-ref selection token or the brand fill: a solid brand band behind
-/// running text is the thing this row no longer is.
 #[test]
 fn a_selected_file_row_paints_the_row_selected_fill_and_a_leading_accent_rail() {
     let parent = tempfile::tempdir().unwrap();
@@ -2577,9 +2039,6 @@ fn a_selected_file_row_paints_the_row_selected_fill_and_a_leading_accent_rail() 
     let origin = galley_origin(&h, "base.txt").expect("the selected row paints its name");
     let band = band_containing(&h, card, Palette::ROW_SELECTED, origin);
 
-    // The value, from the construction site: `RowState::RowSelected` is the
-    // one list-row selection fill, and it is neither of the two tokens a
-    // louder row used to take.
     assert_eq!(
         turbogit_ui::ui::components::row_fill(turbogit_ui::ui::components::RowState::RowSelected),
         Palette::ROW_SELECTED,
@@ -2596,7 +2055,6 @@ fn a_selected_file_row_paints_the_row_selected_fill_and_a_leading_accent_rail() 
         "the selected band is exactly one file row tall, got {band:?}"
     );
 
-    // The rail: the shared width, at the band's leading edge, its full height.
     let rails: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(rect, fill)| {
@@ -2623,8 +2081,6 @@ fn a_selected_file_row_paints_the_row_selected_fill_and_a_leading_accent_rail() 
         "the rail spans the chosen row's full height: rail {rail:?} vs band {band:?}"
     );
 
-    // The negative rule, at every band the list paints. The rail is excluded
-    // by the band width, so a brand *band* cannot hide behind it.
     for (rect, fill) in row_bands(&h, card) {
         assert_ne!(
             fill,
@@ -2640,13 +2096,6 @@ fn a_selected_file_row_paints_the_row_selected_fill_and_a_leading_accent_rail() 
     }
 }
 
-/// **A chosen row's text origin is an unchosen row's text origin.** The rail is
-/// paint; reserving its width as padding would shift every row's content the
-/// moment it is selected, and the names would stop lining up down the column.
-///
-/// Both rows are the same status at the repo root, so the only variable is
-/// the selection. The comparison row is hovered so that *its* band is painted
-/// too — an untouched row paints nothing and cannot be located from paint.
 #[test]
 fn a_selected_file_rows_text_origin_equals_an_unselected_rows() {
     let parent = tempfile::tempdir().unwrap();
@@ -2703,20 +2152,11 @@ fn a_selected_file_rows_text_origin_equals_an_unselected_rows() {
     );
 }
 
-/// Every `(text, ink)` pair painted inside one file row, read off that row's
-/// own checkbox node.
-///
-/// The checkbox is the row's fixed 16px leading column, vertically centred in
-/// the 24px row, so the row is the checkbox grown to the row's height and run
-/// out to the list's trailing edge. That rect is the same before and after a
-/// selection — which is exactly what makes the two ink sets comparable.
 fn file_row_inks(
     h: &Harness<'_, AppState>,
     name: &str,
     card: egui::Rect,
 ) -> Vec<(String, [u8; 4])> {
-    // `name` is the repo-relative path, which is what the checkbox's accessible
-    // label carries — not the row's bare file name.
     let checkbox = h.get_by_label(&stage_label_of(name)).rect();
     let grow = (turbogit_ui::theme::FILE_ROW_HEIGHT - checkbox.height()) / 2.0;
     let row = egui::Rect::from_min_max(
@@ -2732,18 +2172,6 @@ fn file_row_inks(
     inks
 }
 
-/// **Choosing a file row changes no ink in it, and the inks it does use are
-/// the ramp's.**
-///
-/// The first claim is the one a selection band used to break: an opaque fill
-/// behind running text tempts a caller to re-ink the text for the new
-/// surface, which is how a selected row ends up reading as a different kind
-/// of thing from an unselected one. The row's ink set is captured before and
-/// after, position-scoped, and compared.
-///
-/// The second is where each ink lands: the **name** — the thing the user came
-/// to read — in `INK`, and the **location suffix** — the furniture around it —
-/// in `INK_3`.
 #[test]
 fn selecting_a_file_row_changes_no_ink_in_it() {
     let parent = tempfile::tempdir().unwrap();
@@ -2801,7 +2229,7 @@ fn selecting_a_file_row_changes_no_ink_in_it() {
 
 /// **A long name wraps: the row grows, and the painted galley grows with it.**
 ///
-/// Asserted from geometry only — laid-out rows, galley extent, band height.
+/// Asserted from geometry only, laid-out rows, galley extent, band height.
 /// `Galley::text()` returns the *unwrapped* input, so a wrap test written
 /// against it reads as though nothing wrapped even when the row grew
 /// correctly; the galley is located by that accessor and never judged by it.
@@ -2839,9 +2267,6 @@ fn a_long_file_name_grows_its_galley_and_its_row() {
          vs short {short_size:?}"
     );
 
-    // Both rows selected, so both bands are painted and each is located by the
-    // name it carries rather than by paint order. The second click has to be a
-    // toggle: a plain one would clear the first row out of the set.
     h.get_by_label(long).click();
     click_with_modifiers(&mut h, "short.rs", egui::Modifiers::COMMAND);
 
@@ -2866,18 +2291,6 @@ fn a_long_file_name_grows_its_galley_and_its_row() {
     );
 }
 
-/// **Group headers sit on the section band, and no group is a nested card.**
-///
-/// Two headers at once — the repo group and the `Merge conflicts` group —
-/// because the claim is about the *shared* header row, and a view that
-/// conforms in one place and not the other has two headers rather than one.
-/// The flat file list deliberately paints none, so two is all the tree has.
-//////
-/// Each band is the section band at the shared group-row height, at
-/// [`CornerRadius::ZERO`] — square, so a group reads as scaffolding on the
-/// card rather than as a smaller card inside it — and spans its own header row.
-/// The separation from the list below is spacing or at most one hairline, and
-/// nothing strokes a group.
 #[test]
 fn group_headers_sit_on_the_section_band_with_no_nested_card() {
     let parent = tempfile::tempdir().unwrap();
@@ -2909,11 +2322,6 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
             "`{label}` paints exactly one section band under itself, found {bands:?}"
         );
         let band = bands[0];
-        // The band itself is square. The focused repo's group additionally
-        // carries the shared row state's translucent focus fill *over* it at
-        // the control radius, which is the row vocabulary answering on top of
-        // the band — so the assertion is on the band shape, and the only other
-        // shape allowed at this geometry is that row state.
         let radii: Vec<(egui::Color32, egui::CornerRadius)> = painted_rects(&h)
             .into_iter()
             .filter(|(rect, fill, _, _)| *rect == band && *fill != Palette::SECTION_BG)
@@ -2948,8 +2356,6 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
         );
     }
 
-    // No group is a card inside the card: the only card-shaped fill inside
-    // the changes card is the changes card.
     let nested: Vec<egui::Rect> = painted_rects(&h)
         .into_iter()
         .filter(|(rect, fill, _, radius)| {
@@ -2965,8 +2371,6 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
         "a group is a band, not a nested card: {nested:?} inside {card:?}"
     );
 
-    // The separation from the list is spacing or at most one hairline, and
-    // nothing strokes it.
     let header = h.get_by_label("Merge conflicts (1)").rect();
     let first_row = h.get_by_label("C conf.txt").rect();
     let gap = first_row.top() - header.bottom();
@@ -2989,13 +2393,6 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
     );
 }
 
-/// **The list reads on the four-step ramp, and never on the dim step.**
-///
-/// `INK_4` is sub-AA on every surface in the palette, so it has no legal
-/// surface at all; a path a user might need to read is `INK_3` at worst. This
-/// asserts the whole card rather than three sampled strings, because the rule
-/// is "no `INK_4` in this list", not "`INK_4` is absent from these three
-/// words" — and it names where each ink that *is* used lands.
 #[test]
 fn the_changes_list_reads_on_the_ink_ramp_and_never_the_dim_step() {
     let parent = tempfile::tempdir().unwrap();
@@ -3008,9 +2405,6 @@ fn the_changes_list_reads_on_the_ink_ramp_and_never_the_dim_step() {
         .to_string_lossy()
         .into_owned();
     seed_tracked(&repo.path, "base.txt");
-    // A nested path as well, so the sweep covers the dim location suffix and
-    // not just the names — the suffix is the other text in this list, and it
-    // is the one a caller is most tempted to sink a step further.
     std::fs::create_dir_all(repo.path.join("src")).unwrap();
     std::fs::write(repo.path.join("src/app.rs"), "fn main() {}\n").unwrap();
     git(&repo.path, &["add", "src/app.rs"]);
@@ -3054,17 +2448,10 @@ fn the_changes_list_reads_on_the_ink_ramp_and_never_the_dim_step() {
     );
 }
 
-/// The body of `fn <name>` in the commit window's source, comments stripped.
-///
-/// Brace-counted rather than regex-matched, so a wrapped signature or a nested
-/// block is read whole; comment-stripped, so a doc comment describing the
-/// opposite of what the body does cannot satisfy a claim about the body.
 fn commit_window_fn_body(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/commit_window.rs");
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
 
-    // Comment stripping, tracking string literals so a `//` inside one is not
-    // mistaken for a comment.
     let mut stripped = String::with_capacity(src.len());
     let chars: Vec<char> = src.chars().collect();
     let (mut i, mut in_line, mut in_block, mut in_string) = (0usize, false, false, false);
@@ -3141,17 +2528,6 @@ fn commit_window_fn_body(name: &str) -> String {
     rest[..end].to_owned()
 }
 
-/// **The changes list reaches its fill and its rail through the shared row
-/// shell, and names neither of the two loud tokens at all.**
-///
-/// The rendered ratchets above can only see the sites a frame happens to
-/// paint, so the negative half of "no list row fills with the selection or
-/// brand token" is pinned here too, at the construction site: the two
-/// functions that paint a file row must not mention [`Palette::SELECTION`] or
-/// [`Palette::BRAND`] at all, must reach the fill through
-/// [`components::row_shell`], and must not call the rail painter directly —
-/// a view that drew its own 2px bar would be a second definition of the rail
-/// the token layer says is written down once.
 #[test]
 fn the_changes_list_reaches_its_fill_and_rail_through_the_shared_row_shell() {
     for name in ["change_row", "conflict_row", "paint_checkbox"] {
@@ -3189,8 +2565,6 @@ fn the_changes_list_reaches_its_fill_and_rail_through_the_shared_row_shell() {
     }
 }
 
-/// Local mirror of the widget-library suite's font lookup, so the heading's
-/// *size* is read from the painted galley rather than trusted.
 fn painted_font<S>(h: &Harness<'_, S>, needle: &str) -> egui::FontId {
     h.output()
         .shapes
@@ -3207,9 +2581,6 @@ fn painted_font<S>(h: &Harness<'_, S>, needle: &str) -> egui::FontId {
         .unwrap_or_else(|| panic!("no painted galley carries {needle:?}"))
 }
 
-// ------------------- design system v2 ticket 11: the commit card -------------
-
-/// The commit card's own rect — the card the message well's heading sits in.
 #[track_caller]
 fn commit_card(h: &Harness<'_, AppState>) -> egui::Rect {
     let heading = galley_origin(h, "Commit message:")
@@ -3217,14 +2588,6 @@ fn commit_card(h: &Harness<'_, AppState>) -> egui::Rect {
     card_rect(h, heading)
 }
 
-/// The message well: the one rect on the card that spans the card's whole inner
-/// row.
-///
-/// Found by its **width**, not by its fill: the well's fill is the thing the
-/// raised-ladder ratchet is about, so a helper that could only find the well by
-/// its correct colour would report "not found" instead of "wrong colour" — a
-/// failure that does not say what is wrong. Amend's box is 16 pt, so only the
-/// well is the full inner width.
 #[track_caller]
 fn message_well(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     let inner = card.width() - 2.0 * turbogit_ui::theme::PANEL_PADDING;
@@ -3242,11 +2605,6 @@ fn message_well(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     hits.into_iter().next().expect("one well")
 }
 
-/// The card's one meta row, as the rect its controls share.
-///
-/// Measured, not computed: "the one control is on its own row" is the claim, and
-/// the claim is that its painted/allocated rectangle agrees, so the row is the
-/// control's own extent.
 #[track_caller]
 fn meta_row(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     let amend = h.get_by_label("Amend").rect();
@@ -3255,8 +2613,6 @@ fn meta_row(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
         "the meta-row control must sit inside the commit card {card:?}, got {amend:?}"
     );
 
-    // …and the row *fits* the column, which is the whole premise of keeping the
-    // width fixed: the control is right-aligned to the card's inner edge.
     let inner = card.width() - 2.0 * turbogit_ui::theme::PANEL_PADDING;
     assert!(
         (amend.right() - (card.left() + turbogit_ui::theme::PANEL_PADDING) - inner).abs() < 1.0,
@@ -3269,13 +2625,6 @@ fn meta_row(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     amend
 }
 
-/// The Commit control's two painted halves, as
-/// `(label half, chevron half, the 1 px rule between them)`.
-///
-/// Read by geometry inside the control's own bounds, which is the only place a
-/// "one control" claim can be made honestly: a separate chevron *button* beside
-/// a brand button looks the same in an accesskit dump and is not the same
-/// control.
 #[track_caller]
 fn commit_control_parts(h: &Harness<'_, AppState>) -> (egui::Rect, egui::Rect, egui::Rect) {
     let label = h.get_by_label("Commit changes").rect();
@@ -3318,13 +2667,6 @@ fn commit_control_parts(h: &Harness<'_, AppState>) -> (egui::Rect, egui::Rect, e
     (brand[0], brand[1], rule[0])
 }
 
-/// The file list's own card, found as the card *below* `card` in the same
-/// column.
-///
-/// Deliberately not [`changes_card`], which finds the list by its `CHANGES`
-/// heading: a well that has eaten the list pushes that heading off the screen,
-/// and the failure worth reporting is "the list has no room left", not "the
-/// heading is something else".
 #[track_caller]
 fn changes_card_above(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     let mut above: Vec<egui::Rect> = painted_rects(h)
@@ -3350,15 +2692,6 @@ fn changes_card_above(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect
     above.remove(0)
 }
 
-/// The commit window's left column: the fixed [`COMMIT_PANEL_WIDTH`]-wide pane
-/// both cards live in.
-///
-/// Its *bottom* is the one edge the list runs out of, and it is read from the
-/// shell's own left rail rather than from a hard-coded window height: the
-/// sidebar is the sibling region of the same work area, so its bottom edge is
-/// the work area's bottom edge, which is exactly the bottom of the rect
-/// `two_zone` hands the commit column. A number typed in here would be a number
-/// about this harness, not about the layout.
 #[track_caller]
 fn commit_column_bottom(h: &Harness<'_, AppState>) -> f32 {
     let bottoms: Vec<f32> = filled_rects(h)
@@ -3378,13 +2711,6 @@ fn commit_column_bottom(h: &Harness<'_, AppState>) -> f32 {
 
 const COMMIT_PANEL_WIDTH: f32 = turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
 
-/// **The card is a well, ONE meta row, and ONE Commit control — and the well
-/// and the Commit control are on different rows from the meta row and from each
-/// other.**
-///
-/// The card's controls have to be *present* and *stacked*; the Commit control
-/// has to be *below* them. The stacking is the ratchet, and it is checked by
-/// geometry rather than by reading which function drew what.
 #[test]
 fn the_commit_card_is_a_well_one_meta_row_and_one_commit_control() {
     let parent = tempfile::tempdir().unwrap();
@@ -3402,7 +2728,6 @@ fn the_commit_card_is_a_well_one_meta_row_and_one_commit_control() {
     let commit = h.get_by_label("Commit changes").rect();
     let chevron = h.get_by_label("Commit split options").rect();
 
-    // The three parts stack in the card's own order: well, meta row, action.
     assert!(
         card.contains(egui::pos2(well.left(), well.top())),
         "the well must be inside the commit card {card:?}, got {well:?}"
@@ -3423,8 +2748,6 @@ fn the_commit_card_is_a_well_one_meta_row_and_one_commit_control() {
          {chevron:?} in {card:?}"
     );
 
-    // The card's width is the column's width, and the column's width is the
-    // number the ticket refuses to move.
     assert!(
         (card.width() - COMMIT_PANEL_WIDTH).abs() < 0.5,
         "the commit card fills the fixed {COMMIT_PANEL_WIDTH}-wide column, got {:.1}",
@@ -3432,20 +2755,6 @@ fn the_commit_card_is_a_well_one_meta_row_and_one_commit_control() {
     );
 }
 
-/// **The chevron paints INSIDE the Commit button, across one 1 px rule, and the
-/// button is content-width.**
-///
-/// Three claims, each with its own failure:
-///
-/// - **Inside.** The two brand fills are the button's two halves and the single
-///   1 px stroke sits exactly between them — a 1 pt gap, one rule wide. A
-///   separate chevron button is a gap with no rule in it, and that is the
-///   "two carets" reading this replaced.
-/// - **Not around.** The rule is the *only* stroke on the control, so the button
-///   is not bordered.
-/// - **Content-width.** The control is sized by its own label and the chevron's
-///   own square, and is a fraction of the row it sits in. A full-width brand bar
-///   would be a different control wearing Commit's label.
 #[test]
 fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
     let parent = tempfile::tempdir().unwrap();
@@ -3460,7 +2769,6 @@ fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
     let card = commit_card(&h);
     let (left, right, rule) = commit_control_parts(&h);
 
-    // The two halves meet the rule: no gap on either side of it.
     assert_eq!(
         left.right(),
         rule.left(),
@@ -3485,7 +2793,6 @@ fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
          shape split rather than as two of different sizes: {rule:?} vs {left:?}"
     );
 
-    // Both halves carry the brand fill: one brand run, no second fill elsewhere.
     assert_eq!(left.height(), right.height());
     assert!(
         (left.height() - 32.0).abs() < 0.5,
@@ -3493,7 +2800,6 @@ fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
         left.height()
     );
 
-    // Content-width: measured against the row it sits in, not against a guess.
     let inner = card.width() - 2.0 * turbogit_ui::theme::PANEL_PADDING;
     let total = right.right() - left.left();
     assert!(
@@ -3504,7 +2810,6 @@ fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
          ticket said it would keep.",
         total
     );
-    // And the two secondary actions still sit to its right on the same row.
     let commit = h.get_by_label("Commit changes").rect();
     for label in ["Shelve\u{2026}", "Stash\u{2026}"] {
         let r = h.get_by_label(label).rect();
@@ -3519,12 +2824,6 @@ fn the_commit_control_is_one_content_width_split_button_with_a_single_rule() {
     }
 }
 
-/// **The menu still opens — from the chevron half.**
-///
-/// The pitfall this guards is reading "one Commit button with a chevron inside"
-/// as "delete the split menu". The chevron half is inside the control's bounds
-/// and carries its own accessible name, and pressing it opens the alternatives
-/// menu, and picking from that menu still commits.
 #[test]
 fn the_alternatives_menu_still_opens_from_the_chevron_half() {
     let parent = tempfile::tempdir().unwrap();
@@ -3537,7 +2836,6 @@ fn the_alternatives_menu_still_opens_from_the_chevron_half() {
     h.state_mut().ui.commit_message = "menu subject".into();
     h.run();
 
-    // The chevron half is the control's right half — not a button beside it.
     let label = h.get_by_label("Commit changes").rect();
     let chevron = h.get_by_label("Commit split options").rect();
     assert!(
@@ -3551,7 +2849,6 @@ fn the_alternatives_menu_still_opens_from_the_chevron_half() {
          different sizes: {chevron:?} vs {label:?}"
     );
 
-    // …and pressing it opens the menu, whose first item commits and pushes.
     open_commit_split_dropdown(&h);
     h.run();
     h.get_by_label("Commit and Push...").click();
@@ -3570,14 +2867,6 @@ fn the_alternatives_menu_still_opens_from_the_chevron_half() {
     assert_eq!(h.state().ui.dialog, Some(Dialog::Push));
 }
 
-/// **The well renders at about 76 pt AND the file list beside it still shows
-/// multiple rows — measured together.**
-///
-/// Neither number is a useful ratchet alone: a 76 pt well next to a one-row list
-/// is a failure, and a 600 pt well next to a generous list passes the first
-/// assertion. So this asserts the well's height *and* the height the list keeps
-/// after it, from the column's own clip rect rather than from a hard-coded
-/// window height.
 #[test]
 fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
     let parent = tempfile::tempdir().unwrap();
@@ -3599,8 +2888,6 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
         well.height()
     );
 
-    // What is left of the column for the list, from the top of the list card to
-    // the bottom of the column the list is clipped to.
     let remaining = column_bottom - changes.top();
     assert!(
         remaining >= 3.0 * turbogit_ui::theme::FILE_ROW_HEIGHT,
@@ -3611,9 +2898,6 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
         remaining
     );
 
-    // …and the rows are actually painted and actually *inside* the clip rect, so
-    // "shows multiple rows" is about what is on screen rather than about what
-    // was laid out past the bottom.
     let names = ["base.txt", "added.txt", "untracked.txt"];
     for name in names {
         let g = painted_galleys(&h)
@@ -3636,15 +2920,6 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
     }
 }
 
-/// **The well and Amend all paint the raised-on-CARD fill, and none of
-/// them paints the raised-on-background fill.**
-///
-/// The commit card is a content-surface card, so every control raised on it has
-/// to take the *second* rung of the ladder. `RAISED` is 1.1:1 against this card
-/// and is the rung for controls on the app or a panel background; a control
-/// painted in it is a grey shape the eye cannot find. Asserting the exact
-/// token (and naming the wrong one) is what makes the mutation — one word,
-/// `RAISED_ON_CARD` to `RAISED` — a failure rather than a comment.
 #[test]
 fn the_well_and_amend_paint_the_raised_on_card_fill() {
     let parent = tempfile::tempdir().unwrap();
@@ -3684,20 +2959,9 @@ fn the_well_and_amend_paint_the_raised_on_card_fill() {
         );
     }
 
-    // The two rungs are different values, so the assertion above is not
-    // satisfied by naming the wrong one.
     assert_ne!(Palette::RAISED, Palette::RAISED_ON_CARD);
 }
 
-/// **The Commit control is the only brand-filled control on the card.**
-///
-/// Scanned as *fills*, not as galley inks: a galley is laid out in white and
-/// inked at paint time, so an ink-based scan would either read white for
-/// everything or need the paint-time override rule. The scan walks every filled
-/// rect on the card and requires every brand one to belong to the Commit
-/// control's bounds — which is the form the claim takes: not "one brand rect"
-/// (the control legitimately paints two halves) but "no brand fill outside the
-/// one control".
 #[test]
 fn the_commit_control_is_the_only_brand_filled_control_on_the_card() {
     let parent = tempfile::tempdir().unwrap();
@@ -3740,12 +3004,6 @@ fn the_commit_control_is_the_only_brand_filled_control_on_the_card() {
     );
 }
 
-/// **A typed message is still editable, and committing still dispatches exactly
-/// as before.**
-///
-/// The card was rebuilt around the well and its meta row, so the two things
-/// that make it a commit form rather than a picture have to be re-asserted: the
-/// well takes keystrokes, and the Commit control still runs the same commit.
 #[test]
 fn a_typed_message_is_editable_and_commits() {
     let parent = tempfile::tempdir().unwrap();
@@ -3756,7 +3014,6 @@ fn a_typed_message_is_editable_and_commits() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
 
-    // The well is a text field, and it takes the typing.
     h.get_by_label("Commit message").focus();
     h.get_by_label("Commit message")
         .type_text("typed from the harness");
@@ -3767,7 +3024,6 @@ fn a_typed_message_is_editable_and_commits() {
         "the message well must still be editable"
     );
 
-    // And Commit still dispatches.
     commit_action_button(&h).click();
     h.run();
     assert!(
@@ -3782,14 +3038,6 @@ fn a_typed_message_is_editable_and_commits() {
     );
 }
 
-/// **The preview card paints one `+N −M` pair, and it is the file's true
-/// count.**
-///
-/// Ticket 12 put the counts on the diff pane, and the header used to keep a
-/// second copy as its "identity row" restatement. The header no longer
-/// restates: the card's one pair paints on the diff toolbar, read from the same
-/// display model the rows are paged from, so a second copy could only ever be a
-/// stale one.
 #[test]
 fn the_preview_card_paints_one_change_size_pair() {
     let parent = tempfile::tempdir().unwrap();
@@ -3813,8 +3061,6 @@ fn the_preview_card_paints_one_change_size_pair() {
         painted_text(&h)
     );
 
-    // The card holds exactly one `+N` / `−M` pair — the toolbar's — and it is
-    // the file's own count.
     let card = card_rect(&h, h.get_by_label("Previewing base.txt").rect().center());
     let pairs: Vec<(String, egui::Rect)> = painted_galleys(&h)
         .into_iter()
@@ -3849,11 +3095,6 @@ fn the_preview_card_paints_one_change_size_pair() {
     );
 }
 
-// --- the commit options menu (no-verify, one-shot) -----------------------------
-
-/// A repo whose `pre-commit` hook fails, so only a `--no-verify` commit lands.
-/// The hook is the assertion's teeth: a dispatch that lost the toggle hangs
-/// the repository at one commit and the wait below times out.
 fn hooked_repo(parent: &Path, name: &str) -> Repo {
     let repo = temp_repo(parent, name);
     let hook = repo.path.join(".git").join("hooks").join("pre-commit");
@@ -3877,8 +3118,6 @@ fn commit_options_toggle_skips_hooks_and_unchecks_after_the_commit() {
     h.state_mut().ui.commit_message = "no-verify subject".into();
     h.run();
 
-    // The card's options menu carries the toggle; checking it arms the next
-    // commit only.
     h.get_by_label("Commit card options").click();
     h.run();
     h.get_by_label("Do not run git commit hooks").click();
@@ -3905,10 +3144,6 @@ fn commit_options_toggle_skips_hooks_and_unchecks_after_the_commit() {
     );
 }
 
-// --- the commit checklist: one message across several repos -------------------
-
-/// A repo with staged content is a commit target with no separate gesture: the
-/// checklist lists the staged repos and starts every one checked.
 #[test]
 fn a_staged_repo_is_a_commit_target_by_default() {
     let parent = tempfile::tempdir().unwrap();
@@ -3940,9 +3175,6 @@ fn a_staged_repo_is_a_commit_target_by_default() {
     );
 }
 
-/// The options kebab carries the multi-repo entry — the only route to the
-/// checklist now that the split menu's cascade item is gone — and opening it
-/// lists exactly the repos that hold staged content.
 #[test]
 fn commit_options_kebab_offers_the_multi_repo_checklist() {
     let parent = tempfile::tempdir().unwrap();
@@ -3957,10 +3189,6 @@ fn commit_options_kebab_offers_the_multi_repo_checklist() {
     h.run();
     assert_painted(&h, "Commit on multiple repos");
 
-    // The checklist is a submenu. Counting the repo names before and after
-    // opening it isolates the rows it adds from the sidebar's own repo labels
-    // (which spell the same names): one row for the repo with staged content,
-    // and none for the clean one.
     let staged_before = h.get_all_by_label("checklist-staged").count();
     let clean_before = h.get_all_by_label("checklist-clean").count();
     // The submenu trigger's accessible label carries egui's `⏵` arrow, so it is
@@ -3979,8 +3207,6 @@ fn commit_options_kebab_offers_the_multi_repo_checklist() {
     );
 }
 
-/// The primary Commit button fans out over every staged repo — all checked by
-/// default — with the one message from the well.
 #[test]
 fn primary_commit_commits_every_staged_repo_with_the_same_message() {
     let parent = tempfile::tempdir().unwrap();
@@ -3990,8 +3216,6 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
     seed_tracked(&b.path, "b.txt");
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-    // Stage in the focused repo, then expand the collapsed sibling and stage
-    // its file too. Both are targets by default: nothing was unchecked.
     stage_through_checkbox(&mut h, &a.path, "a.txt");
     h.get_by_label("Toggle multi-b").click();
     h.run();
@@ -4010,9 +3234,6 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
     h.state_mut().ui.commit_message = "multi subject".into();
     h.run();
     commit_action_button(&h).click();
-    // The fan-out opens the live monitor, whose spinner repaints forever, so
-    // settle with fixed steps — `run` panics on a UI that never goes idle — and
-    // let the worker pool land the commits while we poll git.
     h.step();
     h.step();
 
@@ -4032,8 +3253,6 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
     );
 }
 
-/// Unchecking a repo takes it out of the commit: the checklist is
-/// authoritative, and an unchecked repo does not fall back in.
 #[test]
 fn unchecking_the_repo_keeps_it_out_of_the_commit() {
     let parent = tempfile::tempdir().unwrap();
@@ -4042,7 +3261,6 @@ fn unchecking_the_repo_keeps_it_out_of_the_commit() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
-    // Clear the only staged repo's box: there is nothing left to commit.
     let id = RootId(repo.path.clone().into());
     h.state_mut().ui.commit_repo_unchecks.insert(id);
     h.state_mut().ui.commit_message = "unchecked subject".into();
@@ -4052,7 +3270,6 @@ fn unchecking_the_repo_keeps_it_out_of_the_commit() {
         "the only staged repo is unchecked, so there are no fan-out targets"
     );
 
-    // The Commit control is disabled with no target; a click must not dispatch.
     commit_action_button(&h).click();
     h.run();
     assert!(
@@ -4062,9 +3279,6 @@ fn unchecking_the_repo_keeps_it_out_of_the_commit() {
     );
 }
 
-/// Toggling a repo's box in the checklist keeps the submenu open — the box is
-/// still addressable after the click, and the repo is now an explicit uncheck
-/// that drops it from the commit targets.
 #[test]
 fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
     let parent = tempfile::tempdir().unwrap();
@@ -4084,15 +3298,10 @@ fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
     h.get_by_label_contains("Commit on multiple repos").click();
     h.run();
 
-    // The menu row is the only checkbox wearing the bare repo-name label (the
-    // sidebar's own entry is a button, its box labelled "Select repo ..."), so
-    // the role+label query resolves it uniquely.
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle")
         .click();
     h.run();
 
-    // The box is still in the tree after the click: a menu that had closed
-    // would drop it, and this query would panic instead of returning.
     let _still_open = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle");
     assert!(
         h.state().ui.commit_repo_unchecks.contains(&id),

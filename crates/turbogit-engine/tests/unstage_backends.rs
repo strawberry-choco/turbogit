@@ -1,16 +1,3 @@
-//! Whole-file unstage across both backends — real-git integration tests.
-//!
-//! The per-file checkbox un-stages through `GitExecutor::unstage`, so the call
-//! has to behave the same whichever backend answers it. These drive
-//! [`CliExecutor`] and [`Git2Executor`] against temporary repositories and
-//! assert end state through git itself (`status --porcelain`,
-//! `diff --cached --name-only`) — never through internal representations.
-//!
-//! The case that matters most is the unborn HEAD: a repository nobody has
-//! committed in yet has no HEAD for `restore --staged` to reset against, and
-//! BOTH backends failed the call outright before each learned to drop the
-//! index entries instead.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -23,12 +10,9 @@ use turbogit_engine::git2_exec::Git2Executor;
 
 struct Repo {
     path: PathBuf,
-    /// Keeps the temp directory alive for the duration of the test.
     _dir: TempDir,
 }
 
-/// An initialized repository with repo-local user config so commits work
-/// headlessly, and NO commits yet. The caller keeps `Repo` alive.
 fn empty_repo(name: &str) -> Repo {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(name);
@@ -39,7 +23,6 @@ fn empty_repo(name: &str) -> Repo {
     Repo { path, _dir: dir }
 }
 
-/// The same, plus one base commit so there is a HEAD to reset against.
 fn repo_with_commit(name: &str) -> Repo {
     let repo = empty_repo(name);
     std::fs::write(repo.path.join("base.txt"), "base\n").unwrap();
@@ -58,7 +41,6 @@ fn libgit2() -> Git2Executor {
     Git2Executor::new(cli())
 }
 
-/// Porcelain lines for the repository, so a test reads the same shape git does.
 fn porcelain(repo: &Repo) -> Vec<String> {
     git(&repo.path, &["status", "--porcelain"])
         .lines()
@@ -66,7 +48,6 @@ fn porcelain(repo: &Repo) -> Vec<String> {
         .collect()
 }
 
-/// Paths staged in the index, which is what un-staging is supposed to empty.
 fn staged_paths(repo: &Repo) -> Vec<String> {
     git(&repo.path, &["diff", "--cached", "--name-only"])
         .lines()
@@ -77,8 +58,6 @@ fn staged_paths(repo: &Repo) -> Vec<String> {
 fn write(repo: &Repo, name: &str, body: &str) {
     std::fs::write(repo.path.join(name), body).unwrap();
 }
-
-// ------------------------------------------------------------ unborn HEAD --
 
 #[test]
 fn unstage_in_a_repository_with_no_commits_succeeds_on_libgit2() {
@@ -105,9 +84,6 @@ fn unstage_in_a_repository_with_no_commits_succeeds_on_the_cli() {
     assert!(staged_paths(&repo).is_empty(), "index should be empty");
 }
 
-/// The observable point of the unborn case: un-staging a newly added file
-/// returns it to untracked, so the file is still there rather than vanishing
-/// or becoming an empty diff.
 #[test]
 fn unstage_returns_a_newly_added_file_to_untracked_on_an_unborn_head() {
     let repo = empty_repo("unborn-untracked");
@@ -134,8 +110,6 @@ fn unstage_returns_a_newly_added_file_to_untracked_on_an_unborn_head() {
     );
 }
 
-/// Un-staging everything on an unborn HEAD has to work too, and has to leave
-/// the files themselves alone.
 #[test]
 fn unstage_everything_on_an_unborn_head_empties_the_index_on_libgit2() {
     let repo = empty_repo("unborn-everything");
@@ -163,8 +137,6 @@ fn unstage_everything_on_an_unborn_head_empties_the_index_on_the_cli() {
     assert_eq!(porcelain(&repo), vec!["?? one.txt", "?? two.txt"]);
 }
 
-/// The unborn case is the one the checkbox depends on, and it is the one both
-/// backends used to get wrong, so pin that they now agree on it.
 #[test]
 fn unstage_of_a_newly_added_file_agrees_across_backends_on_an_unborn_head() {
     let for_libgit2 = empty_repo("unborn-parity-libgit2");
@@ -185,10 +157,6 @@ fn unstage_of_a_newly_added_file_agrees_across_backends_on_an_unborn_head() {
     assert_eq!(porcelain(&for_libgit2), vec!["?? added.txt"]);
 }
 
-// ------------------------------------------------------- committed branch --
-
-/// The ordinary case must survive the change: a modified file un-stages back
-/// to unstaged-modified on both backends.
 #[test]
 fn unstage_a_modified_file_returns_it_to_unstaged_on_libgit2() {
     let repo = repo_with_commit("committed-unstage");
@@ -207,8 +175,6 @@ fn unstage_a_modified_file_returns_it_to_unstaged_on_libgit2() {
     );
 }
 
-/// Both backends have to agree, since the checkbox cannot know which one is
-/// configured underneath it.
 #[test]
 fn unstage_of_a_modified_file_agrees_across_backends() {
     let for_libgit2 = repo_with_commit("parity-libgit2");
@@ -229,8 +195,6 @@ fn unstage_of_a_modified_file_agrees_across_backends() {
     assert_eq!(porcelain(&for_libgit2), vec![" M base.txt"]);
 }
 
-/// A deleted file is un-staged back to a staged-free deletion, which is a
-/// different index operation from adding a path.
 #[test]
 fn unstage_of_a_deletion_on_libgit2_leaves_the_deletion_in_the_worktree() {
     let repo = repo_with_commit("committed-deletion");
@@ -246,11 +210,6 @@ fn unstage_of_a_deletion_on_libgit2_leaves_the_deletion_in_the_worktree() {
     assert_eq!(porcelain(&repo), vec![" D base.txt"]);
 }
 
-// -------------------------------------------------------- call recording --
-
-/// Un-staging used to be invisible to both call recorders, so no suite could
-/// see a checkbox un-stage anything. Both now report the paths — and the
-/// recording wrapper still forwards, so this runs against a real repository.
 #[test]
 fn the_recording_executor_reports_an_unstage() {
     let repo = repo_with_commit("recorder-unstage");

@@ -1,8 +1,3 @@
-//! Issue #26 — Settings, Git page: the git-executable row shows a live
-//! version badge. `resolve_git_version` is the seam: it runs the resolved
-//! `<git> --version` (settings override, else PATH) and reports the parsed
-//! version, or an error when the executable cannot be run.
-
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::resolve_git_version;
 

@@ -1,32 +1,3 @@
-//! The status bar's **per-root in-flight
-//! operation item** and its Abort / Continue / Skip verbs.
-//!
-//! The reference announces an in-flight operation in the status bar, one
-//! announcement per root, and puts the recovery verbs there — the doc is
-//! explicit that you may "click in the status bar", and that the same verbs
-//! stay reachable from a menu when the notification has been dismissed.
-//!
-//! Seams under test:
-//!
-//! 1. `LifecycleVerb::offered_for` — the state machine, pure. `Skip` belongs to
-//!    a rebase and to nothing else; a table that handed every verb to every
-//!    operation would be decoration, not a model.
-//! 2. The **status bar** through the real shell over two real repositories —
-//!    `painted_text` scoped to the bar's own band, because operation words paint
-//!    in the toolbar, the popup and the conflict resolver too.
-//! 3. `filled_rects` scoped to the same band — the destructive verb must be a
-//!    distinguishable control, not one of three identical ones.
-//! 4. `status_inflight::target_for` — the menu route's root resolution, which is
-//!    where a multi-root client either names a root or picks a arbitrary one.
-//! 5. One end-to-end click: a real conflicted merge, `Abort` in the bar, and the
-//!    durable activity record that follows. The transient toast is not the
-//!    record, and the record only exists because `OpKind` grew
-//!    a settlement arm.
-//!
-//! Per-root-ness is the requirement, not a nicety: a single global "operation in
-//! flight" flag would make this whole suite pass while shipping the wrong thing,
-//! so the idle sibling root is asserted silent in every painted case.
-
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, Rect, Vec2};
@@ -45,9 +16,6 @@ use turbogit_ui::ui::shell::STATUS_BAR_HEIGHT;
 use turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
 use turbogit_ui::ui::status_inflight::{InFlight, items_via, target_for};
 
-/// The fill painted for one control: the filled rect the frame drew AT the
-/// control's own allocated rect, matched by centre and size rather than by
-/// position in the shape list.
 #[track_caller]
 fn fill_of(harness: &Harness<'_, AppState>, rect: Rect) -> Color32 {
     filled_rects(harness)
@@ -61,9 +29,6 @@ fn fill_of(harness: &Harness<'_, AppState>, rect: Rect) -> Color32 {
         .1
 }
 
-/// The band's own node for one verb label: the button wearing that label whose
-/// centre lands inside the status bar, so a toolbar or popup control of the same
-/// name can never be what the measurement aimed at.
 #[track_caller]
 fn band_button(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let band = status_band();
@@ -76,19 +41,12 @@ fn band_button(harness: &Harness<'_, AppState>, label: &str) -> Rect {
         .rect()
 }
 
-// ------------------------------------------------------------------- fixtures --
-
 struct Project {
     _tmp: TempDir,
     project: PathBuf,
     alpha: PathBuf,
     beta: PathBuf,
 }
-
-// Every call is pinned per call through the fixture crate's runner: a headless
-// machine has no global identity to borrow. The runner this replaced also set
-// `GIT_EDITOR=true`, and none of the fixture's own calls open an editor — each
-// commit carries its message on the command line.
 
 /// `git` that may fail: a conflicting merge is the point, and git exits non-zero
 /// exactly because it stopped mid-operation. It keeps its own runner because the
@@ -166,14 +124,10 @@ fn merge_conflict_in_flight(repo: &Path) {
     );
 }
 
-// -------------------------------------------------------------------- harness --
-
 fn window_size() -> Vec2 {
     egui::vec2(1280.0 + SIDEBAR_WIDTH, 800.0)
 }
 
-/// The bar's own band, with the same 8 px of slack a vertically-centred label's
-/// origin needs above a 24 px panel.
 fn status_band() -> Rect {
     let height = window_size().y;
     Rect::from_min_max(
@@ -182,9 +136,6 @@ fn status_band() -> Rect {
     )
 }
 
-/// The shell over both roots with the status bar region on. `for_roots` builds
-/// the headless shell with it hidden, and an announcement nobody can see is not
-/// an announcement.
 fn shell(p: &Project) -> Harness<'static, AppState> {
     let state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
         .with_settings(VcsSettings::default());
@@ -195,7 +146,6 @@ fn shell(p: &Project) -> Harness<'static, AppState> {
     harness
 }
 
-/// Every string painted inside the status bar's band.
 fn band_text(harness: &Harness<'_, AppState>) -> Vec<String> {
     let band = status_band();
     painted_galleys(harness)
@@ -223,9 +173,6 @@ fn assert_band_hides(harness: &Harness<'_, AppState>, needle: &str) {
     );
 }
 
-/// Click the button labelled `label` whose centre is inside the status bar's own
-/// band — the only way to aim at the bar's control rather than a toolbar or
-/// popup control wearing the same word.
 #[track_caller]
 fn click_in_band(harness: &mut Harness<'_, AppState>, label: &str) {
     let band = status_band();
@@ -239,11 +186,6 @@ fn click_in_band(harness: &mut Harness<'_, AppState>, label: &str) {
     harness.step();
 }
 
-// ------------------------------------------------------- the verb state machine --
-
-/// `Skip` is a rebase resolution and nothing else. The reference names the action
-/// `Git.Rebase.Skip` with the label `Skip Commit`; merges and cherry-picks get
-/// Abort and Continue only.
 #[test]
 fn skip_is_offered_for_a_rebase_and_for_no_other_operation() {
     assert_eq!(
@@ -270,10 +212,6 @@ fn skip_is_offered_for_a_rebase_and_for_no_other_operation() {
     }
 }
 
-// ------------------------------------------------------------- the announcement --
-
-/// Verification 1: a rebase paused in root A paints the in-flight item naming
-/// root A with all three verbs, and root B's status region paints nothing.
 #[test]
 fn a_rebase_in_flight_announces_its_root_and_offers_all_three_verbs() {
     let p = project();
@@ -285,7 +223,6 @@ fn a_rebase_in_flight_announces_its_root_and_offers_all_three_verbs() {
     assert_band_shows(&h, "Continue");
     assert_band_shows(&h, "Skip");
 
-    // The sibling is silent: per-root scoping is the requirement.
     assert_band_hides(&h, "Rebasing in beta");
     for text in band_text(&h) {
         assert!(
@@ -295,8 +232,6 @@ fn a_rebase_in_flight_announces_its_root_and_offers_all_three_verbs() {
     }
 }
 
-/// Verification 2: a cherry-pick offers Abort and Continue and does NOT offer
-/// Skip — asserted as an absence inside the bar's band.
 #[test]
 fn a_cherry_pick_announces_abort_and_continue_but_never_skip() {
     let p = project();
@@ -310,7 +245,6 @@ fn a_cherry_pick_announces_abort_and_continue_but_never_skip() {
     assert_band_hides(&h, "Cherry-picking in beta");
 }
 
-/// A merge announces the same two verbs, and no third.
 #[test]
 fn a_merge_in_flight_is_announced_with_two_verbs() {
     let p = project();
@@ -323,9 +257,6 @@ fn a_merge_in_flight_is_announced_with_two_verbs() {
     assert_band_hides(&h, "Skip");
 }
 
-/// Verification 3: three distinct rects with distinct fills, the destructive one
-/// separated from its two partners. Three same-coloured controls would make the
-/// one that throws the whole rebase away indistinguishable.
 #[test]
 fn the_three_verbs_are_distinct_controls_and_abort_is_separated_from_both() {
     let p = project();
@@ -352,14 +283,9 @@ fn the_three_verbs_are_distinct_controls_and_abort_is_separated_from_both() {
         "three same-coloured controls in a status bar make the destructive one \
          indistinguishable — the hazard the spec records for the reference"
     );
-    // And which way the distinctness goes: the destructive verb wears the danger
-    // tone, the forward-going one wears the accent, the third a plain raised
-    // control. The token layer owns those values; the bar only picks roles.
     assert_eq!(abort_fill, Palette::SURFACE_INFLIGHT_ABORT);
     assert_eq!(continue_fill, Palette::ACCENT);
 
-    // Abort is separated from both partners by the named air, and the two
-    // partners sit closer to each other than either sits to Abort.
     let to_abort = continue_rect.min.x - abort.max.x;
     let to_partner = skip.min.x - continue_rect.max.x;
     assert!(
@@ -373,11 +299,6 @@ fn the_three_verbs_are_distinct_controls_and_abort_is_separated_from_both() {
     );
 }
 
-// ------------------------------------------------------------------ the routes --
-
-/// The menu route exists because the reference's own doc says a dismissed
-/// notification must still leave a way back. The command palette is TurboGit's
-/// menu for verbs; the VCS popup's set is a frozen pin and must not gain one.
 #[test]
 fn all_three_verbs_are_reachable_from_the_palette_and_absent_from_the_frozen_popup() {
     let palette: Vec<&str> = Action::palette_actions()
@@ -399,9 +320,6 @@ fn all_three_verbs_are_reachable_from_the_palette_and_absent_from_the_frozen_pop
     }
 }
 
-/// Two roots can hold operations at once. The menu route names the one it acts
-/// on: the focused root when it holds one that offers the verb, otherwise the
-/// first registered root that does.
 #[test]
 fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     let p = project();
@@ -410,7 +328,6 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     let mut state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
         .with_settings(VcsSettings::default());
 
-    // Focused root wins when it can honour the verb.
     state.selected_root = Some(RootId(p.alpha.clone().into()));
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
@@ -423,8 +340,6 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
         "the focused root answers first"
     );
 
-    // A focused root that cannot honour the verb does not veto it: the search
-    // moves on to the root that can.
     state.selected_root = Some(RootId(p.beta.clone().into()));
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
@@ -438,8 +353,6 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     );
 }
 
-/// Nothing in flight: the route resolves to no root rather than acting on an
-/// arbitrary one.
 #[test]
 fn no_verb_is_resolved_when_no_root_holds_an_operation() {
     let p = project();
@@ -454,9 +367,6 @@ fn no_verb_is_resolved_when_no_root_holds_an_operation() {
     );
 }
 
-/// The per-root facts are one item per holding root, in registration order — the
-/// documented fallback for two simultaneous operations, since the bar is one
-/// 24 px band and cannot stack a row per root.
 #[test]
 fn two_roots_mid_operation_announce_side_by_side_in_registration_order() {
     let p = project();
@@ -480,15 +390,6 @@ fn two_roots_mid_operation_announce_side_by_side_in_registration_order() {
     );
 }
 
-// ------------------------------------------------------- the verb actually runs --
-
-/// The whole channel end to end: a real conflicted merge is announced, `Abort`
-/// in the bar runs `git merge --abort` on THAT root, the announcement goes away
-/// with the marker, and the durable activity record names the verb.
-///
-/// The activity assertion is the one that keeps a status-bar item from becoming
-/// the record: the bar is a live view of git's state, and the feed is what
-/// survives it.
 #[test]
 fn abort_in_the_bar_finishes_the_operation_and_is_recorded_durably() {
     let p = project();
@@ -527,9 +428,6 @@ fn abort_in_the_bar_finishes_the_operation_and_is_recorded_durably() {
     );
 }
 
-/// The dispatch unit carries its identity: an in-flight verb is a named
-/// [`Operation::Resolve`], so settlement matches on `OpKind` and a new verb that
-/// forgot its arm is a compile error rather than a silent `Other`.
 #[test]
 fn an_inflight_verb_dispatches_as_a_named_operation_on_its_own_root() {
     let op = Operation::Resolve {

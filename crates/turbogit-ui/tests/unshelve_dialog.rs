@@ -1,18 +1,3 @@
-//! The **Unshelve dialog**.
-//!
-//! The panes carry the reference's two verbs with their two defaults baked into
-//! their labels; the dialog is the surface that carries the reference's *fields*
-//! (`shelving:182-190`): `Name`, `Comment`, `Set active`, `Track context`,
-//! `Remove successfully applied files from the shelf`. TurboGit has no changelist
-//! model (the programme keeps changelists out of scope), so the fields that map
-//! onto its model — a destination picked from a list, and the remove-after-apply
-//! choice — are implemented, and the ones that do not are recorded as absences
-//! rather than built as inert controls. This suite pins both halves.
-//!
-//! Everything is driven through the production opener (`AppState::open_unshelve_dialog`)
-//! and the real shell, and the consequences are read back from **git** — a stash
-//! list and a working tree, not a mock.
-
 use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
@@ -26,10 +11,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, Shelf};
 use turbogit_ui::ui::popups::{Action, run_action};
 
-// --------------------------------------------------------------- fixtures --
-
-/// An initialised repository with one commit and repo-local identity, so commits
-/// and `git stash push` both work headlessly.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -48,7 +29,6 @@ fn shelf_record(name: &str, root: &Path) -> Shelf {
         changes: Vec::new(),
         created_at: chrono::Utc::now(),
         root: RootId(root.into()),
-        // Every row this dialog lists was shelved through git's stash list.
         source: turbogit_domain::model::ShelfSource::Stash,
     }
 }
@@ -68,10 +48,6 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     harness
 }
 
-/// Select `name` the way a row click in the Commit window does: the canonical,
-/// root-scoped key every real selection is written under. Seeding the bare
-/// repo-relative path instead would have the fixture describe a form nothing
-/// writes, and the mismatch would hide a bug in the reader.
 fn select_in_commit_list(state: &mut AppState, name: &str) {
     let key = state
         .multi
@@ -88,8 +64,6 @@ fn select_in_commit_list(state: &mut AppState, name: &str) {
     state.ui.selected.insert(key);
 }
 
-/// Shelve one real change through the production dialog path, so the shelf record
-/// and the stash entry holding its content both come from a real click.
 fn shelve_one_change(repo: &Path, name: &str) {
     std::fs::write(repo.join("base.txt"), "shelved work\n").unwrap();
     let mut state = app_state(&[repo.to_path_buf()]);
@@ -110,15 +84,8 @@ fn stash_lines(repo: &Path) -> Vec<String> {
         .collect()
 }
 
-// ------------------------------------------------------- assertion helpers --
-
-/// The reference's checkbox, spelled exactly as the doc spells it.
 const REMOVE_FIELD: &str = "Remove successfully applied files from the shelf";
 
-/// `needle` painted as its own galley inside the dialog's list region: below the
-/// `NAME` heading the list sits under, and within the dialog's own width of it.
-/// The sub-tab strip paints `Shelf` and the pane (when its tab is open) paints
-/// row verbs, so an unscoped match would pass on the shell rather than the dialog.
 const DIALOG_FIELD_WINDOW: f32 = 420.0;
 
 fn painted_in_dialog(h: &Harness<'_, AppState>, needle: &str) -> bool {
@@ -128,13 +95,10 @@ fn painted_in_dialog(h: &Harness<'_, AppState>, needle: &str) -> bool {
     })
 }
 
-/// The exact-text galley exists (a label, not a substring of a longer sentence).
 fn painted_exact(h: &Harness<'_, AppState>, text: &str) -> bool {
     painted_galleys(h).iter().any(|g| g.text == text)
 }
 
-/// The fill painted behind a control's label: the smallest filled rect the label's
-/// own origin sits inside — one `kit_button` paints one fill and one galley.
 fn fill_behind(h: &Harness<'_, AppState>, label: &str) -> egui::Color32 {
     let origin = galley_origin(h, label).unwrap_or_else(|| panic!("{label} paints as a label"));
     filled_rects(h)
@@ -145,13 +109,10 @@ fn fill_behind(h: &Harness<'_, AppState>, label: &str) -> egui::Color32 {
         .unwrap_or_else(|| panic!("no filled rect behind {label}"))
 }
 
-/// Open the dialog the way the app's own routes do, on the focused root.
 fn open_dialog(h: &mut Harness<'static, AppState>) {
     h.state_mut().open_unshelve_dialog();
     h.run();
 }
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn the_name_field_lists_this_roots_shelves_and_not_another_roots() {
@@ -182,7 +143,6 @@ fn the_remove_option_is_off_every_time_the_dialog_opens() {
     let repo = temp_repo(parent.path(), "default");
     let mut state = app_state(std::slice::from_ref(&repo));
     state.ui.shelves.push(shelf_record("weather", &repo));
-    // A previous open left the box ticked; the captured default is re-armed, not inherited.
     state.ui.dlg.unshelve_remove = true;
     let mut h = harness(state);
 
@@ -324,8 +284,6 @@ fn the_dialog_applies_to_the_root_it_opened_on_not_the_one_focused_now() {
     let mut h = harness(state);
     open_dialog(&mut h);
 
-    // Focus moves while the dialog is open — the pane's rows follow the focus, the
-    // dialog must not.
     h.state_mut().selected_root = Some(RootId(beta.clone().into()));
     h.run();
 
@@ -361,15 +319,6 @@ fn the_changelist_fields_are_absent_rather_than_inert() {
     let mut h = harness(state);
     open_dialog(&mut h);
 
-    // `Set active`, `Track context` and the `Comment` that describes a destination
-    // changelist are changelist verbs, and the `Name` the reference *types* a destination
-    // into is the same subsystem's; TurboGit has no changelist model, so it ships no
-    // control for them: a ticked box that changes nothing is worse than an absent one.
-    //
-    // Scanned **case-insensitively**, because `group_title` → `micro_header` uppercases
-    // whatever it is handed: a future `COMMENT` or `SET ACTIVE` header would slip past a
-    // compare against the doc's own mixed-case spelling, and the absence check would pass
-    // for the wrong reason — which is worse than not running it.
     let painted: Vec<String> = painted_galleys(&h)
         .into_iter()
         .map(|g| g.text.to_lowercase())
@@ -387,15 +336,6 @@ fn the_changelist_fields_are_absent_rather_than_inert() {
     }
 }
 
-/// The reference's `Name` is a **field**: the changelist to restore into, or the name of a
-/// new one to create. This window has no such destination, so `NAME` caps a *picker* — this
-/// root's shelves, one selectable row each — and no text input of any kind sits under it.
-///
-/// Checked as widget roles, not as painted text: an empty `TextEdit` paints no galley, so
-/// the text scan above cannot see the field this denies. The scan walks the **window's own
-/// subtree** — the shell behind the dialog has a text input (the commit message box) and
-/// lies geometrically under it, so a rect test would fail on the chrome rather than the
-/// window.
 #[test]
 fn the_name_field_caps_a_picker_and_invents_no_destination() {
     let parent = tempfile::tempdir().unwrap();
@@ -420,9 +360,6 @@ fn the_name_field_caps_a_picker_and_invents_no_destination() {
         })
         .expect("the open dialog is a window node titled by the verb it runs");
 
-    // The subtree scan is proven to reach the window's controls before it is trusted to
-    // report an absence: the remove option is one checkbox in there, and a scan that found
-    // nothing at all would pass for the wrong reason.
     let options: Vec<egui::Rect> = window
         .query_all_by_role(egui::accesskit::Role::CheckBox)
         .map(|n| n.rect())
@@ -473,7 +410,6 @@ fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
     state.ui.shelves.push(shelf_record("weather", &repo));
     let mut h = harness(state);
 
-    // The Shelf pane's header action.
     h.get_by_label("Shelf").click();
     h.run();
     h.get_by_label("Unshelve\u{2026}").click();
@@ -484,8 +420,6 @@ fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
         "the pane's own route opens the dialog"
     );
 
-    // And the palette route runs the *same* opener, so neither can arm defaults the
-    // other does not.
     h.state_mut().ui.dialog = None;
     run_action(h.state_mut(), Action::Unshelve);
     assert_eq!(
@@ -503,8 +437,6 @@ fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
         "on the root that was focused when it opened"
     );
 
-    // The command palette is this app's menu route, and the VCS popup's action set
-    // is a frozen pin that must not gain a verb here.
     let palette: Vec<&str> = Action::palette_actions()
         .iter()
         .map(|a| a.label())

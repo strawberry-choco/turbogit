@@ -1,14 +1,3 @@
-//! The diff viewer's two view policies, at the seam the view reads
-//! through: the keyed read answers with a display model, and the policy is decided
-//! before that model is built.
-//!
-//! Nothing here reaches for `git`: the substitutable adapter is handed one canned
-//! patch and the same patch is then rendered under each policy value, so what a
-//! test compares is the *same content* under two policies and never two contents.
-//! That is also the contract the policies live under — the patch value stays
-//! byte-identical (`ADR-0022`), so what partial staging composes cannot drift with
-//! a view setting.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,9 +13,6 @@ fn repo(dir: &Path) -> PathBuf {
     repo_with_one_commit(dir, "work")
 }
 
-/// One file, one hunk, one changed run of `dels` against `adds`, in git's own
-/// shape. Context lines bracket the run so a collapsed run still has a row to
-/// sit between.
 fn patch(dels: &[&str], adds: &[&str]) -> String {
     let mut body = String::from(
         "diff --git a/ws.txt b/ws.txt\nindex 1111111..2222222 100644\n\
@@ -42,7 +28,6 @@ fn patch(dels: &[&str], adds: &[&str]) -> String {
     body
 }
 
-/// The read's answer for `text` under `policies`.
 fn rendered(work: &Path, text: &str, policies: DiffPolicies) -> Arc<DiffValue> {
     let mut fake = FakeExecutor::default();
     fake.diffs.insert(work.to_path_buf(), text.to_string());
@@ -67,9 +52,6 @@ fn rendered(work: &Path, text: &str, policies: DiffPolicies) -> Arc<DiffValue> {
     diff
 }
 
-/// The five whitespace values, on five patches chosen so each one is hidden by
-/// exactly one value and shown by the value below it — a policy where two values
-/// behave alike has one value and five names.
 #[test]
 fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     let tmp = tempfile::tempdir().unwrap();
@@ -79,11 +61,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         ..DiffPolicies::default()
     };
 
-    // Trailing whitespace only: shown by `None`, hidden by `Trim whitespaces`.
-    // The two policies are read here, because a difference the viewer considers
-    // equal stops being a changed row, and a difference it still counts stays
-    // one — so every count below is the owner's own answer,
-    // `diff_model::line_counts`, the function the diff header reads.
     let trailing = patch(&["gamma"], &["gamma  "]);
     assert_eq!(
         line_counts(&rendered(&work, &trailing, at(DiffWhitespace::None)).model),
@@ -95,7 +72,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         "a line that differs only at its end is not a difference"
     );
 
-    // Internal whitespace only: still shown by `Trim`, hidden by `Ignore whitespaces`.
     let internal = patch(&["g amma"], &["gamma"]);
     assert_eq!(
         line_counts(&rendered(&work, &internal, at(DiffWhitespace::TrimWhitespace)).model),
@@ -106,8 +82,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (0, 0)
     );
 
-    // A whole line of nothing added: shown by `Ignore whitespaces` (the line
-    // count differs), hidden one rung up.
     let blank_line = patch(&[], &["  "]);
     assert_eq!(
         line_counts(&rendered(&work, &blank_line, at(DiffWhitespace::IgnoreWhitespace)).model),
@@ -125,8 +99,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (0, 0)
     );
 
-    // One line split into two without touching a non-whitespace character:
-    // shown by `Ignore whitespaces`, hidden one rung up.
     let joined = patch(&["a b c"], &["a", "b c"]);
     assert_eq!(
         line_counts(&rendered(&work, &joined, at(DiffWhitespace::IgnoreWhitespace)).model),
@@ -144,8 +116,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (0, 0)
     );
 
-    // An import dropped from the block: shown by the fourth value, hidden by the
-    // fifth.
     let imports = patch(&["use std::fs;", "use std::io;"], &["use std::io;"]);
     assert_eq!(
         line_counts(
@@ -170,8 +140,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (0, 0)
     );
 
-    // …and the fifth value's own exception: whitespace inside a string literal
-    // stays a difference, which the fourth value throws away with the rest.
     let literal = patch(&["let s = \"a b\";"], &["let s = \"a  b\";"]);
     assert_eq!(
         line_counts(
@@ -197,9 +165,6 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     );
 }
 
-/// A difference the policy considers equal is rendered as the line the change
-/// left behind: one unchanged row carrying the new text, not two changed rows.
-/// The gutter numbers prove it is the same position on both sides.
 #[test]
 fn an_equalized_difference_paints_one_unchanged_line() {
     let tmp = tempfile::tempdir().unwrap();
@@ -242,9 +207,6 @@ fn an_equalized_difference_paints_one_unchanged_line() {
     );
 }
 
-/// The five highlighting values, counted by the runs they leave on a changed
-/// row: none, the whole row, word groups, character groups, and a run split so
-/// that a line the change carries along is not part of any change.
 #[test]
 fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
     let tmp = tempfile::tempdir().unwrap();
@@ -256,7 +218,6 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
     let two_words = patch(&["alpha beta gamma"], &["ALPHA beta GAMMA"]);
     let inner = patch(&["alpha BeTa gamMA"], &["Alpha beta GAMMA"]);
 
-    // None: the row is still a difference, and nothing about it is highlighted.
     let none = rendered(&work, &two_words, at(DiffHighlighting::None));
     let (adds, _) = line_counts(&none.model);
     assert_eq!(adds, 1);
@@ -266,18 +227,14 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
         "the value that removes highlighting entirely"
     );
 
-    // Lines: one band, the whole row. TurboGit's pre-existing rendering.
     assert_eq!(
         highlight_of(&rendered(&work, &two_words, at(DiffHighlighting::Lines)).model),
         Highlight::Row
     );
 
-    // Words: one run per changed word group.
     let words = highlight_of(&rendered(&work, &two_words, at(DiffHighlighting::Words)).model);
     assert_eq!(run_count(&words), 2, "two changed words: {words:?}");
 
-    // Characters: finer than words on a change that only touches letters
-    // inside words.
     let chars = highlight_of(&rendered(&work, &inner, at(DiffHighlighting::Characters)).model);
     let words_inner = highlight_of(&rendered(&work, &inner, at(DiffHighlighting::Words)).model);
     assert!(
@@ -285,7 +242,6 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
         "character granularity cuts inside a word: {chars:?} vs {words_inner:?}"
     );
 
-    // Split changes: the line the run carries along stops being a change.
     let carried = patch(&["alpha", "beta"], &["alpha", "BETA"]);
     let lines = rendered(&work, &carried, at(DiffHighlighting::Lines));
     let split = rendered(&work, &carried, at(DiffHighlighting::SplitChanges));
@@ -301,9 +257,6 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
     );
 }
 
-/// A policy is part of what the read is *keyed* on: asking the same comparison
-/// under another policy must not answer with the model built under the first,
-/// and must not do it by re-reading git every frame.
 #[test]
 fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     let tmp = tempfile::tempdir().unwrap();
@@ -340,8 +293,6 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     };
     assert_eq!(line_counts(&first.model), (1, 1));
 
-    // The other policy is a different key, so it is a different answer — and it
-    // is admitted once, not every frame.
     let (key_trim, second) = ask(&mut state, DiffWhitespace::TrimWhitespace);
     assert_ne!(key_none, key_trim, "the policy is inside the key");
     assert!(
@@ -360,11 +311,6 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     );
 }
 
-/// The two policies are presentation, never data — but they are presentation that
-/// outlives the process. A reviewer who set the ladder before closing the window
-/// is entitled to find the same rows hidden after reopening it, so both values
-/// travel together through `.turbogit/ui.ron` and come back through the launch
-/// path a real restart uses.
 #[test]
 fn both_policies_come_back_from_the_project_on_the_next_launch() {
     let project = tempfile::tempdir().unwrap();
@@ -378,8 +324,6 @@ fn both_policies_come_back_from_the_project_on_the_next_launch() {
     state.ui.diff_policies = set;
     state.save_durable_ui();
 
-    // Written down rather than merely held: a value serde dropped on the floor
-    // would still leave the session correct and the next launch wrong.
     let written =
         std::fs::read_to_string(project.path().join(".turbogit/ui.ron")).expect("ui.ron exists");
     assert!(
@@ -402,10 +346,6 @@ fn both_policies_come_back_from_the_project_on_the_next_launch() {
     );
 }
 
-/// `serde(default)` is what keeps a file written before the two policies existed
-/// loading at all — the same promise the sibling UI-only state makes, pinned the
-/// same way: an old `ui.ron` reads back as the shipped posture instead of failing
-/// the launch.
 #[test]
 fn a_ui_ron_written_before_the_policies_existed_loads_the_shipped_defaults() {
     let project = tempfile::tempdir().unwrap();
@@ -431,7 +371,6 @@ fn a_ui_ron_written_before_the_policies_existed_loads_the_shipped_defaults() {
     );
 }
 
-/// The highlight of the first changed addition row of a model.
 fn highlight_of(model: &turbogit_app::diff_model::DiffModel) -> Highlight {
     for row in &model.display {
         if let DisplayRow::Pair(_, Some(add)) = row {
@@ -454,16 +393,8 @@ fn run_count(h: &Highlight) -> usize {
     }
 }
 
-/// This suite's own source, read at compile time — the ratchet below is a claim
-/// about a function that must not exist in it.
 const DIFF_POLICIES_SRC: &str = include_str!("diff_policies.rs");
 
-/// Contract: the changed-row count is answered by one function,
-/// `turbogit_app::diff_model::line_counts` — the one the production diff header
-/// and the commit-window file row read. This suite used to keep a private copy
-/// of the same walk, so a change to the owner that broke the header would still
-/// have passed every count assertion below. A copy that comes back would restore
-/// exactly that blind spot, and only this scan would say so.
 #[test]
 fn the_policy_suite_reads_the_owners_changed_row_count() {
     assert!(

@@ -1,5 +1,3 @@
-//! Diff rendering: the virtualized entry point plus the unified and
-//! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
     commit_current_hunk, diff_options_button, hunk_gutter_actions, hunk_header_extras, hunk_nav,
     hunk_nav_width,
@@ -22,8 +20,6 @@ use turbogit_app::staged_lines::{self, FileLineSets};
 use turbogit_app::state::{AppState, DiffPane};
 use turbogit_domain::model::{ChangeRef, ChangeStatus, DisplayName, RootId};
 
-// --- staged-ness: the one per-line answer the painters read --------------------
-
 /// The per-line oracle, resolved for the file this pane is previewing.
 ///
 /// Every colour and every word about a row's staged-ness comes from here, and
@@ -42,13 +38,6 @@ struct StagedRows<'a> {
 }
 
 impl<'a> StagedRows<'a> {
-    /// The previewed change's own root holds its changelist entry, and the line
-    /// sets are keyed on git's own spelling of its path.
-    ///
-    /// A ref's path can be **absolute** (an injected preview) while the caches key
-    /// on the repo-relative `b/` side, so the changelist lookup is the one place
-    /// the two spellings meet. A root with no `hunk_stats` entry yet answers
-    /// nothing at all, which is `None` per row rather than a guess.
     fn resolve(state: &'a AppState, change: &Option<ChangeRef>) -> Option<Self> {
         let change = change.as_ref()?;
         let root = state.multi.by_id(&change.root)?;
@@ -60,13 +49,11 @@ impl<'a> StagedRows<'a> {
         })
     }
 
-    /// Whether this row's line is in the index, or has nothing to say about it.
     fn answer(&self, kind: RowKind, old_no: usize, new_no: usize) -> Option<bool> {
         staged_lines::line_is_staged(self.sets, self.path, kind, old_no, new_no)
     }
 }
 
-/// The oracle's answers for the two halves of one display row.
 #[derive(Clone, Copy, Default)]
 struct PairStaging {
     del: Option<bool>,
@@ -83,26 +70,15 @@ impl PairStaging {
     }
 }
 
-/// What the per-line answers say about one hunk as a whole.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HunkStaging {
-    /// Every answered row is staged.
     Staged,
-    /// Every answered row is unstaged.
     Unstaged,
-    /// The hunk holds both states.
     Mixed,
-    /// No row of it was answered: a conflicted path, or a hunk with nothing in it
-    /// that a stage can reach.
     NoAnswer,
 }
 
 impl HunkStaging {
-    /// Take one more row's answer. A `None` contributes nothing, which is safe
-    /// rather than generous: an unanswered *changed* row means the whole path went
-    /// unanswered (a conflict, or a file absent from both appliable patches), and
-    /// there is no shape where one row of a hunk is answered and its neighbour is
-    /// not.
     fn fold(self, answer: Option<bool>) -> Self {
         match (self, answer) {
             (s, None) => s,
@@ -113,12 +89,6 @@ impl HunkStaging {
         }
     }
 
-    /// The hunk header's suffix, and no suffix at all where the oracle said nothing.
-    ///
-    /// This text exists because muting cannot show a mixed hunk: a hunk holding
-    /// both states looks like a hunk holding some quiet rows, and nobody can count
-    /// those at a glance. So the rows go quiet and the header says what the paint
-    /// cannot, spelled `· part`.
     fn suffix(self) -> Option<&'static str> {
         match self {
             Self::Staged => Some("· staged"),
@@ -129,11 +99,6 @@ impl HunkStaging {
     }
 }
 
-/// The band and ink one changed row wears, from the oracle's answer.
-///
-/// Staged is the foreground, so a row the oracle cannot answer keeps the full
-/// treatment as well: muting it would report it unstaged, which is a claim about
-/// the index nothing made. Only `Some(false)` quiets.
 fn row_treatment(kind: RowKind, staged: Option<bool>) -> (Color32, Color32) {
     let (band, ink) = match (kind, staged) {
         (RowKind::Add, Some(false)) => (
@@ -151,17 +116,6 @@ fn row_treatment(kind: RowKind, staged: Option<bool>) -> (Color32, Color32) {
     (band, ink)
 }
 
-/// A changed row's accessibility label: its content, then its staged-ness.
-///
-/// The **state**, and not the consequence of the click, on purpose. The two
-/// diverge in both directions: an unstage moves a replacement *pair* together,
-/// because a `-` and the `+` under it are one change, while a row on a file git has
-/// never had a version of reaches the whole *file*, because git refuses a partial
-/// reverse there. A label that named the consequence would promise per-row control
-/// the click does not always carry, which is a misleading mark of a new kind. The
-/// state is true in every shape, and the parenthetical is the whole-file
-/// checkbox's own vocabulary (`stage_label` in `commit_window.rs`), so the row and
-/// the box beside it cannot disagree.
 fn row_label(text: &str, staged: Option<bool>) -> String {
     match staged {
         Some(true) => format!("{text} (staged)"),
@@ -170,13 +124,6 @@ fn row_label(text: &str, staged: Option<bool>) -> String {
     }
 }
 
-/// The ink of a changed row's line numbers, which is where the pointer answers.
-///
-/// Not a fill: the app's hover rung is `SURFACE_2`, and against a muted band that
-/// measures 1.01:1, i.e. an interaction fill laid over a muted row is invisible on
-/// exactly the rows that most need it. The row's band and ink are now spent on
-/// staged-ness, so the pointer's answer lives in the gutter column, which carries
-/// no git state at all and steps one rung up the ink ramp for both states.
 fn gutter_ink(hovered: bool) -> Color32 {
     if hovered {
         Palette::INK_2
@@ -185,17 +132,6 @@ fn gutter_ink(hovered: bool) -> Color32 {
     }
 }
 
-// --- entry point -------------------------------------------------------------
-
-/// The floating diff window the log's diff verbs open (`state.ui.diff`), in
-/// the house `egui::Window` chrome. The log keeps its commit table; the
-/// window floats above the workspace and closes from its own footer or the
-/// title bar's X.
-///
-/// The window's target is the caller's: the held
-/// [`turbogit_app::state::DiffTarget`] names the root, the sides and the file
-/// (or none, for a whole commit), and the body hands them to [`render_diff`]
-/// verbatim rather than letting any of them fall back to a current selection.
 pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
     let Some(target) = state.ui.diff.clone() else {
         return;
@@ -203,8 +139,6 @@ pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
     let mut open = true;
     egui::Window::new("Diff")
         .open(&mut open)
-        // The body's ScrollArea owns scrolling; the window's own would leave it
-        // a remainder to measure, and the rows would collapse inside it.
         .vscroll(false)
         .default_size(egui::vec2(920.0, 620.0))
         .show(ui.ctx(), |ui| diff_body(ui, state, &target));
@@ -213,7 +147,6 @@ pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The subject line names what is open, then the diff surface itself.
 fn diff_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::DiffTarget) {
     ui.label(
         RichText::new(subject_line(target))
@@ -243,8 +176,6 @@ fn diff_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::Di
     });
 }
 
-/// What the window is looking at: the file at the commit that changed it, or
-/// the whole commit's sides.
 fn subject_line(target: &turbogit_app::state::DiffTarget) -> String {
     match &target.path {
         Some(path) => format!(
@@ -264,11 +195,6 @@ fn subject_line(target: &turbogit_app::state::DiffTarget) -> String {
     }
 }
 
-/// The width the toolbar's `+N −M` pair paints, plus the item spacing that
-/// separates it from the hunk nav beside it, measured in the font the pair
-/// paints in. The toolbar right-aligns the pair by sizing ONE spacer in front
-/// of it, so the estimate has to be the layout, not a guess a font change
-/// would silently strand short of the row's trailing edge.
 fn toolbar_counts_width(ui: &Ui, plan: Option<&PaintPlan>) -> f32 {
     let Some((added, removed)) = plan.and_then(PaintPlan::toolbar_counts) else {
         return 0.0;
@@ -284,13 +210,6 @@ fn toolbar_counts_width(ui: &Ui, plan: Option<&PaintPlan>) -> f32 {
     stat(&format!("+{added}")) + gap + stat(&format!("\u{2212}{removed}")) + gap
 }
 
-/// Render one comparison's diff. The comparison is named by the caller in
-/// full: it runs in `root`, between `left` and `right` (neither named is the
-/// working-tree preview), narrowed to the one file `change` names — or, with
-/// `change` gone, showing every section of a whole-commit patch. The root is
-/// a parameter and not a fallback for the same reason the target carries one:
-/// a whole-commit view names no change to derive it from, and a log spanning
-/// roots can hold a commit outside the focused one.
 pub fn render_diff(
     ui: &mut Ui,
     state: &mut AppState,
@@ -301,10 +220,6 @@ pub fn render_diff(
 ) {
     let path = change.as_ref().map(|change| change.path.clone());
 
-    // The two kinds of diff target, told apart by which constructor they ask
-    // for: no revision named means the working-tree preview, and the working
-    // tree is read as `HEAD ↔ worktree`. A caller that names both sides gets
-    // exactly the pair it asked for.
     let target = match (left, right) {
         (None, None) => {
             DiffTarget::working_tree(root.as_path().to_path_buf(), state.ui.diff_policies, path)
@@ -317,17 +232,8 @@ pub fn render_diff(
             path,
         ),
     };
-    // One ask, one verdict: the read answers from the cache, or starts the
-    // load and says it is waiting. The widget-state salt below is derived from
-    // the target, never from the cache key, which the caller cannot name.
     let verdict = state.read(target.clone());
     let staging_live = target.stages();
-    // A root-wide read of the view this pane displays failed: the whole file
-    // counts as failed to read, content and all. Consulted on a `Fresh` or
-    // `Empty` verdict because every other verdict already stops the rows, and
-    // an `(no differences)` answer from the per-path read is a claim the dead
-    // root read just took away. The rule and its exemptions live in
-    // [`AppState::failed_view_message`].
     let view_failure = match &verdict {
         Read::Fresh(_) | Read::Empty => state.failed_view_message(&target),
         _ => None,
@@ -337,13 +243,6 @@ pub fn render_diff(
         _ => 0,
     };
 
-    // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
-    // from the virtualized stream, so both modes page over filtered slot
-    // lists built in one O(model) walk. Side-by-side slots are display
-    // indices; unified slots are (display index, member) with a Pair member
-    // flattened into one slot per underlying row (ADR-0014 paging, now over
-    // the filtered stream). Built before the toolbar, which reads a
-    // single-file pane's `+N −M` pair from it.
     let plan = match &verdict {
         Read::Fresh(diff)
             if view_failure.is_none() && pane_kind(&diff.model.files) == PaneKind::Text =>
@@ -353,16 +252,7 @@ pub fn render_diff(
         _ => None,
     };
 
-    // Toolbar chrome (spec §8.4): view mode and diff options lead on the left,
-    // the change-size counts and hunk nav close right-aligned on the trailing
-    // edge. Wrapped so a pane too narrow for both groups (the resizable diff
-    // window) sends the right-hand group to a row of its own instead of
-    // clipping it out of reach, and painted before the verdict is consulted:
-    // the controls are pane chrome, on screen in every state the pane can be
-    // in.
     ui.horizontal_wrapped(|ui| {
-        // The toolbar's own item rhythm is the gap between its groups: the
-        // frames are the separation, so there is no rule painted between them.
         let gap = ui.spacing().item_spacing.x;
         let selected = if state.ui.diff_side_by_side { 0 } else { 1 };
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
@@ -378,7 +268,7 @@ pub fn render_diff(
         // here, and the group paints at the next row's leading edge. The
         // group itself paints in a non-wrapped scope because a wrapped-layout
         // label lays its galley out from the ROW's left edge with a leading
-        // space — a statistic that never wraps wants its own cursor position,
+        // space, a statistic that never wraps wants its own cursor position,
         // not the row's.
         let right_w = toolbar_counts_width(ui, plan.as_ref())
             + hunk_nav_width(ui, state.ui.diff_current_hunk, total_hunks);
@@ -406,15 +296,6 @@ pub fn render_diff(
         });
     });
 
-    // The verdict is the whole paint contract: which of these four the
-    // surface shows is answered by the read, so there is no loading flag left
-    // to forget to check and no error field that can describe some other
-    // comparison (ADR-0021).
-    //
-    // Every state that is not `Fresh` still paints the file header: it names
-    // the file the pane is holding while the rows that would name it are
-    // absent. The toolbar above is painted in every state, so the comparison
-    // toggle never leaves the screen with the rows it applies to.
     if let Some(message) = &view_failure {
         file_header(ui, change);
         widgets::keyed_read_presentation(
@@ -446,12 +327,6 @@ pub fn render_diff(
     };
     let model = &diff.model;
 
-    // Non-text diffs render outside the display-row model (spec R8,
-    // ADR-0015): a lone binary change or an image pair replaces the rows
-    // entirely — the mode toggle has no second layout to switch to, and
-    // with no hunks there is nothing to navigate or stage. The pane is
-    // addressed by the same target, so any reload of the patch text (ops
-    // invalidate it) also refetches the pane bytes.
     match pane_kind(&model.files) {
         PaneKind::Text => {}
         PaneKind::Binary => {
@@ -461,9 +336,6 @@ pub fn render_diff(
                 model.files[0].clone(),
                 false,
             );
-            // While loading (or when a side is unreadable) the sizes are
-            // unresolved and the bare description shows — the graceful
-            // fallback text.
             let sizes = match state.read(pane) {
                 Read::Fresh(entry) => pane_byte_lens(&entry),
                 _ => None,
@@ -477,8 +349,6 @@ pub fn render_diff(
         }
     }
 
-    // Pure rename (100% similar, no content hunks): the header plus a note
-    // instead of an empty scroller (spec R8).
     if model.pure_rename() {
         if let Some(text) = &model.rename_header {
             let width = ui.available_width();
@@ -489,16 +359,11 @@ pub fn render_diff(
         return;
     }
 
-    // A mode-only change reaches a Fresh text verdict with zero rows — its only
-    // facts lived in the header block a single-file pane suppresses — so the
-    // pane owes the reader the same note instead of an empty scroller.
     if model.display.is_empty() {
         widgets::empty_state(ui, "No content changes.");
         return;
     }
 
-    // Gutter staging controls need the previewed file's status (spec R2);
-    // resolved once per frame from the cached changelists.
     let status = granular::preview_status(state, change.as_ref());
 
     let side_by_side = state.ui.diff_side_by_side;
@@ -509,10 +374,6 @@ pub fn render_diff(
         plan.unified.len()
     };
 
-    // Side-by-side pane header band (spec §8.4), pinned above the paged
-    // rows: `show_rows` reserves exactly the uniform-height row window, so
-    // the fixed-height band leaves the scrolled content. Floating scrollbars
-    // reserve no width, so the panes below still measure the same `half`.
     if side_by_side {
         let width = ui.available_width();
         let gap = ui.style().spacing.item_spacing.x;
@@ -524,14 +385,10 @@ pub fn render_diff(
         });
     }
 
-    // Identity of the diff being painted. The scroll-dedup and gutter widget
-    // states below must reset when the surface starts showing a different
-    // comparison, and the target is what says so — the read's cache key would
-    // do as well but is not a thing a caller can hold (ADR-0021).
     let paint = egui::Id::new(("diff-view", &target));
 
     // Named id salt: the commit window's `ui.columns` panes share one stable
-    // child id, and egui's default ScrollArea salt is constant — an unnamed
+    // child id, and egui's default ScrollArea salt is constant, an unnamed
     // area here would share persisted scrollbar state with the changelist
     // pane's area and flip-flop visibility (a zero-delay repaint loop).
     ScrollArea::vertical().id_salt("diff_viewer").show_rows(
@@ -539,13 +396,13 @@ pub fn render_diff(
         ROW_H,
         total_rows,
         |ui, visible| {
-            // Hunk navigation (ADR-0014): index-based — aim the aimed hunk's
+            // Hunk navigation (ADR-0014): index-based, aim the aimed hunk's
             // header slot at the viewport center instead of relying on
             // a realized widget (`resp.scroll_to_me` cannot reach rows this
             // window didn't build). Issued inside the closure because egui
             // consumes scroll targets set by an area's content; ones set
             // before the area begins are stashed for outer areas. At most
-            // once per (diff, hunk) — re-issuing every frame would keep the
+            // once per (diff, hunk), re-issuing every frame would keep the
             // ScrollArea repainting forever.
             if state.ui.diff_current_hunk < plan.hunk_slots.len()
                 && hunk_needs_scroll(ui, paint, state.ui.diff_current_hunk)
@@ -559,9 +416,6 @@ pub fn render_diff(
                 );
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
-            // The verdict above guarantees the rendered diff is `target`'s, so
-            // hunk scroll-dedup state can be namespaced per diff with it
-            // (issue #11).
             if side_by_side {
                 render_side_by_side(ui, state, model, &plan, visible, paint, status, change);
             } else {
@@ -571,15 +425,6 @@ pub fn render_diff(
     );
 }
 
-/// Where one hunk's header band sits, per stream: the side-by-side slot and
-/// the unified slot.
-///
-/// The two are NOT the same number, and the difference is the whole reason this
-/// is a pair. A `DisplayRow::Pair` is ONE side-by-side row (the deletion and
-/// the addition share a line) but TWO unified rows, so every pair before a
-/// hunk's header shifts the unified slot one further along. A header is a full
-/// row in both modes — that part was always true — but the slot NUMBER it
-/// occupies is a property of the stream being paged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HunkSlot {
     sbs: usize,
@@ -589,66 +434,32 @@ struct HunkSlot {
 impl HunkSlot {
     const UNSET: Self = Self { sbs: 0, unified: 0 };
 
-    /// The slot in the stream this frame pages.
     fn slot(&self, side_by_side: bool) -> usize {
         if side_by_side { self.sbs } else { self.unified }
     }
 }
 
-/// One file section's change counts, carried on the paint plan beside the slot
-/// streams (spec story 23): the statistics a file row paints are a property of
-/// the file, so they are measured once per frame from the model the keyed read
-/// already answered with — never reparsed from patch text, and never recounted
-/// per row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileRowStats {
-    /// Display index of the section's file row — the row these counts describe.
-    /// `None` for a single-file pane's section, which has no file row: the
-    /// toolbar states its totals.
     display: Option<usize>,
     added: usize,
     removed: usize,
 }
 
-/// One frame's paint plan over the cached display model (issue 20): the
-/// filtered slot streams of both modes plus the per-hunk metadata the hunk
-/// header bands render (header slot for scroll aiming, hidden-row count
-/// while collapsed, changed-line count while expanded).
 struct PaintPlan {
-    /// Side-by-side slots: display indices, one band per entry.
     sbs: Vec<usize>,
-    /// Unified slots: `(display index, member)` with member 0 = full row,
-    /// 1 = a Pair's deletion, 2 = a Pair's addition.
     unified: Vec<(usize, u8)>,
-    /// Per hunk: the slot its header band occupies in EACH stream — see
-    /// [`HunkSlot`], which is why one number is not enough.
     hunk_slots: Vec<HunkSlot>,
-    /// Per hunk: body bands hidden by collapsing.
     hunk_hidden: Vec<usize>,
-    /// Per hunk: changed-line count of its body.
     hunk_lines: Vec<usize>,
-    /// Per file row: the change counts of the section that row opens.
     file_rows: Vec<FileRowStats>,
-    /// Display index of the row the caret sits on — the first changed row of the
-    /// current hunk **on the pane that holds the caret**, so `⌃⇧⇥` visibly moves
-    /// it and `F4` can name the line it is standing on.
     caret: Option<usize>,
-    /// Per display row: the per-line oracle's answer for each half of a pair, so a
-    /// row's colour, its accessibility label and the header's suffix all come from
-    /// one resolution of the changelist entry rather than from four lookups per
-    /// painted line.
     staging: Vec<PairStaging>,
-    /// Per hunk: those answers aggregated, which is what names the header's
-    /// `· staged` / `· part` / `· not staged` suffix.
     hunk_staging: Vec<HunkStaging>,
-    /// Whether the granular staging verbs reach this comparison — `false` for
-    /// a historical pair, whose rows paint read-only.
     staging_live: bool,
 }
 
 impl PaintPlan {
-    /// `(added, removed)` for the section whose file row is at `display`.
-    /// `(0, 0)` for a row that is not a file row's section.
     fn file_counts(&self, display: usize) -> (usize, usize) {
         self.file_rows
             .iter()
@@ -656,9 +467,6 @@ impl PaintPlan {
             .map_or((0, 0), |f| (f.added, f.removed))
     }
 
-    /// The toolbar's `+N −M` pair: the one section's totals, when the pane
-    /// shows exactly one file section. Multi-file patches keep their counts on
-    /// the file rows.
     fn toolbar_counts(&self) -> Option<(usize, usize)> {
         match &self.file_rows[..] {
             [only] => Some((only.added, only.removed)),
@@ -666,29 +474,17 @@ impl PaintPlan {
         }
     }
 
-    /// The oracle's answer for one row of the display model.
     fn staged(&self, display: usize, kind: RowKind) -> Option<bool> {
         self.staging
             .get(display)
             .and_then(|entry| entry.for_kind(kind))
     }
 
-    /// The suffix this hunk's header names, or nothing where the oracle has no
-    /// answer for any of its rows.
     fn hunk_suffix(&self, hunk: usize) -> Option<&'static str> {
         self.hunk_staging.get(hunk).and_then(|s| s.suffix())
     }
 }
 
-/// Walk the display model once, filtering collapsed hunks' bodies out of
-/// both slot streams (issue 20). Meta rows between sections stay visible —
-/// they belong to no hunk body. The same walk totals each file section's
-/// changed lines for its file row, or for the toolbar when the section has
-/// no row of its own (one file in the patch), which is why the counts are
-/// carried here rather than recomputed per row (ticket 12), and the same
-/// walk asks the per-line oracle about every changed row once, which is why
-/// staged-ness is painted from a resolved frame rather than a lookup per
-/// painted line.
 fn paint_plan(
     state: &AppState,
     model: &DiffModel,
@@ -697,8 +493,6 @@ fn paint_plan(
 ) -> PaintPlan {
     let hunk_count = model.hunk_count();
     let want_add = matches!(state.ui.diff_pane, DiffPane::New);
-    // The oracle answers from the worktree changelist; a historical pair has
-    // no sides it can describe.
     let oracle = if staging_live {
         StagedRows::resolve(state, change)
     } else {
@@ -717,12 +511,7 @@ fn paint_plan(
         hunk_staging: vec![HunkStaging::NoAnswer; hunk_count],
         staging_live,
     };
-    // The section currently being totalled, and the counts of the one before
-    // it — a file row opens its section, so the section's totals are only
-    // complete when the NEXT file row (or the end of the model) arrives.
     let mut open: Option<FileRowStats> = None;
-    // A single-file pane has no file row in the stream to open its section,
-    // so the walk opens the rowless one the toolbar's counts come from.
     if model.files.len() == 1 {
         open = Some(FileRowStats {
             display: None,
@@ -753,9 +542,6 @@ fn paint_plan(
                 }
                 RowKind::Hunk => {
                     if row.hunk < hunk_count {
-                        // Each stream's OWN length before the header is pushed
-                        // is the slot that header is about to occupy — the two
-                        // are different numbers and are not interchangeable.
                         plan.hunk_slots[row.hunk] = HunkSlot {
                             sbs: plan.sbs.len(),
                             unified: plan.unified.len(),
@@ -772,7 +558,6 @@ fn paint_plan(
                         plan.unified.push((di, 0));
                     }
                 }
-                // Changed rows always live in pairs (build_model invariant).
                 RowKind::Del | RowKind::Add => {
                     if let Some(section) = open.as_mut() {
                         if row.kind == RowKind::Add {
@@ -786,9 +571,6 @@ fn paint_plan(
             DisplayRow::Pair(d, a) => {
                 let rows = d.iter().chain(a.iter());
                 let hunk = rows.clone().next().map(|r| r.hunk).unwrap_or_default();
-                // The caret is the first changed row of the current hunk on the
-                // side the active pane is showing. Only a Pair holds a changed
-                // row (the model's own invariant), so only a Pair can carry it.
                 if caret.is_none()
                     && hunk == state.ui.diff_current_hunk
                     && if want_add { a.is_some() } else { d.is_some() }
@@ -807,9 +589,6 @@ fn paint_plan(
                     }
                 }
                 plan.hunk_lines[hunk] += rows.count();
-                // Staged-ness is answered per row here, once, and both the row's
-                // paint and the header's suffix read the result. Collapsed or not,
-                // a hunk's state describes the hunk.
                 let entry = PairStaging {
                     del: d.as_ref().and_then(|r| {
                         oracle
@@ -824,7 +603,6 @@ fn paint_plan(
                 };
                 plan.staging[di] = entry;
                 plan.hunk_staging[hunk] = plan.hunk_staging[hunk].fold(entry.del).fold(entry.add);
-                // Collapsed or not, a file's statistics describe the file.
                 if let Some(section) = open.as_mut() {
                     if d.is_some() {
                         section.removed += 1;
@@ -841,9 +619,6 @@ fn paint_plan(
     plan
 }
 
-/// Issue the hunk scroll request at most once per (diff, hunk): re-issuing
-/// the index-based scroll every frame would keep the ScrollArea repainting
-/// forever.
 fn hunk_needs_scroll(ui: &Ui, paint: egui::Id, idx: usize) -> bool {
     let id = egui::Id::new((paint, "diff_hunk_scrolled", idx));
     let done = ui.ctx().memory(|m| m.data.get_temp::<bool>(id)) == Some(true);
@@ -852,13 +627,7 @@ fn hunk_needs_scroll(ui: &Ui, paint: egui::Id, idx: usize) -> bool {
     }
     !done
 }
-// --- rendering ---------------------------------------------------------------
 
-/// Whether this row carries the caret.
-///
-/// A unified stream shows the two panes as two rows of one pair, so the pane the
-/// caret is on is named by the row's own kind: a deletion belongs to the `Before`
-/// side, an addition to the `After` one.
 fn holds_caret(state: &AppState, plan: &PaintPlan, display: usize, kind: RowKind) -> bool {
     plan.caret == Some(display)
         && match state.ui.diff_pane {
@@ -867,7 +636,6 @@ fn holds_caret(state: &AppState, plan: &PaintPlan, display: usize, kind: RowKind
         }
 }
 
-/// x of the end of `text` as painted from `text_origin_x` — where the caret sits.
 fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &FontId) -> f32 {
     text_origin_x
         + painter
@@ -876,11 +644,6 @@ fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &Font
             .x
 }
 
-/// Pane-header labels naming the two sides this read actually diffs.
-///
-/// A side names itself when the target named it, and falls back to the pinned
-/// working-tree pair's own side otherwise, so a commit-to-commit diff prints
-/// its own revisions rather than HEAD/Index/Working tree.
 fn pane_labels(target: &DiffTarget) -> (String, String) {
     let label = |rev: &Option<String>, working_tree_side: &str| {
         rev.clone().unwrap_or_else(|| working_tree_side.to_owned())
@@ -891,7 +654,6 @@ fn pane_labels(target: &DiffTarget) -> (String, String) {
     )
 }
 
-/// One vertically-centered text cell painted at absolute x inside `rect`.
 fn paint_cell(
     painter: &egui::Painter,
     x: f32,
@@ -908,10 +670,6 @@ fn paint_cell(
     );
 }
 
-// --- char-range drag protocol (issue 19) ---------------------------------------
-
-/// Char offset of the glyph boundary nearest `x`, in row-text coordinates
-/// (x relative to the text origin). Clamped into the line.
 fn char_at_x(ui: &Ui, text: &str, x: f32) -> usize {
     let galley = ui
         .painter()
@@ -927,7 +685,7 @@ fn char_at_x(ui: &Ui, text: &str, x: f32) -> usize {
 /// The return value is whether this response staged anything. `clicked()` and
 /// `drag_stopped()` both come off one `Sense::click_and_drag` response, and a
 /// finished drag reports both, so the caller must skip its click when the drag
-/// already staged — otherwise one drag would stage the range *and* the whole
+/// already staged, otherwise one drag would stage the range *and* the whole
 /// line.
 fn handle_char_drag(
     ui: &mut Ui,
@@ -943,8 +701,6 @@ fn handle_char_drag(
         let anchor = char_at_x(ui, &row.text, pos.x - text_origin_x);
         granular::begin_char_drag(state, change, row.hunk, row.line_ord, row.new_no, anchor);
     }
-    // Not an else: the drag's first frame counts as both started and
-    // dragged, and the pointer is already at its moved position there.
     if resp.dragged()
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -957,9 +713,6 @@ fn handle_char_drag(
     false
 }
 
-/// Translucent BRAND band over the character range under the pointer
-/// (issue 19, screen 06): the live drag, and nothing after it. No-op unless the
-/// draft is this exact row.
 fn paint_char_highlight(
     painter: &egui::Painter,
     state: &AppState,
@@ -1000,14 +753,6 @@ fn paint_char_highlight(
     );
 }
 
-/// Paint one changed row's highlight, in whatever shape the highlighting policy
-/// decided it.
-///
-/// Three shapes and no more: the whole row, one band per changed run, or nothing.
-/// The run list is a property of the display model (`ADR-0014`) — the policy is
-/// folded when the diff settles, so this measures glyphs and never re-compares
-/// text. Measuring happens for realized rows only, which is exactly the set
-/// `show_rows` handed this frame.
 fn paint_highlight(
     painter: &egui::Painter,
     rect: &Rect,
@@ -1046,10 +791,6 @@ fn paint_highlight(
     }
 }
 
-/// The caret bar marking which pane of the diff holds the reader's position
-/// (`Diff.FocusOppositePane`). It sits inside the text, at the caret line's last
-/// glyph — not on the row's leading edge, which is the selection rail's place, and
-/// the two are different tokens for that reason (`theme::CARET_WIDTH`).
 fn paint_caret(painter: &egui::Painter, rect: &Rect, x: f32) {
     painter.rect_filled(
         Rect::from_min_max(
@@ -1061,8 +802,6 @@ fn paint_caret(painter: &egui::Painter, rect: &Rect, x: f32) {
     );
 }
 
-/// Unified-mode sign + line-number gutter cells. The sign wears the row's own
-/// ink, which is now the staged-ness role's, and the number wears the gutter's.
 fn paint_gutter(
     painter: &egui::Painter,
     rect: &Rect,
@@ -1082,10 +821,6 @@ fn paint_gutter(
         num_color,
     );
 }
-/// Unified mode (spec §8.4): one full-width band per underlying row, paging
-/// only the visible window of the filtered slot stream (ADR-0014, issue 20).
-/// Pair members arrive flattened as their own slots, so output is
-/// pixel-identical to the pre-virtualization loop.
 #[allow(clippy::too_many_arguments)]
 fn render_unified(
     ui: &mut Ui,
@@ -1104,8 +839,6 @@ fn render_unified(
     let end = visible.end.min(plan.unified.len());
     let start = visible.start.min(end);
     if start < end {
-        // Hover tracking (spec R2): which hunk sits under the pointer this
-        // frame — visible rows only, which is correct under virtualization.
         let mut frame_hover: Option<usize> = None;
         let mut rows_rect: Option<Rect> = None;
         for &(di, member) in &plan.unified[start..end] {
@@ -1169,16 +902,6 @@ fn render_unified(
     }
 }
 
-/// Paint the full-width display row of one kind: the file row, the rename
-/// header, and the hunk band. Both render modes paint these three identically,
-/// so the paint is stated once here and a fourth full-width kind is one arm
-/// below rather than an edit in two loops.
-///
-/// The caller owns the row shell and its per-mode bookkeeping — the unified
-/// loop's hover plumbing, the side-by-side loop's `rows_rect` union and
-/// `frame_hover` capture — and passes the `rect` it allocated plus the row's
-/// `display` index. Returns whether the kind was one of the three; `false`
-/// leaves the changed rows (`Context` / `Del` / `Add`) to the mode's own paint.
 #[allow(clippy::too_many_arguments)]
 fn paint_full_width_row(
     ui: &mut Ui,
@@ -1214,11 +937,6 @@ fn paint_full_width_row(
         RowKind::RenameHeader => paint_rename_header(painter, rect, &row.text, font),
         RowKind::Hunk => {
             painter.rect_filled(*rect, CornerRadius::ZERO, Palette::SURFACE);
-            // The header is the `@@` line git itself printed, painted as its own
-            // galley, and the staged-ness suffix is a **second** galley beside it.
-            // Two rather than one string because the suite that aims a hunk compares
-            // the painted header against `git diff`'s own line: fold the suffix in
-            // and the pane claims git printed words it did not.
             let header = painter.layout_no_wrap(row.text.clone(), font.clone(), Palette::INK_3);
             let header_x = rect.left() + TEXT_X;
             painter.galley(
@@ -1255,9 +973,6 @@ fn paint_full_width_row(
     true
 }
 
-/// One unified band: allocation, hover tracking, click toggle, and the
-/// token-exact paint for a single underlying row (spec §8.4/R2). Hunk
-/// scrolling is handled centrally by the [`ScrollArea::show_rows`] caller.
 #[allow(clippy::too_many_arguments)]
 fn unified_row(
     ui: &mut Ui,
@@ -1274,9 +989,6 @@ fn unified_row(
     frame_hover: &mut Option<usize>,
     rows_rect: &mut Option<Rect>,
 ) {
-    // Changed lines are clickable toggles (spec R2 story 3, issue 19);
-    // additions additionally take char-range drags. Everything else stays
-    // hover-only.
     let toggleable = plan.staging_live && matches!(row.kind, RowKind::Del | RowKind::Add);
     let draggable = toggleable && row.kind == RowKind::Add;
     let (rect, resp) = ui.allocate_exact_size(
@@ -1297,9 +1009,6 @@ fn unified_row(
         *frame_hover = Some(row.hunk);
     }
     if toggleable {
-        // Accessibility: the row is labeled by its content text so tooling can
-        // target individual changed lines, and by the state the paint is showing so
-        // the colour has a word beside it.
         let label = row_label(&row.text, plan.staged(display, row.kind));
         resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
         let drag_staged = if draggable {
@@ -1413,7 +1122,6 @@ fn unified_row(
         _ => {}
     }
 }
-/// Side-by-side pane header band (SURFACE, spec §8.4).
 fn header_band(ui: &mut Ui, width: f32, label: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, PANE_HEADER_H), Sense::hover());
     ui.painter().rect_filled(
@@ -1430,16 +1138,6 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
     );
 }
 
-/// The file row (spec story 23): a file section's own opening line, carrying
-/// the statistics that describe that file.
-///
-/// **The geometry here is the row shell's, not this function's.** The band is
-/// the `ROW_H` band the caller allocated and the label sits at the shell's
-/// [`TEXT_X`], exactly where every other row in this stream puts its text — the
-/// counts are placed *from that one rect*, right-aligned inside it, and the
-/// row's own fill is the one row-fill decision ([`widgets::paint_row`]). A file
-/// row is therefore a row like any other, and gaining its occupant cannot give
-/// it a second selection treatment, a second height, or a second text origin.
 fn file_row(
     ui: &mut Ui,
     rect: &Rect,
@@ -1457,10 +1155,6 @@ fn file_row(
         Palette::INK_3,
         font,
     );
-    // The trailing zone, hung off the row shell's rect: the change counts,
-    // right-aligned so they sit at the row's trailing edge. It is a child `Ui`
-    // over the already-allocated rect, so nothing here can change the row's
-    // height.
     let trailing = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(rect.right() - crate::theme::BUTTON_PADDING.x, rect.bottom()),
@@ -1470,8 +1164,6 @@ fn file_row(
             .max_rect(trailing)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    // The counts are statistics, not diff row content, so they keep the stats
-    // accents rather than the row's ink.
     let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
     zone.label(
         RichText::new(format!("\u{2212}{removed}"))
@@ -1485,9 +1177,6 @@ fn file_row(
     );
 }
 
-/// The pane's header for one file, painted in every state of the comparison —
-/// settled or not. While the read is waiting, failed or empty, this row is
-/// the only thing on the pane that says which file was asked for.
 fn file_header(ui: &mut Ui, change: &Option<ChangeRef>) {
     let Some(change) = change else {
         return;
@@ -1500,15 +1189,6 @@ fn file_header(ui: &mut Ui, change: &Option<ChangeRef>) {
     file_row(ui, &rect, &label, (0, 0), &mono_font(), false);
 }
 
-/// Paint the rename-header row as **one muted band** across the whole row —
-/// shared by the in-scroller display row and the pure-rename static band
-/// (spec R8).
-///
-/// The band is [`Palette::SECTION_BG`], the app's group-label band: a header is
-/// scaffolding, and a header that is only a line of text reads as one more row
-/// of context. It is painted with square corners like the hunk-header band
-/// above it, and the text keeps the ink it always had — a band is added, no
-/// diff text token moves.
 fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &FontId) {
     painter.rect_filled(*rect, CornerRadius::ZERO, Palette::SECTION_BG);
     paint_cell(
@@ -1520,13 +1200,6 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
         font,
     );
 }
-/// One side-by-side cell: the highlight the policy chose for it, a gutter number,
-/// sign marker, and code text. A changed cell is a clickable line toggle (spec R2
-/// story 3); the addition cell also takes a char-range drag. `selected` paints the
-/// BRAND edge bar and `caret` the pane's caret bar. `bg` and `text_color` are the
-/// cell's own staged-ness role, chosen by the caller, and `staged` is the oracle's
-/// answer the accessibility label states. Returns the cell's response so the row
-/// loop can track hover and toggle clicks.
 #[allow(clippy::too_many_arguments)]
 fn cell_band(
     ui: &mut Ui,
@@ -1591,11 +1264,6 @@ fn cell_band(
     resp
 }
 
-/// Side-by-side mode (spec §8.4): paired Del/Add bands plus full-width
-/// context/hunk/meta rows, paging only the visible window of the filtered
-/// slot stream (ADR-0014, issue 20). The pane header band is pinned by the
-/// caller. Hover tracking and toggles apply to visible rows only — correct
-/// under virtualization.
 #[allow(clippy::too_many_arguments)]
 fn render_side_by_side(
     ui: &mut Ui,
@@ -1613,7 +1281,6 @@ fn render_side_by_side(
 
     let painter = ui.painter().clone();
     let font = mono_font();
-    // Hover tracking (spec R2): which hunk sits under the pointer this frame.
     let mut frame_hover: Option<usize> = None;
     let mut rows_rect: Option<Rect> = None;
 
@@ -1622,8 +1289,6 @@ fn render_side_by_side(
     for &di in &plan.sbs[start..end] {
         match &model.display[di] {
             DisplayRow::Full(row) => match row.kind {
-                // The three full-width kinds share this row shell; the painter
-                // below states their paint, so its "handled" answer is true here.
                 RowKind::Meta | RowKind::RenameHeader | RowKind::Hunk => {
                     let (rect, resp) =
                         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -1689,19 +1354,11 @@ fn render_side_by_side(
                         }
                     });
                 }
-                // Changed rows always live in pairs (build_model invariant).
                 RowKind::Del | RowKind::Add => unreachable!("changed rows are always paired"),
             },
             DisplayRow::Pair(d, a) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
                 let caret_row = plan.caret == Some(di);
-                // **Both cells answer for themselves.** A side-by-side pair is one
-                // line's two halves, and in a combined view a replacement can be
-                // staged on one side of the index and not the other (a staged
-                // modification re-edited in the worktree answers its addition
-                // unstaged and its deletion the other way). So each of the two cells
-                // wears the treatment its own answer names, and neither borrows its
-                // neighbour's.
                 let del_staged = plan.staged(di, RowKind::Del);
                 let add_staged = plan.staged(di, RowKind::Add);
                 let (del_band, del_ink) = row_treatment(RowKind::Del, del_staged);

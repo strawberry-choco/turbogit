@@ -1,13 +1,3 @@
-//! Issue 18 — Blame view, app seam: a blame target opened through the public
-//! state (`ui.blame`) fetches per-line attribution through the production
-//! worker path (`read` → `BlameReady` → `drain_events`), and a completed
-//! operation's refresh (`refresh(All)`) drops the cached lines so the surface
-//! refetches on its next read.
-//!
-//! The verdict is what is asserted, not the cache field: the key is the read's
-//! business, and a test that spelled it out would only pin the coupling this
-//! branch exists to remove.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,11 +6,6 @@ use turbogit_app::keyed_read::Read;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::BlameLine;
-
-// Every call is pinned per call through the fixture crate's runner, including
-// the `rev-parse` and `add` ones: it is the commit that has to be the same
-// author on every machine, or a blame line's author stops being an answer and
-// starts being an accident.
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
@@ -31,8 +16,6 @@ fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
         .to_string()
 }
 
-/// One repo, two commits on `main`, both touching `a.txt` so its blame
-/// attributes line 1 to the first commit and line 2 to the second.
 fn seeded_repo() -> (tempfile::TempDir, PathBuf, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("alpha");
@@ -59,8 +42,6 @@ fn target(state: &AppState, repo: &Path, rev: &str) -> BlameTarget {
     }
 }
 
-/// Ask the read for a target's lines, settling whatever it dispatches. Answers
-/// the blamed lines, or panics with the verdict it gave instead.
 fn blamed(state: &mut AppState, target: BlameTarget) -> Arc<[BlameLine]> {
     if matches!(state.read(target.clone()), Read::Waiting) {
         state.drain_events();
@@ -81,8 +62,6 @@ fn blame_target_fetches_per_line_attribution_through_the_event_pump() {
     let (tmp, repo, c1, c2) = seeded_repo();
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
 
-    // The transition every entry point (footer link, context menu) makes:
-    // record the blame target, then let the surface read its data.
     let open = target(&state, &repo, &c2);
     state.ui.blame = Some(open.clone());
     let lines = blamed(&mut state, open);
@@ -103,9 +82,6 @@ fn refresh_after_an_operation_drops_the_blame_lines_for_refetch() {
     state.ui.blame = Some(open.clone());
     assert_eq!(blamed(&mut state, open.clone()).len(), 2);
 
-    // A completed operation refreshes the affected roots; the cached lines
-    // must be dropped with it (the diff cache's wholesale rule) so the next
-    // read refetches — and does so successfully.
     state.refresh(Affected::All);
     assert!(
         matches!(state.read(open.clone()), Read::Waiting),
@@ -122,9 +98,6 @@ fn blaming_an_earlier_revision_is_its_own_answer() {
     let at_c2 = target(&state, &repo, &c2);
     assert_eq!(blamed(&mut state, at_c2.clone()).len(), 2);
 
-    // The same file at the revision before its second line existed: a
-    // different target, so a different answer — never the cached one, and the
-    // read says so with `Waiting` rather than painting what it has.
     let at_c1 = target(&state, &repo, &c1);
     assert!(
         matches!(state.read(at_c1.clone()), Read::Waiting),
@@ -138,8 +111,5 @@ fn blaming_an_earlier_revision_is_its_own_answer() {
     );
     assert_eq!(lines[0].commit, c1);
 
-    // Blame stores one entry, so switching back refetches — which is the
-    // single-entry policy, and the one the keyed pane-bytes map deliberately
-    // does not share.
     assert!(matches!(state.read(at_c2), Read::Waiting));
 }

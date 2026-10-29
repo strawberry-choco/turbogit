@@ -1,4 +1,4 @@
-# Source map — UX and user-flow evidence for Rebased / IntelliJ Git
+# Source map. UX and user-flow evidence for Rebased / IntelliJ Git
 
 > The bundle extraction (`actions.txt`, `strings/`, `keymap-bindings.txt`) covers
 > **what exists**. It cannot cover **how a task flows**. This file records where
@@ -8,7 +8,7 @@
 > Status of each link verified 2026-10-05 by HTTP status against the live site.
 > `https://www.jetbrains.com/help/idea/<slug>.html`
 
-## Tier 1 — official docs (verified, current, authoritative for flow)
+## Tier 1, official docs (verified, current, authoritative for flow)
 
 These pages are *already written as step-by-step user flows*: click target, dialog
 contents, defaults, decision points, confirmations, notifications, shortcuts. They
@@ -23,17 +23,17 @@ installed build came from.
 | 3 | `commit-and-push-changes` | Task 2 commit, task 3 hunk/line granularity, amend, commit-and-push split |
 | 4 | `manage-branches` | Task 6: create (3 ways), checkout, compare, rename, delete, favorites, grouping, **Recent node ≤5 branches**, per-prefix directory grouping, `Checkout and Update` vs plain checkout, Force Checkout vs Smart Checkout for dirty trees |
 | 5 | `resolve-conflicts` | Task 7: Conflicts dialog, Accept Yours/Theirs/Resolve Manually, 3-pane tool (left local read-only, right repository read-only, centre editable starting from base), Apply Non-Conflicting Changes (all/left/right), `Resolve using Left`/`Resolve using Right`, simple-conflict magic resolve, `Apply Changes` → next file vs `Save and Close` → list, `Revert conflict resolution`, `Accept and Finish` when none remain |
-| 6 | `apply-changes-from-one-branch-to-another` | Task 8: merge, rebase, cherry-pick — the integrate family |
+| 6 | `apply-changes-from-one-branch-to-another` | Task 8: merge, rebase, cherry-pick, the integrate family |
 | 7 | `shelving-and-unshelving-changes` | Task 11: shelve vs stash, silent shelve, unstash variants |
 | 8 | `sync-with-a-remote-repository` | Task 9/12: fetch, pull/update policy, push rejected recovery, multi-repo synchronous control |
 | 9 | `edit-project-history` | Task 5: amend, reword older commit, rebase from here, drop, interactive rebase |
 | 10 | `investigate-changes` | Log navigation, filters, commit details, review how a merge was resolved |
 | 11 | `log-tab` | Log tool window structure and its own affordances |
 | 12 | `using-patches` | Create/apply patch, apply from clipboard |
-| 13 | `settings-version-control-git` | The Version Control \| Git settings reference page (found 2026-10-06 via the "Version Control Settings: Git" cross-reference in `commit-and-push-changes`). States almost no checkbox defaults — useful negative evidence for the R3 capture list — except: cherry-pick suffix off by default, background fetch every 20 minutes, stash-diff-against-local on by default. Carries one hazard: "If you enable the staging area, all existing changelists will be deleted", which contradicts the lossless-switch claim in `commit-and-push-changes` |
-| 14 | `advanced-settings` | The advanced-settings reference page (found 2026-10-06: `settings-advanced-settings` → 404, resolved by topic search — the **third** live instance of the 404-means-renamed lesson). Describes Use Safe Force Push (`--force-with-lease`), recursive submodule clone, incoming/outgoing commit checks; states no checkbox defaults |
+| 13 | `settings-version-control-git` | The Version Control \| Git settings reference page (found 2026-10-06 via the "Version Control Settings: Git" cross-reference in `commit-and-push-changes`). States almost no checkbox defaults, useful negative evidence for the R3 capture list, except: cherry-pick suffix off by default, background fetch every 20 minutes, stash-diff-against-local on by default. Carries one hazard: "If you enable the staging area, all existing changelists will be deleted", which contradicts the lossless-switch claim in `commit-and-push-changes` |
+| 14 | `advanced-settings` | The advanced-settings reference page (found 2026-10-06: `settings-advanced-settings` → 404, resolved by topic search, the **third** live instance of the 404-means-renamed lesson). Describes Use Safe Force Push (`--force-with-lease`), recursive submodule clone, incoming/outgoing commit checks; states no checkbox defaults |
 
-Slugs that 404 — **all four resolved in the table below; two were renames, not
+Slugs that 404, **all four resolved in the table below; two were renames, not
 dead ends. Do not trust the old slug; do not conclude absence from a 404.** A
 fifth instance surfaced 2026-10-06: `settings-advanced-settings` →
 `advanced-settings` (row 14 above), resolved the same way.
@@ -58,7 +58,7 @@ terminal result: on a 404, search the topic and follow the surviving pages' "How
 it works" footers before recording a dead slug. Checking only the surviving
 pages' footers would have caught `compare-file-with-diff` (whose content moved
 into a page `differences-viewer` links to) but not `undo-the-last-commit` or
-`group-changelists` — those needed a topic search, because no page we already held
+`group-changelists`, those needed a topic search, because no page we already held
 linked to them by name.
 
 **What the two recoveries were worth:** `undo-changes` carried a
@@ -66,7 +66,7 @@ linked to them by name.
 Comment, Set active, Track context) and a **four-mode** Git Reset (Soft / Mixed /
 Hard / **Keep**, where `Keep` discards committed work but keeps local work). Neither
 was in the spec before this. `managing-changelists` confirmed the destination
-dialog's three fields reappear in `Move to Another Changelist` (`⌥⇧M`) — one
+dialog's three fields reappear in `Move to Another Changelist` (`⌥⇧M`), one
 component, three call sites. Detail in `docs/spec/rebased-parity.md` §7.1a.
 
 ### Why this tier matters more than anything else here
@@ -89,31 +89,31 @@ from two pages, ready to become specs:
 - **Push dialog** (multi-root) selects only the current repository by default;
   `Define remote` appears inline when there is none; target branch becomes an
   editable field; commits authored by someone else are marked with an asterisk.
-- **Conflicts** can be left and resumed — a Merge Conflicts node with a Resolve
+- **Conflicts** can be left and resumed, a Merge Conflicts node with a Resolve
   link appears in the Commit tool window.
 
 Those are the things that decide whether the result *feels* like Rebased.
 
-## Tier 2 — git4idea source: **not available where expected**
+## Tier 2, git4idea source: **not available where expected**
 
 Checked 2026-10-05:
 
 - Repo exists; https://raw.githubusercontent.com/JetBrains/intellij-community/master/README.md → 200.
 - `plugins/git4idea/src` contains only a `.keep`. Root now has
   `frontend/`, `backend/`, `shared/`, `rt/`, `localHistory/`, `terminal/`,
-  `performanceTesting/` alongside `BUILD.bazel` — the frontend/backend split
+  `performanceTesting/` alongside `BUILD.bazel`, the frontend/backend split
   restructure.
 - `plugins/git4idea/frontend/src` contains only `com/…`; there is no
   `git4idea/ui/branch` path.
 - Recursive tree API (17.6 MB, `truncated: true`, 48 315 entries) has **zero**
   hits for `BranchPopup`, `git4idea/ui`, or `dvcs/ui/`.
 
-So menu **ordering** — the one thing neither docs nor the bundle guarantees —
+So menu **ordering**, the one thing neither docs nor the bundle guarantees,
 cannot currently be read from public source. Note the local bundle ships
 `intellij.vcs.git.frontend.jar`, i.e. exactly the frontend module whose sources
 are absent from the community repo.
 
-## Tier 3 — local bytecode (partial tie-breaker, weak)
+## Tier 3, local bytecode (partial tie-breaker, weak)
 
 No disassembler available: the bundled JBR ships `javac` but **not** `javap`, and
 `/usr/bin/javap` refuses without a system JRE. A hand-rolled constant-pool parser

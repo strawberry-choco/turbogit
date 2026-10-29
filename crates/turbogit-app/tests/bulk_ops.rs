@@ -1,11 +1,3 @@
-//! Issue 09 — bulk operations grid with preflight matrix: the app seam.
-//!
-//! Headless tests over real temporary repositories through the production
-//! registration path ([`AppState::for_roots`]): the preflight matrix over the
-//! live multi-repo selection, the modal-open/policy state, and the confirmed
-//! dispatch with its per-repo outcome reporting. No UI rendering — callers
-//! pass pure intent exactly as the operations grid does.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::git_seed::git;
@@ -13,13 +5,6 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::UpdateMethod;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan, SkipReason};
 
-/// Create an initialized temp repository with one base commit on `main`
-/// plus an `origin` remote so upstream reads can be exercised.
-/// Local repo builder, deliberately NOT `test_support::git_seed::repo_with_origin`.
-///
-/// The recipe commits `README.md`; this suite's change lists and diff panes name the
-/// file they changed, so the base commit has to be `base.txt`. A `base.txt` recipe
-/// would be `test-support` work, not this lane's.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -42,7 +27,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A two-repo project: `alpha` clean and synced, `ui` with a dirty worktree.
 fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join(tag);
@@ -63,14 +47,11 @@ fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) 
     state
 }
 
-// -- Preflight over the selection ---------------------------------------------
-
 #[test]
 fn bulk_preflight_classifies_the_selected_repos_for_the_operation() {
     let (_tmp, project, alpha, ui) = project("pf-classify");
     let state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    // Pull: alpha (clean + upstream) runs; ui (dirty) is skipped.
     let pf = state.bulk_preflight(BulkOp::PullAll);
     assert_eq!(pf.rows.len(), 2, "one row per selected repo");
     let alpha_row = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
@@ -78,14 +59,12 @@ fn bulk_preflight_classifies_the_selected_repos_for_the_operation() {
     assert!(alpha_row.outcome.is_ok(), "alpha should run: {alpha_row:?}");
     assert_eq!(ui_row.outcome, Err(SkipReason::DirtyWorktree));
 
-    // Stash is the inverse: ui runs, alpha (clean) is skipped.
     let pf = state.bulk_preflight(BulkOp::StashAll);
     let alpha_row = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
     let ui_row = pf.rows.iter().find(|r| r.name == "ui").unwrap();
     assert_eq!(alpha_row.outcome, Err(SkipReason::CleanTree));
     assert!(ui_row.outcome.is_ok(), "dirty ui should stash: {ui_row:?}");
 
-    // Push ignores a dirty tree but needs an upstream.
     let pf = state.bulk_preflight(BulkOp::PushAll);
     assert_eq!(pf.will_run(), 2, "both repos are dirty-ok with upstreams");
 }
@@ -94,7 +73,6 @@ fn bulk_preflight_classifies_the_selected_repos_for_the_operation() {
 fn bulk_preflight_uses_the_cached_ahead_behind_counts_for_divergence() {
     let (_tmp, project, alpha, ui) = project("pf-diverged");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
-    // Seed the caches the way an AheadBehind event would: alpha diverged.
     state
         .caches
         .store_ahead_behind(turbogit_domain::model::RootId(alpha.clone().into()), (2, 1));
@@ -118,8 +96,6 @@ fn bulk_preflight_ignores_roots_outside_the_selection() {
     assert_eq!(pf.rows[0].name, "alpha");
 }
 
-// -- Modal open + policy ------------------------------------------------------
-
 #[test]
 fn open_bulk_preflight_seeds_the_pull_policy_from_settings() {
     let (_tmp, project, alpha, _ui) = project("pf-open");
@@ -132,20 +108,15 @@ fn open_bulk_preflight_seeds_the_pull_policy_from_settings() {
     assert_eq!(state.ui.bulk_op, Some(BulkOp::PullAll));
     assert!(state.ui.bulk_rebase, "policy seeds from settings");
 
-    // A non-pull op does not carry the pull policy.
     state.open_bulk_preflight(BulkOp::FetchAll);
     assert_eq!(state.ui.bulk_op, Some(BulkOp::FetchAll));
 }
-
-// -- Confirmed dispatch -------------------------------------------------------
 
 #[test]
 fn run_bulk_confirmed_executes_the_plan_and_reports_per_repo_outcomes() {
     let (_tmp, project, alpha, ui) = project("pf-run");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    // alpha (the planned root) gets local changes to a tracked file; ui
-    // stays dirty as the out-of-scope control.
     std::fs::write(alpha.join("base.txt"), "uncommitted\n").unwrap();
 
     let plan = BulkPlan {
@@ -157,12 +128,7 @@ fn run_bulk_confirmed_executes_the_plan_and_reports_per_repo_outcomes() {
     };
     state.run_bulk_confirmed(plan);
 
-    // The preflight modal closes on confirm and the op runs async.
     assert_eq!(state.ui.bulk_op, None);
-    // A bulk run keeps its own worker pool (ADR-0019's admission slot is only
-    // meaningful with a worker in front of it), so this one result genuinely
-    // arrives on a later frame — unlike a single Operation, which the harness
-    // runs inline.
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         state.drain_events();
@@ -172,13 +138,11 @@ fn run_bulk_confirmed_executes_the_plan_and_reports_per_repo_outcomes() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // The planned root was stashed; the out-of-scope root keeps its changes.
     let stashes = git(&alpha, &["stash", "list"]);
     assert!(!stashes.trim().is_empty(), "alpha's changes were stashed");
     let ui_status = git(&ui, &["status", "--porcelain"]);
     assert!(!ui_status.trim().is_empty(), "out-of-scope ui stayed dirty");
 
-    // Aggregate reporting: the toast summarizes the per-repo outcomes.
     let toast = state.ui.toast.as_ref().expect("completion toast");
     assert!(
         toast.message.contains("Stash all"),
@@ -191,7 +155,6 @@ fn run_bulk_confirmed_executes_the_plan_and_reports_per_repo_outcomes() {
         toast.message
     );
 
-    // The durable activity feed carries the outcome too.
     let last = state.ui.activity.entries.last().expect("activity entry");
     assert!(
         last.message.contains("Stash all"),
@@ -206,8 +169,6 @@ fn run_bulk_confirmed_reports_partial_failure_in_the_summary() {
     let alpha = tmp.path().join("alpha");
     std::fs::create_dir_all(&alpha).unwrap();
 
-    // A pure reporting check of the aggregate message with a fabricated
-    // per-repo outcome (a root whose push has no remote).
     let msg = turbogit_app::state::bulk_report_message(
         "Push all",
         &[
@@ -221,20 +182,6 @@ fn run_bulk_confirmed_reports_partial_failure_in_the_summary() {
     assert_eq!(msg, "Push all · 1 of 2 ok · failed: ui");
 }
 
-/// A root whose directory name is not valid UTF-8 has no name to print, so the
-/// summary's `filter_map` drops it from the `failed:` list — and the toast goes
-/// on to say "1 of 3 ok · failed: ui" while **two** repositories failed. The
-/// third is not in the string at all.
-///
-/// This is a characterization pin, not an approval: showing the unnamed root
-/// under a placeholder — or giving a missing name a wording of its own — is a
-/// human ruling still owed, and this assertion is written to **fail** the
-/// moment somebody makes the summary name it, because that failure is where the
-/// ruling lands. In the same edit, update the `filter_map` over failed roots'
-/// names in `state::bulk_report_message` (which today asks the display-name
-/// owner for a *presence* and drops the `None`) and the doc comment on it,
-/// which names this loss. Both lines change together or this suite goes red
-/// with no other signal.
 #[test]
 fn a_failed_root_with_no_utf8_name_is_missing_from_the_summary() {
     let ok_root = turbogit_domain::model::RootId(PathBuf::from("/w/api").into());
@@ -264,9 +211,6 @@ fn a_failed_root_with_no_utf8_name_is_missing_from_the_summary() {
     );
 }
 
-/// A root path whose final component is not valid UTF-8, built from raw bytes on
-/// the platform's `OsStr` extension — a string literal cannot spell the input
-/// this pin is about, because the loss *is* the byte sequence.
 #[cfg(unix)]
 fn non_utf8_root() -> PathBuf {
     use std::ffi::OsStr;
@@ -275,8 +219,6 @@ fn non_utf8_root() -> PathBuf {
     PathBuf::from(OsStr::from_bytes(b"/w/bad\xffname"))
 }
 
-/// The same shape on Windows, where an unpaired surrogate is well-formed UTF-16
-/// and not UTF-8.
 #[cfg(windows)]
 fn non_utf8_root() -> PathBuf {
     use std::ffi::OsString;

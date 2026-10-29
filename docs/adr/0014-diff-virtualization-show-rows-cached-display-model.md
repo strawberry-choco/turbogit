@@ -8,14 +8,14 @@ two-pane side-by-side layout, and needs only a stable display-row count and
 uniform row height (already true). `Table` would impose its own cell/widget
 model against custom gutters and paired cells for no gain. Parsing the raw
 diff text into rows happens once per diff (memoized alongside `diff_cache`),
-not per frame — paint virtualization alone would leave O(n) parsing on every
+not per frame, paint virtualization alone would leave O(n) parsing on every
 frame.
 
 ## Considered options
 
-- **`egui_extras::Table`** (research recommendation) — rejected: fights custom
+- **`egui_extras::Table`** (research recommendation), rejected: fights custom
   gutter painting and side-by-side cell pairing.
-- **`show_rows` without parse caching** — rejected: only removes paint cost;
+- **`show_rows` without parse caching**, rejected: only removes paint cost;
   per-frame `parsed_rows()` remains O(total lines).
 
 ## Consequences

@@ -1,12 +1,3 @@
-//! What the two **Git engine** adapters genuinely differ on.
-//!
-//! Replaces the parity suite that proved two of the three picker options agreed:
-//! with the pair collapsed there is one CLI adapter and one composed adapter, and
-//! the honest assertion is a *difference* between them, not a round-trip. The
-//! difference is git's DWIM — which the glossary already warns is not guaranteed
-//! across adapters — observed as the tracking ref a branch created from a remote
-//! branch ends up with.
-
 use std::path::{Path, PathBuf};
 
 use std::sync::Arc;
@@ -16,29 +7,18 @@ use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 
-/// The composed adapter exactly as the factory builds it — spelled out here
-/// because this suite exists to contrast the two adapters the factory composes.
 fn composed() -> Arc<dyn GitExecutor> {
     Arc::new(Git2Executor::new(CliExecutor {
         settings: VcsSettings::default(),
     }))
 }
 
-/// The bare CLI adapter, the composed adapter's delegation core.
 fn cli() -> Arc<dyn GitExecutor> {
     Arc::new(CliExecutor {
         settings: VcsSettings::default(),
     })
 }
 
-// `repo_with_remote_branch` below writes NO `user.*` config, so the pinned
-// identity is the repository's only source of identity: every call is pinned per
-// call through the fixture crate's runner, because a headless machine has no
-// global identity to borrow.
-
-/// One repo with a same-content `origin`, plus `feat` pushed there and deleted
-/// locally — the state a remote branch row is clicked from. Local, not a
-/// `git_seed` recipe: the bare lives at `origin.git`, the work tree at `work`.
 fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();

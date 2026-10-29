@@ -1,17 +1,3 @@
-//! The per-line staged oracle, graded against real git.
-//!
-//! Every fixture is a temporary repository driven by the CLI executor, per
-//! `AGENTS.md`: [`AppState::for_roots`] over a `tempfile` directory, rows taken
-//! from the display model the keyed read actually answers with, and answers
-//! checked against `git status --porcelain`, `git diff` and
-//! `git diff --cached` read back after each fixture. The recording fake is not
-//! extended: nothing here needs a git state a real repository cannot produce.
-//!
-//! The oracle's contract is a row of a `HEAD`-based comparison, which is the
-//! patch the preview pins. [`combined_value`] reads exactly that
-//! through the production read, so the rows these tests ask about are the rows
-//! the pane paints, gutter numbers and all.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -32,8 +18,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::{hunk_stats, partial};
 
-// ---------------------------------------------------------------- helpers --
-
 fn executor() -> CliExecutor {
     CliExecutor {
         settings: VcsSettings::default(),
@@ -48,7 +32,6 @@ fn app_state(project: &Path, repo: &Path) -> AppState {
     AppState::for_roots(project, std::slice::from_ref(&repo.to_path_buf()))
 }
 
-/// Fill `repo`'s hunk statistics the way the app fills them, on ask.
 fn stats<'a>(state: &'a mut AppState, repo: &Path) -> &'a RootHunkStats {
     let root = root_id(repo);
     state.ensure_hunk_stats(&root);
@@ -58,12 +41,10 @@ fn stats<'a>(state: &'a mut AppState, repo: &Path) -> &'a RootHunkStats {
         .expect("the root's entry fills on ask")
 }
 
-/// What the caches hold for `repo` right now, without filling anything.
 fn held_stats<'a>(caches: &'a RootCaches, repo: &Path) -> Option<&'a RootHunkStats> {
     caches.hunk_stats(&root_id(repo))
 }
 
-/// Every row of one display model, in paint order, pairs opened up.
 fn rows(model: &DiffModel) -> Vec<&Row> {
     model
         .display
@@ -75,7 +56,6 @@ fn rows(model: &DiffModel) -> Vec<&Row> {
         .collect()
 }
 
-/// The changed rows of one display model, in paint order.
 fn changed_rows(model: &DiffModel) -> Vec<&Row> {
     rows(model)
         .into_iter()
@@ -83,8 +63,6 @@ fn changed_rows(model: &DiffModel) -> Vec<&Row> {
         .collect()
 }
 
-/// The `(kind, text, old_no, new_no)` of every changed row, so a failed
-/// assertion prints the fixture's own geometry.
 fn geometry(model: &DiffModel) -> Vec<(RowKind, String, usize, usize)> {
     changed_rows(model)
         .into_iter()
@@ -92,15 +70,10 @@ fn geometry(model: &DiffModel) -> Vec<(RowKind, String, usize, usize)> {
         .collect()
 }
 
-/// The display model of one file's `HEAD ↔ worktree` diff, read through the
-/// production keyed read: the pane's own rows with the pane's own numbers.
 fn combined_value(state: &mut AppState, repo: &Path, rel: &str) -> Arc<DiffValue> {
     read_value(state, repo, rel, Some("HEAD"))
 }
 
-/// The display model of an unpinned working-tree read, `index ↔ worktree`: the
-/// comparison this app no longer shows and [`Displayed::IndexVsWorktree`] still
-/// names, so the oracle's declined-answer cases have a real display model.
 fn working_tree_value(state: &mut AppState, repo: &Path, rel: &str) -> Arc<DiffValue> {
     read_value(state, repo, rel, None)
 }
@@ -113,7 +86,6 @@ fn read_value(state: &mut AppState, repo: &Path, rel: &str, left: Option<&str>) 
         DiffPolicies::default(),
         Some(PathBuf::from(rel)),
     );
-    // Ask, settle on the pump, ask again: the read's own two-frame life.
     for _ in 0..4 {
         if let Read::Fresh(value) = state.read(target.clone()) {
             return value;
@@ -123,15 +95,10 @@ fn read_value(state: &mut AppState, repo: &Path, rel: &str, left: Option<&str>) 
     panic!("the diff read never settles for {rel}");
 }
 
-/// The three states a reviewer grades an answer against: git's own index
-/// verdict for the path, and the two patch bodies the oracle derives from.
 #[derive(Debug)]
 struct GitStates {
-    /// `git status --porcelain`'s whole line for the path.
     porcelain: String,
-    /// `git diff`: the unstaged body.
     unstaged: String,
-    /// `git diff --cached`: the staged body.
     staged: String,
 }
 
@@ -157,8 +124,6 @@ fn git_states(repo: &Path, rel: &str) -> GitStates {
     }
 }
 
-/// How many times `<prefix><text>` appears as its own line of one patch body,
-/// with git's `+++`/`---` file headers excluded.
 fn body_line(body: &str, prefix: char, text: &str) -> usize {
     let want = format!("{prefix}{text}");
     body.lines()
@@ -167,9 +132,6 @@ fn body_line(body: &str, prefix: char, text: &str) -> usize {
         .count()
 }
 
-/// The one changed row whose text is `text`, asserting it is unique. The point
-/// of the oracle is that a row is its position, so a fixture that could match
-/// twice must say so loudly rather than answer for the wrong line.
 fn only_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
     let found: Vec<&Row> = changed_rows(model)
         .into_iter()
@@ -185,11 +147,6 @@ fn only_row<'a>(model: &'a DiffModel, kind: RowKind, text: &str) -> &'a Row {
     found[0]
 }
 
-/// The one changed row of `kind` whose own gutter is `old_no`.
-///
-/// A translation question is asked of a number rather than a text, so the
-/// fixtures that hold two deletions of different text in one hunk can name the
-/// row a click would be about without spelling its content twice.
 fn only_row_at(model: &DiffModel, kind: RowKind, old_no: usize) -> &Row {
     let found: Vec<&Row> = changed_rows(model)
         .into_iter()
@@ -205,8 +162,6 @@ fn only_row_at(model: &DiffModel, kind: RowKind, old_no: usize) -> &Row {
     found[0]
 }
 
-/// A row that does not come from a display model, for asking the oracle about a
-/// path the pane shows no rows for.
 fn row_at(kind: RowKind, old_no: usize, new_no: usize) -> Row {
     Row {
         kind,
@@ -220,8 +175,6 @@ fn row_at(kind: RowKind, old_no: usize, new_no: usize) -> Row {
     }
 }
 
-/// A file whose line 2 is modified, a line added after line 10, and line 20
-/// deleted: far enough apart that git reports three hunks in each patch.
 const BASE: &str = concat!(
     "alpha\n",
     "bravo\n",
@@ -245,7 +198,6 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-/// [`BASE`] with `bravo` modified, `uniform` added at line 11, `tango` deleted.
 const ALL_THREE: &str = concat!(
     "alpha\n",
     "BRAVO\n",
@@ -269,36 +221,18 @@ const ALL_THREE: &str = concat!(
     "sierra\n",
 );
 
-/// Seed `repo` with [`BASE`] as `f.txt`, committed on top of the floor commit.
 fn seed_base(repo: &Path) {
     commit(repo, "f.txt", BASE, "f base");
 }
 
-// --- the stale-answer guard, written first ----------------------------------
-
-/// The guard that keeps the answer out of the diff value.
-///
-/// A line goes into the index through the app's own staging path
-/// ([`granular::dispatch`], settled by the production `OpCompleted` → refresh →
-/// drain route). Afterwards `git diff HEAD` is byte-for-byte what it was, so the
-/// displayed diff and every one of its rows is the very value the click saw, and
-/// the oracle still flips, because its life is one `RootHunkStats` entry and the
-/// refresh dropped that entry as a unit. An answer folded into the display model
-/// cannot do this: it would be re-derived from identical bytes.
 #[test]
 fn a_staged_line_flips_the_answer_while_the_displayed_bytes_do_not_move() {
     let parent = tempfile::tempdir().unwrap();
     let repo = repo_with_one_commit(parent.path(), "stale-guard");
     seed_base(&repo);
-    // One added line at the end: hunk 0's only changed line, so its ordinal is
-    // 0 and a forward stage of it is the whole of the file's change.
     std::fs::write(repo.join("f.txt"), format!("{BASE}uniform\n")).unwrap();
 
     let mut state = app_state(parent.path(), &repo);
-    // The rows come from an unpinned `index ↔ worktree` read, and for an addition
-    // row that is the same answer a HEAD-based row gets, because both post-images
-    // are the worktree. The handle is held across the operation on purpose: the
-    // same rows, unmoved, are what the answer flips on.
     let value = working_tree_value(&mut state, &repo, "f.txt");
     let row = only_row(&value.model, RowKind::Add, "uniform");
     let displayed_before = git(&repo, &["diff", "HEAD", "--", "f.txt"]);
@@ -310,10 +244,6 @@ fn a_staged_line_flips_the_answer_while_the_displayed_bytes_do_not_move() {
         geometry(&value.model)
     );
 
-    // One row click's real route, through the dispatch seam and settled by the
-    // production `OpCompleted` → refresh → drain path. The row is addressed by
-    // its worktree gutter; its direction is the oracle's own answer, which is
-    // `Stage` here because the line is not in the index yet.
     granular::dispatch(
         &mut state,
         ChangeRef::new(root_id(&repo), "f.txt"),
@@ -326,7 +256,6 @@ fn a_staged_line_flips_the_answer_while_the_displayed_bytes_do_not_move() {
         "the refresh dropped the root's whole entry, line sets included"
     );
 
-    // Same row object, same bytes, one re-fill: the answer follows the index.
     assert_eq!(
         stats(&mut state, &repo).row_is_staged(Path::new("f.txt"), row),
         Some(true),
@@ -344,8 +273,6 @@ fn a_staged_line_flips_the_answer_while_the_displayed_bytes_do_not_move() {
     assert_eq!(body_line(&graded.staged, '+', "uniform"), 1);
     assert_eq!(body_line(&graded.unstaged, '+', "uniform"), 0);
 }
-
-// --- all three staged, and none of them -------------------------------------
 
 #[test]
 fn all_three_staged_makes_every_row_of_the_combined_diff_answer_staged() {
@@ -412,9 +339,6 @@ fn nothing_staged_makes_every_row_answer_unstaged() {
     let value = combined_value(&mut state, &repo, "f.txt");
     let stats = stats(&mut state, &repo);
 
-    // The pairing the display model is claimed to keep: a modified line is two
-    // rows, and each numbers only its own side, so the two can be answered
-    // apart. On this content both happen to be unstaged.
     let removed = only_row(&value.model, RowKind::Del, "bravo");
     let added = only_row(&value.model, RowKind::Add, "BRAVO");
     assert_eq!(
@@ -448,8 +372,6 @@ fn nothing_staged_makes_every_row_answer_unstaged() {
     assert_eq!(body_line(&graded.unstaged, '-', "tango"), 1);
 }
 
-// --- the mixed case, which is the whole point -------------------------------
-
 #[test]
 fn reverse_applying_one_line_out_of_the_index_flips_that_row_alone() {
     let parent = tempfile::tempdir().unwrap();
@@ -470,10 +392,6 @@ fn reverse_applying_one_line_out_of_the_index_flips_that_row_alone() {
         );
     }
 
-    // One row's reverse-apply, taken from the patch that can carry it: a staged
-    // line's appliable source is `HEAD ↔ index`, never the combined display
-    // (`The constraint, measured`). Choosing the source per line is the next
-    // ticket's job, so the fixture names it here.
     let exec = executor();
     let staged_patch = exec
         .diff_patch(
@@ -510,10 +428,6 @@ fn reverse_applying_one_line_out_of_the_index_flips_that_row_alone() {
         ChangeStatus::Modified,
     )
     .expect("reverse-applying one staged line");
-    // The op seam's own completion step, which is what retires the answer: the
-    // statistics are compute-on-miss, so nothing else drops the entry, and a
-    // test that moves git behind the app's back has to say so the way the app
-    // does.
     state.refresh(Affected::Root(root_id(&repo)));
 
     let stats = stats(&mut state, &repo);
@@ -564,17 +478,13 @@ fn reverse_applying_one_line_out_of_the_index_flips_that_row_alone() {
     );
 }
 
-// --- pairing is positional --------------------------------------------------
-
 #[test]
 fn two_identical_adjacent_additions_answer_apart_by_position() {
     let parent = tempfile::tempdir().unwrap();
     let repo = repo_with_one_commit(parent.path(), "duplicate-adds");
     commit(&repo, "dup.txt", "alpha\nbravo\n", "base");
-    // The index holds one `dup`...
     std::fs::write(repo.join("dup.txt"), "alpha\nbravo\ndup\n").unwrap();
     git(&repo, &["add", "--", "dup.txt"]);
-    // ...and the worktree holds a second copy, identical and adjacent.
     std::fs::write(repo.join("dup.txt"), "alpha\nbravo\ndup\ndup\n").unwrap();
 
     let mut state = app_state(parent.path(), &repo);
@@ -613,8 +523,6 @@ fn two_identical_adjacent_additions_answer_apart_by_position() {
     );
 }
 
-// --- staged, then edited again ----------------------------------------------
-
 #[test]
 fn a_line_staged_and_then_the_file_edited_again_still_reports_staged() {
     let parent = tempfile::tempdir().unwrap();
@@ -622,7 +530,6 @@ fn a_line_staged_and_then_the_file_edited_again_still_reports_staged() {
     commit(&repo, "f.txt", "alpha\n", "base");
     std::fs::write(repo.join("f.txt"), "alpha\nstaged\n").unwrap();
     git(&repo, &["add", "--", "f.txt"]);
-    // A further, unstaged edit, elsewhere in the file.
     std::fs::write(repo.join("f.txt"), "alpha\nstaged\nmore\n").unwrap();
 
     let mut state = app_state(parent.path(), &repo);
@@ -667,9 +574,6 @@ fn a_staged_addition_whose_text_the_worktree_rewrote_reports_unstaged() {
     let value = combined_value(&mut state, &repo, "f.txt");
     let stats = stats(&mut state, &repo);
 
-    // The other half of the two-state rule, and the reason there is no third
-    // state to invent: HEAD never held `staged`, so the combined view shows one
-    // `+REWRITTEN` row, and the index does not hold that text.
     assert_eq!(
         changed_rows(&value.model)
             .iter()
@@ -699,8 +603,6 @@ fn a_staged_addition_whose_text_the_worktree_rewrote_reports_unstaged() {
     assert_eq!(body_line(&graded.unstaged, '-', "staged"), 1);
 }
 
-// --- states that are not per-line questions ---------------------------------
-
 #[test]
 fn an_unmerged_path_answers_nothing_although_its_markers_are_ordinary_rows() {
     let parent = tempfile::tempdir().unwrap();
@@ -710,10 +612,6 @@ fn an_unmerged_path_answers_nothing_although_its_markers_are_ordinary_rows() {
     let value = combined_value(&mut state, &repo, "conf.txt");
     let stats = stats(&mut state, &repo);
 
-    // The displayed patch is git's ordinary two-sided form: conflict markers as
-    // `+` rows, and no sign in the value the rows come from that they are not a
-    // real change. This is why the answer, not the patch, has to gate the
-    // controls.
     assert!(
         !changed_rows(&value.model).is_empty(),
         "the pane really does show rows, geometry={:?}",
@@ -807,9 +705,6 @@ fn a_mode_only_change_answers_no_line_in_either_space() {
     );
 }
 
-/// Every per-line answer for `rel` says no line in either space. The section is
-/// listed, its sets are empty, and an empty set is never a claim that some line
-/// is staged.
 fn assert_numbers_no_line(state: &mut AppState, repo: &Path, rel: &str) {
     let stats = stats(state, repo);
     let entry = staged_lines::find(&stats.line_sets, Path::new(rel))
@@ -847,9 +742,6 @@ fn a_rename_with_content_is_keyed_by_its_new_name_and_answers_per_line() {
     let value = combined_value(&mut state, &repo, "new.rs");
     let stats = stats(&mut state, &repo);
 
-    // git's path-scoped view of a rename cannot see the other half of it, so the
-    // pane shows the new file's lines as plain additions. The whole-root patches
-    // the oracle reads do see it, and key the section by its `b/` side.
     assert_eq!(
         changed_rows(&value.model)
             .iter()
@@ -891,8 +783,6 @@ fn a_rename_with_content_is_keyed_by_its_new_name_and_answers_per_line() {
     );
 }
 
-// --- the one invalidation, on the production path ---------------------------
-
 #[test]
 fn the_answer_shares_the_hunk_spans_one_unit_lifetime_across_every_root() {
     let parent = tempfile::tempdir().unwrap();
@@ -926,19 +816,15 @@ fn the_answer_shares_the_hunk_spans_one_unit_lifetime_across_every_root() {
         );
     }
 
-    // One root's refresh drops that root's entry and nothing else's. The answer
-    // cannot outlive the entry it is a field of, because it is a field of it.
     caches.invalidate(&Affected::Root(first_root.clone()));
     assert!(caches.hunk_stats(&first_root).is_none());
     assert!(caches.hunk_stats(&second_root).is_some());
-    // And the whole-cache path empties every map through the same interface.
     caches.invalidate(&Affected::All);
     assert!(
         caches.is_empty(),
         "no new map, so no new clear arm and no new clause"
     );
 
-    // Re-filling reads git again, so the answer is whatever the index is now.
     git(&first, &["add", "--", "f.txt"]);
     caches.ensure_hunk_stats(&exec, &first_root);
     let filled = caches.hunk_stats(&first_root).expect("refilled");
@@ -959,12 +845,6 @@ fn the_answer_shares_the_hunk_spans_one_unit_lifetime_across_every_root() {
     );
 }
 
-// --- the unborn HEAD, where the read has no baseline -------------------------
-
-/// A repository nobody has committed in yet: initialised, configured, no HEAD.
-/// A `HEAD` read there is refused by the engine (`cli.rs` `guard_unborn_head`)
-/// with `TgError::NoCommitsYet`, so the oracle is never asked about a
-/// substituted patch and the pane never builds rows.
 fn unborn_repo(project: &Path, name: &str) -> PathBuf {
     let work = project.join(name);
     git(
@@ -977,16 +857,9 @@ fn unborn_repo(project: &Path, name: &str) -> PathBuf {
     work
 }
 
-/// The sentence the pane prints for a refused `HEAD` read. It reaches the
-/// surface as text, because `Read::Failed` holds a rendered message, and the
-/// variant behind it is what keeps the producer's refusal matchable at the
-/// engine boundary rather than something only a string can recognise.
 const NO_COMMITS_MESSAGE: &str =
     "this repository has no commits yet: there is no first commit to compare your changes against";
 
-/// Ask the production keyed read until it gives a terminal verdict, and hand
-/// back the failure text. A `Fresh` answer here would mean the read was
-/// answered somehow, which is the thing this program decided not to do.
 fn read_failure(state: &mut AppState, target: DiffTarget) -> String {
     for _ in 0..4 {
         match state.read(target.clone()) {
@@ -1007,10 +880,6 @@ fn read_failure(state: &mut AppState, target: DiffTarget) -> String {
     );
 }
 
-/// The pane's answer on a fresh repository that has staged content: a refusal
-/// naming the missing baseline, and no rows. Git's own evidence is in the same
-/// test, because the content the refused read would have reported really does
-/// exist and really does have no HEAD side.
 #[test]
 fn an_unborn_head_refuses_the_combined_read_and_shows_the_sentence() {
     let parent = tempfile::tempdir().unwrap();
@@ -1038,17 +907,9 @@ fn an_unborn_head_refuses_the_combined_read_and_shows_the_sentence() {
     );
     assert_eq!(read_failure(&mut state, target), NO_COMMITS_MESSAGE);
 
-    // The whole-root ask is the same refusal, and it is the read
-    // `ensure_hunk_stats` makes.
     let root_target = DiffTarget::working_tree(repo.clone(), DiffPolicies::default(), None);
     assert_eq!(read_failure(&mut state, root_target), NO_COMMITS_MESSAGE);
 
-    // What the refusal does to the root's statistics, pinned rather than
-    // assumed. The two index-facing patches still fill, so the oracle's own
-    // data is intact; only the HEAD side is missing, and it is missing because
-    // the failed read is recorded against that one view (`root_caches.rs`
-    // `diff_failed`) and contributes an empty list to the entry. The failure's
-    // own suite is `tests/root_read_failures.rs`.
     let stats = stats(&mut state, &repo);
     assert!(
         stats.file(StatsView::Repo, Path::new("f.txt")).is_none(),
@@ -1067,9 +928,6 @@ fn an_unborn_head_refuses_the_combined_read_and_shows_the_sentence() {
     );
     assert!(!sets.conflicted, "a fresh repository is not a merge");
 
-    // And the refusal is not a sticky verdict. `refresh` drops the read's rule
-    // state with the values it governs, so once a first commit exists the same
-    // target answers rows rather than remembering that it once failed.
     git(&repo, &["commit", "-q", "-m", "first"]);
     std::fs::write(repo.join("f.txt"), "alpha\nbravo\ncharlie\n").unwrap();
     state.refresh(Affected::All);
@@ -1088,10 +946,6 @@ fn an_unborn_head_refuses_the_combined_read_and_shows_the_sentence() {
     );
 }
 
-/// The other state of the same root, an empty index, refuses for the same
-/// reason. The one surface that still answers is the unversioned file's own
-/// pane, which never asks git for a HEAD side: it is built from the file's
-/// bytes, so this program changes nothing about it.
 #[test]
 fn an_unborn_head_with_an_empty_index_refuses_and_the_untracked_pane_still_answers() {
     let parent = tempfile::tempdir().unwrap();
@@ -1128,13 +982,6 @@ fn an_unborn_head_with_an_empty_index_refuses_and_the_untracked_pane_still_answe
     );
 }
 
-// --- the coordinate translation, against real git ----------------------------
-
-/// One row click's whole route: translate the gutter, find the position, compose
-/// the selection from the RETAINED section, and hand it to git. Nothing here
-/// re-reads a patch: the section the operation applies is the one the cold root
-/// fill parsed and kept, which is the whole reason
-/// [`staged_lines::section_as_patch`] exists.
 fn apply_located(
     one: &staged_lines::FileLineSets,
     repo: &Path,
@@ -1161,11 +1008,6 @@ fn apply_located(
     outcome.expect("the located line composes to a patch git accepts");
 }
 
-/// The case that breaks a naive implementation: a HEAD gutter number that is not
-/// the same line in the index, because a staged insertion above it shifted every
-/// number below. Two deletions in a row are the sharpest shape of it, because
-/// asking the unstaged patch with the printed number finds a real changed line,
-/// namely the one ABOVE the line that was clicked.
 #[test]
 fn a_head_gutter_hops_the_index_before_the_unstaged_patch_is_asked_for_a_position() {
     let parent = tempfile::tempdir().unwrap();
@@ -1193,22 +1035,17 @@ fn a_head_gutter_hops_the_index_before_the_unstaged_patch_is_asked_for_a_positio
         (19, 20),
         "the pane's gutters name HEAD, because the rows come from `HEAD <-> worktree`"
     );
-    // The hop: both lines are one higher in the index than in HEAD.
     assert_eq!(
         one.map(Space::Head, Space::Index, 19),
         Mapping::Both(20),
         "and not one number lower, which is what an inverted shift would say"
     );
     assert_eq!(one.map(Space::Head, Space::Index, 20), Mapping::Both(21));
-    // The trap, stated as the wrong answer: index 20 is `sierra` and is a real
-    // changed line of the unstaged patch, so an untranslated ask does not fail,
-    // it stages the neighbour.
     assert_eq!(
         one.locate(Source::Local, Side::Pre, 20),
         Ordinal::At { hunk: 0, ord: 0 },
         "the click on `tango` answered without the hop"
     );
-    // The two answers a click actually composes from.
     let ask = |old_no, toggle| {
         row_source(
             &sets,
@@ -1235,9 +1072,6 @@ fn a_head_gutter_hops_the_index_before_the_unstaged_patch_is_asked_for_a_positio
             ord: 0
         }
     );
-    // And the numbering the plan insists stays separate: the displayed patch
-    // counts the staged insertion as its own hunk, so the row's `hunk` is one
-    // ahead of the index the retained unstaged section enumerates.
     assert_eq!(
         tango_hunk,
         1,
@@ -1291,9 +1125,6 @@ fn a_head_gutter_hops_the_index_before_the_unstaged_patch_is_asked_for_a_positio
     );
 }
 
-/// The same translation with the shift going the other way: a staged deletion
-/// above the line makes the index number smaller than the gutter the pane
-/// prints, and the unstaged patch prints no such line at all.
 #[test]
 fn a_staged_deletion_above_shifts_the_gutter_the_other_way_and_the_hop_undoes_it() {
     let parent = tempfile::tempdir().unwrap();
@@ -1362,8 +1193,6 @@ fn a_staged_deletion_above_shifts_the_gutter_the_other_way_and_the_hop_undoes_it
     assert_eq!(body_line(&graded.unstaged, '-', "tango"), 0);
 }
 
-/// One displayed hunk holding a staged change and an unstaged one: four rows,
-/// two patches, and each patch's own ordinals, which are not the row's.
 #[test]
 fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
     let parent = tempfile::tempdir().unwrap();
@@ -1383,8 +1212,6 @@ fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
     let sets = stats(&mut state, &repo).line_sets.clone();
     let one = staged_lines::find(&sets, Path::new("f.txt")).expect("listed");
 
-    // Close enough together that `git diff HEAD` prints ONE hunk, so the four
-    // rows share a displayed hunk index and a 0..3 run of displayed ordinals.
     let rows = [
         only_row(&value.model, RowKind::Add, "uniform"),
         only_row(&value.model, RowKind::Del, "november"),
@@ -1401,9 +1228,6 @@ fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
         [0, 1, 2],
         "and the displayed patch's own changed-line run"
     );
-    // The staged addition is the staged patch's ordinal 0, in the staged patch's
-    // hunk 0; the unstaged edit is the unstaged patch's 0 and 1, in ITS hunk 0.
-    // Neither answer is the row's `line_ord`.
     assert_eq!(
         row_source(
             &sets,
@@ -1449,9 +1273,6 @@ fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
             ord: 1
         }
     );
-    // The two wrong-way asks each name a different decline: a row that is already
-    // staged has nothing for the unstaged patch to add, and a row the stage never
-    // printed has nothing for the staged patch to remove.
     assert_eq!(
         row_source(
             &sets,
@@ -1479,10 +1300,6 @@ fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
         one.staged.removed.runs()
     );
 
-    // The round trip the plan asks for, on the numbers real git printed rather
-    // than on invented ones: every line of every row that exists in both images
-    // of a hop maps forward and back to the same number, in each of the four
-    // single hops and in both compositions.
     for row in changed_rows(&value.model) {
         let (space, number) = match row.kind {
             RowKind::Del => (Space::Head, row.old_no),
@@ -1502,10 +1319,6 @@ fn one_displayed_hunk_anchors_rows_that_belong_to_two_different_patches() {
     }
 }
 
-/// Ticket 03's duplicate fixture, walked all the way to an operation: two
-/// adjacent `dup` lines the file holds, one of them staged. Content cannot tell
-/// them apart, and the answers do not either, until the click has to say which
-/// patch and which line of it.
 #[test]
 fn two_identical_adjacent_additions_reach_the_same_ordinal_in_two_different_patches() {
     let parent = tempfile::tempdir().unwrap();
@@ -1529,9 +1342,6 @@ fn two_identical_adjacent_additions_reach_the_same_ordinal_in_two_different_patc
         "one identical text, two worktree numbers"
     );
 
-    // The staged copy is the staged patch's only changed line; the further copy
-    // is the unstaged patch's only changed line. Same hunk, same ordinal,
-    // different patches, and only the position says which is which.
     assert_eq!(
         row_source(
             &sets,
@@ -1563,9 +1373,6 @@ fn two_identical_adjacent_additions_reach_the_same_ordinal_in_two_different_patc
         },
         "worktree 4 needs no hop, and is the unstaged patch's own ordinal 0"
     );
-    // Each wrong-way ask declines, and declines differently: the staged copy is
-    // context in the unstaged patch, while the worktree copy the index does not
-    // hold has no index number to look up at all.
     assert_eq!(
         row_source(
             &sets,
@@ -1600,9 +1407,6 @@ fn two_identical_adjacent_additions_reach_the_same_ordinal_in_two_different_patc
         "one operation took the first copy and left the second, which no \
          content-based pairing could have chosen"
     );
-    // The op seam's own completion step, because the fixture moved git behind the
-    // app's back: the statistics are compute-on-miss, so nothing else drops the
-    // entry, and a refetch that never happened would answer from the stale one.
     state.refresh(Affected::Root(root_id(&repo)));
     let filled = stats(&mut state, &repo);
     for row in adds {
@@ -1614,9 +1418,6 @@ fn two_identical_adjacent_additions_reach_the_same_ordinal_in_two_different_patc
     }
 }
 
-/// The hand-off in one round trip: the ordinal `row_source` reports for a real
-/// staged line, composed out of the section the root fill retained, reverse-applies
-/// exactly that line and nothing else.
 #[test]
 fn the_retained_section_and_the_located_ordinal_reverse_apply_one_staged_line() {
     let parent = tempfile::tempdir().unwrap();
@@ -1647,8 +1448,6 @@ fn the_retained_section_and_the_located_ordinal_reverse_apply_one_staged_line() 
         },
         "the second hunk of the staged section, its only changed line"
     );
-    // The same hunk index git's own text says, reached without a second read:
-    // the insertion is one hunk of its own because the three edits are far apart.
     let exec = executor();
     let read = exec
         .diff_patch(
@@ -1710,8 +1509,6 @@ fn the_retained_section_and_the_located_ordinal_reverse_apply_one_staged_line() 
     );
 }
 
-/// The states a click must not be able to compose from, on real repositories:
-/// an unmerged path, and a path in no index-facing patch at all.
 #[test]
 fn an_unmerged_or_untracked_row_has_no_source_at_all() {
     let parent = tempfile::tempdir().unwrap();
@@ -1733,8 +1530,6 @@ fn an_unmerged_or_untracked_row_has_no_source_at_all() {
             );
         }
     }
-    // A conflicted file retains no section either, so there is nothing to
-    // compose even if a caller ignored the answer above.
     let one = staged_lines::find(&sets, Path::new("conf.txt")).expect("listed");
     assert!(
         one.local_section.is_none() && one.staged_section.is_none(),

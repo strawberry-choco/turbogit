@@ -1,16 +1,3 @@
-//! The conflict verbs are named entries, and each one still runs the git the
-//! closure ran.
-//!
-//! Driven through the Headless harness against a repository carrying a real,
-//! unresolved merge conflict, and asserted as **what the repository becomes**:
-//! which side stage 2 carries, that the written resolution is staged, and that
-//! every simple conflict is staged. The labels ride along because they are what
-//! the user reads in the toast.
-//!
-//! The pair of "Apply merge resolution" sites is why the entry is one name: the
-//! merge editor and the resolver window say the same verb with the same worker,
-//! and two copies are what a change to one of them can make disagree.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{git, repo_with_conflict};
@@ -18,14 +5,12 @@ use turbogit_app::shell_writes::conflict as writes;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootStatus;
 
-/// A repository with a real conflict in `conf.txt`: `main` says `main`, `side`
-/// says `side`, and `git merge side` was started and left in progress.
 fn conflicted(project: &Path) -> PathBuf {
     repo_with_conflict(project, "work")
 }
 
 /// The same conflict plus `simple.txt` staged at stages 1, 2 and 3 with the
-/// **same blob** in all three — the shape `Resolve simple conflicts` exists to
+/// **same blob** in all three, the shape `Resolve simple conflicts` exists to
 /// clear, and one git's own merge will never produce: both sides changing a file
 /// to identical content auto-resolves, so the entry has to be placed with
 /// `update-index` rather than waited for.
@@ -55,7 +40,6 @@ fn with_a_simple_conflict(work: &Path) {
     assert!(child.wait().unwrap().success());
 }
 
-/// Write `body` into the repository's object store and return its blob hash.
 fn blob_from_stdin(work: &Path, body: &str) -> String {
     use std::io::Write;
     let mut child = std::process::Command::new("git")
@@ -85,8 +69,6 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
     git(dir, args).trim().to_string()
 }
 
-/// Stage 2 of `path` in the index — what an accepted side leaves behind.
-/// Untrimmed: the assertion is the file's content, newline included.
 fn stage2(work: &Path, path: &str) -> String {
     git(work, &["show", &format!(":{path}")])
 }

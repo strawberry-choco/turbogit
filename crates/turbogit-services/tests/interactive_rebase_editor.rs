@@ -1,16 +1,6 @@
-//! Issue 30 — interactive rebase editor rework (screen 17).
-//!
-//! The editor's domain logic is tested at the [`history_editor`] seam: the
-//! REBASE-TODO text round-trip, the post-plan result preview, the computed
-//! cautions, and the backup-ref safety net. Pure parts run on plain data;
-//! git-touching parts run against real repositories (tempdir + system `git`).
-
 #![allow(dead_code)]
 
 use std::path::Path;
-// Still needed, and deliberately: the two backup-ref assertions below assert
-// that a git invocation **fails**, the opposite contract from `git_seed::git`
-// — folding them in would panic on the success they are asking not to happen.
 use std::process::Command;
 
 use test_support::git_seed::git;
@@ -22,13 +12,6 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_services::history_editor;
 use turbogit_services::reselection::{self, RewrittenAnchor};
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
-///
-/// **Not `git_seed::commit`, which overwrites** `path`; this appends, so
-/// `commits_touching_the_same_file_raise_the_conflict_caution` can give the second
-/// commit a sibling on the same path.
 fn append_commit(dir: &Path, name: &str, text: &str) -> String {
     let file = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
@@ -50,12 +33,6 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Repo on `main` (one base commit) with a `feature` branch three commits
-/// ahead, checked out — the interactive-editing subject.
-///
-/// **Kept local, not `git_seed::repo_with_history`**: this needs
-/// `a.txt`/`b.txt`/`c.txt` beside a `base.txt` and no remote, because two tests below
-/// assert *which paths* the replayed commits touch.
 fn plan_repo(tmp: &Path, name: &str) -> std::path::PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
@@ -79,8 +56,6 @@ fn entry(action: RebaseAction, commit: &str, subject: &str) -> RebasePlanEntry {
     }
 }
 
-// ------------------------------------------------------------ rebase-todo --
-
 #[test]
 fn a_plan_round_trips_through_the_todo_text() {
     let plan = vec![
@@ -99,7 +74,7 @@ fn a_plan_round_trips_through_the_todo_text() {
 /// Git's rebase-todo format has no slot for a replacement message, so a plan
 /// that carries one does NOT round-trip through the editor's buffer: the verb
 /// survives, the message is dropped rather than erroring. This is the contract
-/// ADR-0025 accepts to keep history editing on one path — the editor's buffer
+/// ADR-0025 accepts to keep history editing on one path, the editor's buffer
 /// stays a list of verbs, never a message store.
 #[test]
 fn a_reword_message_survives_as_a_verb_and_not_as_text() {
@@ -171,17 +146,12 @@ pick 9b2e440a docs: runbook
 
 #[test]
 fn an_unrecognised_verb_falls_back_to_unknown_and_survives_the_round_trip() {
-    // The parser's fallback (the `rebase.entry.action.name.unknown` name): a
-    // row the editor did not create must SURVIVE as `Unknown` — coercing it
-    // to `pick` would produce a valid-looking wrong plan.
     let plan = history_editor::parse_todo("rebase 9b2e440a docs: runbook")
         .expect("the row survives with an Unknown action");
     assert_eq!(plan.len(), 1);
     assert_eq!(plan[0].action, RebaseAction::Unknown);
     assert_eq!(plan[0].commit, "9b2e440a");
 
-    // And the fallback is a first-class verb in the editor's own todo text:
-    // rendering the plan back and re-parsing it keeps the row Unknown.
     let round_tripped = history_editor::parse_todo(&history_editor::render_todo(&plan))
         .expect("the rendered fallback re-parses");
     assert_eq!(round_tripped, plan);
@@ -189,8 +159,6 @@ fn an_unrecognised_verb_falls_back_to_unknown_and_survives_the_round_trip() {
 
 #[test]
 fn update_ref_parses_and_renders_like_any_verb() {
-    // Git's todo verb is `update-ref` (its own abbreviation `u`); the plan
-    // carries it as a row action so the editor can offer it like any other.
     let plan =
         history_editor::parse_todo("update-ref 9b2e440a docs: runbook").expect("update-ref parses");
     assert_eq!(plan[0].action, RebaseAction::UpdateRef);
@@ -204,13 +172,10 @@ fn update_ref_parses_and_renders_like_any_verb() {
         RebaseAction::UpdateRef,
         "git's own single-letter abbreviation parses too"
     );
-    // A row marked Update Ref survives the preview like any replayed commit.
     let preview = history_editor::plan_preview(&plan);
     assert_eq!(preview.after, 1);
     assert_eq!(preview.kept, plan);
 }
-
-// ---------------------------------------------------------------- preview --
 
 #[test]
 fn an_all_pick_plan_keeps_every_commit() {
@@ -231,8 +196,6 @@ fn an_all_pick_plan_keeps_every_commit() {
 
 #[test]
 fn folds_group_into_the_nearest_kept_commit_and_drops_are_counted() {
-    // pick A · fixup B · squash C · drop D · pick E — screen 17's
-    // "4 → 3 COMMITS" shape: A absorbs B and C, D is dropped, E survives.
     let plan = vec![
         entry(RebaseAction::Pick, "a91c3f7aaa", "feat: dry-run mode"),
         entry(RebaseAction::Fixup, "f7c1d08bbb", "wip: trim checks"),
@@ -278,15 +241,12 @@ fn a_fold_starts_a_new_summary_after_an_intervening_pick() {
     assert_eq!(preview.dropped, 0);
 }
 
-// ---------------------------------------------------------------- cautions --
-
 use turbogit_services::history_editor::RebaseCaution;
 
 #[test]
 fn commits_touching_the_same_file_raise_the_conflict_caution() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "conflict");
-    // A fourth commit re-edits the file feature-1 touched.
     let head = append_commit(&repo, "a.txt", "feature-1 again");
 
     let plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
@@ -336,16 +296,10 @@ fn a_single_author_raises_no_identity_caution() {
     assert!(cautions.is_empty(), "{cautions:?}");
 }
 
-// ------------------------------------------------- backup ref & recovery --
-
-/// The reference the engine keeps its rewrite safety net in. Asked of the
-/// engine, because spelling it out here is what this suite used to do.
 fn backup_ref() -> String {
     engine().rewrite_backup_ref().to_string()
 }
 
-/// The all-drop plan rewrites `feature` to nothing, so a successful replay
-/// provably moves HEAD away from the pre-rebase tip.
 fn all_drop_plan(repo: &Path) -> Vec<RebasePlanEntry> {
     history_editor::build_plan(&engine(), repo, "main")
         .expect("plan")
@@ -403,7 +357,6 @@ fn abort_to_backup_restores_the_pre_rebase_state() {
         pre_head,
         "HEAD is back at the pre-rebase tip"
     );
-    // The safety net is spent after it restores: the ref goes with it.
     assert!(
         !Command::new("git")
             .args(["rev-parse", "--verify", "--quiet", &backup_ref()])
@@ -441,8 +394,6 @@ fn a_protected_branch_refuses_before_any_backup_ref_is_written() {
     );
 }
 
-// ------------------------------------------------ open helpers & estimate --
-
 #[test]
 fn base_of_is_the_selected_commit_s_first_parent() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -468,17 +419,9 @@ fn the_estimate_counts_the_replayed_commits_at_three_seconds_each() {
         entry(RebaseAction::Drop, "aaaa2222", "feature-2"),
         entry(RebaseAction::Squash, "aaaa3333", "feature-3"),
     ];
-    // Two commits actually replay (the drop never runs) — ~6s.
     assert_eq!(history_editor::estimate(&plan), "~6s estimated");
 }
 
-// ------------------------------------------------------- reword messages --
-
-/// Pick on a modified row RESETS the row ("this commit is applied as is" —
-/// apply-changes:138): the one-click per-row way back. A reset therefore drops
-/// the row's replacement message too — a pick that kept a reword's message
-/// would not be the commit as it was. Any other verb is a retarget, not a
-/// reset, and leaves what the row carries alone.
 #[test]
 fn setting_pick_resets_a_modified_row_and_other_verbs_do_not() {
     let mut reset = vec![reword("aaaa1111", "new subject\n\nand a body")];
@@ -498,20 +441,16 @@ fn setting_pick_resets_a_modified_row_and_other_verbs_do_not() {
     );
 }
 
-/// One revision's subject, as git records it.
 fn subject_of(dir: &Path, rev: &str) -> String {
     git(dir, &["log", "-1", "--format=%s", rev])
         .trim()
         .to_string()
 }
 
-/// One revision's whole message, subject and body.
 fn message_of(dir: &Path, rev: &str) -> String {
     git(dir, &["log", "-1", "--format=%B", rev])
 }
 
-/// One revision's author identity and author date — the two things a reword
-/// must survive untouched.
 fn author_of(dir: &Path, rev: &str) -> String {
     git(dir, &["log", "-1", "--format=%an <%ae> %aI", rev])
         .trim()
@@ -522,7 +461,6 @@ fn rev_parse(dir: &Path, rev: &str) -> String {
     git(dir, &["rev-parse", rev]).trim().to_string()
 }
 
-/// A plan row that rewords, carrying the message it will rewrite with.
 fn reword(commit: &str, message: &str) -> RebasePlanEntry {
     RebasePlanEntry {
         action: RebaseAction::Reword,
@@ -532,11 +470,6 @@ fn reword(commit: &str, message: &str) -> RebasePlanEntry {
     }
 }
 
-/// The outcome this ticket exists to make impossible is the silent no-op: git
-/// parses the `reword` verb, the engine has always run the rebase with its
-/// editor stubbed out, and the commit comes back unchanged. So the assertion is
-/// read back from a real repository — the message is the plan's, and nothing
-/// else about the commit moved.
 #[test]
 fn a_reword_in_the_plan_rewrites_the_message_and_nothing_else() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -584,22 +517,17 @@ fn a_reword_in_the_plan_rewrites_the_message_and_nothing_else() {
     );
 }
 
-// ------------------------------------- update-ref rows and unknown fallback --
-//
 // Git's todo has no per-commit slot for "the refs touching this replay follow
 // the rewrite" and no honest line for a verb the editor did not write, so both
 // are settled where the plan meets git: an `UpdateRef` row replays as the pick
 // it is and turns the replay into `--update-refs`, and an `Unknown` row is
-// refused outright. Both assertions are read back from a real repository — the
+// refused outright. Both assertions are read back from a real repository, the
 // same discipline as the reword test above.
 
 #[test]
 fn an_update_ref_row_replays_with_update_refs_so_affected_branches_follow() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "update-refs");
-    // `topic` points at the commit the plan rewords — exactly the ref
-    // `--update-refs` exists to carry along. (The oldest commit replays
-    // identically and keeps its hash, so a ref on it never moves.)
     git(&repo, &["branch", "topic", "feature~1"]);
 
     let mut plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
@@ -621,7 +549,6 @@ fn without_an_update_ref_row_the_replay_leaves_other_refs_alone() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "no-update-refs");
     git(&repo, &["branch", "topic", "feature~1"]);
-    // The pre-rebase SHA of the commit `topic` points at.
     let old_first = rev_parse(&repo, "feature~1");
 
     let mut plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
@@ -663,11 +590,6 @@ fn a_plan_carrying_an_unknown_row_is_refused_not_coerced() {
     );
 }
 
-// ------------------------------------------- after a rewrite, the selection --
-
-/// A commit as the log hands one over. The rule reads subjects, and the log
-/// carries the whole message, so a commit's subject is its first line — the same
-/// reading every other surface makes.
 fn logged(id: &str, subject: &str) -> Commit {
     let who = Signature {
         name: "Author".into(),
@@ -686,19 +608,10 @@ fn logged(id: &str, subject: &str) -> Commit {
     }
 }
 
-/// A drop, named by the plan row it removes.
 fn dropping(commit: &str, subject: &str) -> RebasePlanEntry {
     entry(RebaseAction::Drop, commit, subject)
 }
 
-/// A rewrite changes every descendant's hash, so the commit the developer was
-/// looking at cannot be found by hash afterwards. The rule is the same for both
-/// rewrites: take the first surviving plan row at or after the acted-on one, and
-/// find that row in the refreshed log by the subject it will carry.
-///
-/// The table below is that rule's answers, one row per shape the history can
-/// take. `plan` is oldest-first (a plan's own order); `after` is newest-first
-/// (the log's own order).
 #[test]
 fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
     struct Case {
@@ -710,8 +623,6 @@ fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
         want: Option<&'static str>,
     }
     let cases = [
-        // The ordinary case: a commit in the middle goes, and the commit that
-        // was built on it — replayed onto a new hash — is where the developer is.
         Case {
             what: "a drop in the middle lands on its first descendant",
             plan: vec![
@@ -729,8 +640,6 @@ fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
             fate: RewrittenAnchor::Dropped,
             want: Some("new1"),
         },
-        // The tip has nothing built on it, so nothing took its place; the commit
-        // now at the tip is the honest answer, and it is the anchor's own parent.
         Case {
             what: "a drop of the tip lands on the commit that became the tip",
             plan: vec![
@@ -746,9 +655,6 @@ fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
             fate: RewrittenAnchor::Dropped,
             want: Some("new1"),
         },
-        // A reword keeps the commit and changes what it says, so the anchor is
-        // its own successor — found by the NEW subject, because the old one is
-        // the thing that no longer exists.
         Case {
             what: "a reword stays on the commit it rewrote",
             plan: vec![
@@ -778,10 +684,6 @@ fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
     }
 }
 
-/// Subjects repeat. When the row the rule wants is not the only commit carrying
-/// its subject, the nearest position wins — and here the nearer twin is the
-/// SECOND of the two in the log, so an implementation that simply took the first
-/// match would answer differently.
 #[test]
 fn a_repeated_subject_resolves_by_nearest_position_not_by_the_first_match() {
     let plan = vec![
@@ -791,9 +693,6 @@ fn a_repeated_subject_resolves_by_nearest_position_not_by_the_first_match() {
         entry(RebaseAction::Pick, "twin2", "fix the flaky test"),
         entry(RebaseAction::Pick, "tip0", "the tip commit"),
     ];
-    // Newest-first, as the log hands it over: the twin that took the dropped
-    // commit's place is second among the two identical subjects, because the
-    // commit above it is still above it.
     let after = vec![
         logged("new0", "the tip commit"),
         logged("new1", "fix the flaky test"),
@@ -807,10 +706,6 @@ fn a_repeated_subject_resolves_by_nearest_position_not_by_the_first_match() {
     );
 }
 
-/// The one case that makes this a shared rule rather than a shared idea: a
-/// reword, where the anchor's OLD subject is held by an unrelated commit.
-/// Matching the old subject would move the selection to a commit the developer
-/// never touched, so the rule is told the subject the reworded row will carry.
 #[test]
 fn a_reword_finds_its_own_commit_and_not_an_impostor_holding_the_old_subject() {
     let plan = vec![
@@ -841,8 +736,6 @@ fn a_reword_finds_its_own_commit_and_not_an_impostor_holding_the_old_subject() {
     );
 }
 
-/// Nothing to point at is an answer, not a guess: the caller clears the
-/// selection rather than leaving the pane on a commit that may not exist.
 #[test]
 fn a_rule_with_nothing_to_point_at_says_so() {
     let plan = vec![
@@ -851,7 +744,6 @@ fn a_rule_with_nothing_to_point_at_says_so() {
     ];
     let after = vec![logged("base0", "the base commit")];
 
-    // An anchor this plan never carried.
     assert_eq!(
         reselection::reselect_after_rewrite(
             &plan,
@@ -862,8 +754,6 @@ fn a_rule_with_nothing_to_point_at_says_so() {
         None,
         "an unknown anchor has no place in this plan, so the rule declines"
     );
-    // The row the rule wants is outside the refreshed window entirely, so even
-    // the position fallback has nowhere to land.
     let wide = vec![
         entry(RebaseAction::Pick, "base0", "the base commit"),
         dropping("drop1", "the dropped commit"),

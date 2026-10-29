@@ -1,25 +1,3 @@
-//! Issue #27 — background incoming-check polling.
-//!
-//! Everything goes through the public surface over the headless harness
-//! (`AppState::for_roots`, CONTEXT.md "Headless harness"): the scheduler is
-//! driven by [`AppState::tick_incoming_poll`] with an injected `Instant` so
-//! the clock is fully deterministic, repos with real upstreams are built
-//! with the system `git`, and dispatch is asserted at the executor boundary
-//! through [`RecordingExecutor`]'s fetch recording.
-//!
-//! The headless harness runs a tick's work inline, so the tests settle it by
-//! draining rather than waiting for a thread; the production-mode cases at the
-//! bottom of the file keep their wait because they exercise the real worker.
-//!
-//! Covered:
-//! - an enabled, due poll fetches upstream roots and lands incoming commits
-//!   in the ahead/behind caches and the activity log
-//! - the setting off means nothing ever dispatches
-//! - the interval gates re-polls (not due → no dispatch)
-//! - roots without an upstream are never fetched
-//! - an in-flight operation (`ui.busy`) parks the poll until the worker
-//!   pool is free
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,27 +10,16 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::{IncomingCheckInterval, RootId, VcsSettings};
 use turbogit_engine_api::GitExecutor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// A temp repo on `main` tracking its own local bare remote, plus the bare's
-/// path.
-///
-/// A thin wrapper over `git_seed::repo_with_origin`; only the bare's directory
-/// name differs, and nothing reads it — callers pass the returned path on.
 fn repo_with_upstream(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
     let work = repo_with_origin(parent, name);
     let remote = parent.join(format!("{name}.git"));
     (work, remote)
 }
 
-/// A plain temp repo with no remote at all — the one case `repo_with_origin`
-/// cannot reach.
 fn repo_without_upstream(parent: &Path, name: &str) -> PathBuf {
     repo_with_one_commit(parent, name)
 }
 
-/// Push an extra commit to the bare remote via a throwaway clone, so the
-/// original repo has an incoming commit it cannot see until it fetches.
 fn commit_on_remote(parent: &Path, bare: &Path, name: &str, file: &str) {
     let other = parent.join(format!("{name}-other"));
     if !other.exists() {
@@ -74,12 +41,6 @@ fn commit_on_remote(parent: &Path, bare: &Path, name: &str, file: &str) {
     git(&other, &["push", "-q", "origin", "main"]);
 }
 
-// `init_repo_with_upstream` (below) stays local for one reason no recipe can
-// express: the bare remote must live OUTSIDE the project directory, or the
-// launch-time project scan picks the remote up as a second root.
-
-/// `for_roots` with the executor/settings swap AFTER synchronous
-/// registration, so setup reads never reach the recorder.
 fn app_state_with(
     project_dir: &Path,
     roots: &[PathBuf],
@@ -91,30 +52,18 @@ fn app_state_with(
         .with_settings(settings)
 }
 
-/// Advance the poll clock and settle what it dispatched.
-///
-/// The harness runs git work inline and the answer arrives on the same channel
-/// production uses, so a tick is only observed by draining — which is what the
-/// shell's next frame does. No deadline involved.
 fn tick_and_settle(state: &mut AppState, at: Instant) {
     state.tick_incoming_poll(at);
     state.drain_events();
 }
 
-/// Settings with the background incoming check enabled at the default
-/// interval (every 15 minutes).
 fn poll_settings() -> VcsSettings {
     VcsSettings {
         incoming_poll: true,
-        // Pinned, not defaulted: these tests measure the interval mechanics
-        // against concrete tick offsets (15 / 31 minutes), and the default
-        // interval is the settings surface's choice, not theirs.
         incoming_interval: IncomingCheckInterval::Min15,
         ..VcsSettings::default()
     }
 }
-
-// ------------------------------------------------------------------- tests --
 
 #[test]
 fn due_poll_fetches_upstream_roots_and_records_incoming() {
@@ -141,8 +90,6 @@ fn due_poll_fetches_upstream_roots_and_records_incoming() {
 
     tick_and_settle(&mut state, Instant::now());
 
-    // The poll fetched the root's remotes and its finding landed in the
-    // ahead/behind cache: 0 outgoing, 1 incoming.
     assert_eq!(rec.fetches().len(), 1, "exactly one fetch dispatched");
     assert_eq!(
         state.caches.ahead_behind(&root),
@@ -150,7 +97,6 @@ fn due_poll_fetches_upstream_roots_and_records_incoming() {
         "the incoming commit must show up without a manual refresh"
     );
 
-    // The finding surfaced in the activity log too.
     let entries: Vec<_> = state
         .ui
         .activity
@@ -208,7 +154,6 @@ fn poll_respects_the_interval() {
     tick_and_settle(&mut state, t0);
     assert_eq!(rec.fetches().len(), 1);
 
-    // A second incoming commit arrives, but the interval has not elapsed.
     commit_on_remote(project.path(), &bare, "alpha", "incoming2.txt");
     tick_and_settle(&mut state, t0 + Duration::from_secs(60));
     assert_eq!(rec.fetches().len(), 1, "an early tick must not re-poll");
@@ -218,8 +163,6 @@ fn poll_respects_the_interval() {
         "the cache keeps the last poll's finding"
     );
 
-    // Once the interval (15 minutes) has elapsed, the poll runs again and
-    // both incoming commits show up.
     tick_and_settle(&mut state, t0 + Duration::from_secs(15 * 60));
     assert_eq!(rec.fetches().len(), 2);
     assert_eq!(state.caches.ahead_behind(&root), Some((0, 2)));
@@ -269,7 +212,6 @@ fn poll_waits_while_an_operation_is_in_flight() {
     );
     let root = RootId(repo.into());
 
-    // An op occupies the worker pool; the due poll must park.
     state.dispatch(Operation::custom("No-op", Affected::All, |_| Ok(())));
     state.tick_incoming_poll(Instant::now());
     state.drain_events();
@@ -278,7 +220,6 @@ fn poll_waits_while_an_operation_is_in_flight() {
         "a busy worker pool must defer the poll"
     );
 
-    // Once the op completes, the parked poll fires on the next tick.
     while state.ui.busy {
         state.drain_events();
     }
@@ -287,10 +228,6 @@ fn poll_waits_while_an_operation_is_in_flight() {
     assert_eq!(state.caches.ahead_behind(&root), Some((0, 1)));
 }
 
-// ------------------------------------------------- async path (production) --
-
-/// Init `repo` on `main` tracking `bare` (which may live anywhere on disk),
-/// so a project scan can discover the repo without picking up the remote.
 fn init_repo_with_upstream(repo: &Path, bare: &Path) {
     std::fs::create_dir_all(repo).unwrap();
     git(repo, &["init", "-q", "-b", "main"]);
@@ -307,8 +244,6 @@ fn init_repo_with_upstream(repo: &Path, bare: &Path) {
     git(repo, &["push", "-q", "-u", "origin", "main"]);
 }
 
-/// Poll `f` until true or the deadline elapses (production-mode workers run
-/// asynchronously, so completion is observed by polling).
 fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
     let start = Instant::now();
     while !f() {
@@ -335,8 +270,6 @@ fn in_flight_poll_is_not_redispatched_until_it_settles() {
         },
     )));
     let cfg = tempfile::tempdir().unwrap();
-    // The executor/settings swap happens after the launch scan, so setup
-    // reads never reach the recorder.
     let mut state = AppState::launch_in(
         Some(project.path().to_path_buf()),
         Some(cfg.path().to_path_buf()),
@@ -346,8 +279,6 @@ fn in_flight_poll_is_not_redispatched_until_it_settles() {
     let root = RootId(repo.into());
     let t0 = Instant::now();
 
-    // Let the launch scan's status/ahead-behind threads finish and drain
-    // their events, so they cannot race the poll's settlement below.
     assert!(
         wait_until(5_000, || {
             while state.drain_events() > 0 {}
@@ -357,9 +288,6 @@ fn in_flight_poll_is_not_redispatched_until_it_settles() {
     );
     assert_eq!(state.caches.ahead_behind(&root), Some((0, 0)));
 
-    // First tick dispatches a background poll; an immediate second tick one
-    // interval later must not stack a second fetch on the same repo — the
-    // in-flight slot only frees with the poll's settlement (a drain).
     state.tick_incoming_poll(t0);
     state.tick_incoming_poll(t0 + Duration::from_secs(15 * 60));
     assert!(
@@ -374,9 +302,6 @@ fn in_flight_poll_is_not_redispatched_until_it_settles() {
         "the settled poll must land its finding in the cache"
     );
 
-    // Settled → the next interval tick re-polls. The skipped tick still
-    // consumed its schedule slot, so the re-poll is due one full interval
-    // after that tick.
     state.tick_incoming_poll(t0 + Duration::from_secs(31 * 60));
     assert!(
         wait_until(5_000, || rec.fetches().len() == 2),

@@ -1,26 +1,8 @@
-//! Opening a repository hides this app's own `.turbogit/` from `git status`.
-//!
-//! The store is untracked by design (see `crate::persistence`), so the fix is
-//! the clone's own `info/exclude`, reached through the engine — and the whole
-//! product claim is about what the changes list shows. These suites drive the
-//! launch and open paths production uses, write the store the way a real session
-//! does, and then ask git itself.
-//!
-//! The order matters and is the design: the rule is listed at registration,
-//! *before* `.turbogit/` exists, so the directory is never briefly untracked
-//! between the first frame and the first durable write.
-//!
-//! The "where it makes sense" half is the second group. Root discovery returns
-//! `project_dir` or a directory beneath it, so a workspace of sibling
-//! repositories has its store *above* every root it registers — those
-//! repositories cannot see it, and gain no rule written into their `.git`.
-
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 
-/// A real repository with one commit, so `HEAD` and `status` are readable.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -33,17 +15,12 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// A config dir for the global recents file, kept out of the project directory
-/// so this suite's assertions are about the repository, not the app's home.
 fn config_dir(tmp: &TempDir) -> PathBuf {
     let cfg = tmp.path().join("config");
     std::fs::create_dir_all(&cfg).unwrap();
     cfg
 }
 
-/// The state of a session that has written its project store: the durable
-/// write is a production trigger (a tab click), and it is what creates
-/// `.turbogit/`.
 fn open_with_store(project: &Path, cfg: &Path) -> AppState {
     let state = AppState::launch_in(Some(project.to_path_buf()), Some(cfg.to_path_buf()));
     state.save_durable_ui();
@@ -91,7 +68,6 @@ fn opening_a_project_from_welcome_hides_it_too() {
     let repo = temp_repo(tmp.path(), "repo");
     let cfg = config_dir(&tmp);
 
-    // The Welcome-screen path: launch with nothing open, then open the folder.
     let mut state = AppState::launch_in(None, Some(cfg.clone()));
     state.open_project(&repo);
     state.save_durable_ui();

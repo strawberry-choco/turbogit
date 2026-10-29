@@ -1,7 +1,3 @@
-//! Tag services (issue 31, screen 16): the live tag-name validation behind
-//! the dialog's "✓ valid" / reason line, tag creation through the executor
-//! port, and the push-immediately outcome reporting.
-
 use std::path::Path;
 
 use turbogit_domain::error::{TgError, TgResult};
@@ -51,21 +47,14 @@ pub fn validate_name(name: &str, existing: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Create the tag described by `spec` (`git tag [-a -m] [-s] <name>
-/// [<commit>]`).
 pub fn create(vcs: &dyn GitExecutor, root: &Path, spec: &TagSpec) -> TgResult<()> {
     vcs.tag_create(root, spec)
 }
 
-/// The repository's tags — the duplicate side of [`validate_name`]'s live
-/// check.
 pub fn list(vcs: &dyn GitExecutor, root: &Path) -> TgResult<Vec<String>> {
     vcs.tag_list(root)
 }
 
-/// The configured GPG signing key (`git config user.signingkey`) — the
-/// fingerprint chip shown next to the dialog's "Sign with GPG key" option.
-/// `None` when no signing key is configured.
 pub fn signing_key(vcs: &dyn GitExecutor, root: &Path) -> Option<String> {
     vcs.config_get(root, "user.signingkey").ok().flatten()
 }

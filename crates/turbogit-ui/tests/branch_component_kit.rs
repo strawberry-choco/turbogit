@@ -1,17 +1,3 @@
-//! Issue 01 — Branch-screen design tokens & component kit (design doc §12–§14).
-//!
-//! The theme gains the Branches-screen visual vocabulary: the §13 surfaces
-//! (window/panel/content/raised/selection/divider), the small meaning-color
-//! set (accent, ahead, behind, danger, link), the three-level text ramp, the
-//! §14 component kit (branch row states, section header, sync badge, four
-//! button variants, overflow cluster), and §12 geometry. The § numbers name
-//! the constants' roles in the design vocabulary; there is no longer a design
-//! document behind them to read expected values from, so each expected value
-//! below is stated here as the contract this suite pins.
-//!
-//! Pure decisions are asserted directly; the kit renders once through the
-//! harness to prove the clickable-target and painted-surface rules hold.
-
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,14 +23,6 @@ use turbogit_ui::ui::components::{
 };
 use turbogit_ui::ui::widgets::WidgetState;
 
-/// Every state the row-state enum carries, enumerated in one place.
-///
-/// The enum is `pub` but not iterable, so a test that wants to say something
-/// *about all of the states* has to write them out — and writing them out is
-/// the point: a new variant that is not added here is invisible to the
-/// all-states rules (the "no list row resolves to the current-ref token" one
-/// above all), and a variant dropped from the enum fails to compile here rather
-/// than quietly narrowing what those rules cover.
 const ALL_ROW_STATES: [RowState; 4] = [
     RowState::Default,
     RowState::Hover,
@@ -52,83 +30,57 @@ const ALL_ROW_STATES: [RowState; 4] = [
     RowState::FocusSelected,
 ];
 
-// --- §13 surfaces ------------------------------------------------------------
-
 #[test]
 fn surface_tokens_match_design_doc() {
     assert_eq!(
         Palette::CONTENT_BG,
         egui::Color32::from_rgb(0x23, 0x25, 0x29)
-    ); // branch list, tab strip
-    assert_eq!(Palette::RAISED, egui::Color32::from_rgb(0x2b, 0x2d, 0x30)); // secondary buttons, chips, active tab
+    );
+    assert_eq!(Palette::RAISED, egui::Color32::from_rgb(0x2b, 0x2d, 0x30));
     assert_eq!(
         Palette::SELECTION,
         egui::Color32::from_rgb(0x2e, 0x43, 0x69)
-    ); // active row/pill
-    // The 1px separator's tone is the raised surface, not the LINE border, and
-    // the hairline role is the one spelling of it.
+    );
     assert_eq!(Palette::RULE_CONTENT, Palette::RAISED);
     assert_ne!(Palette::RULE_CONTENT, Palette::LINE);
 }
 
-// --- §13 meaning colors -------------------------------------------------------
-
 #[test]
 fn meaning_colors_match_design_doc() {
-    assert_eq!(Palette::ACCENT, egui::Color32::from_rgb(0x35, 0x74, 0xf0)); // primary action / branch chips
-    assert_eq!(Palette::AHEAD, egui::Color32::from_rgb(0x5f, 0xa8, 0x6c)); // ahead counts, current branch, a clean repo's dot
-    assert_eq!(Palette::DANGER, egui::Color32::from_rgb(0xdb, 0x5c, 0x5c)); // delete only
-    assert_eq!(Palette::LINK, egui::Color32::from_rgb(0x74, 0xa3, 0xe8)); // the commit hash chip's ink
+    assert_eq!(Palette::ACCENT, egui::Color32::from_rgb(0x35, 0x74, 0xf0));
+    assert_eq!(Palette::AHEAD, egui::Color32::from_rgb(0x5f, 0xa8, 0x6c));
+    assert_eq!(Palette::DANGER, egui::Color32::from_rgb(0xdb, 0x5c, 0x5c));
+    assert_eq!(Palette::LINK, egui::Color32::from_rgb(0x74, 0xa3, 0xe8));
 }
-
-// --- §13 text ramp ------------------------------------------------------------
 
 #[test]
 fn text_ramp_tokens_include_p0_accessibility_corrections() {
     assert_eq!(
         Palette::T_PRIMARY,
         egui::Color32::from_rgb(0xdf, 0xe1, 0xe5)
-    ); // branch names, body
+    );
     assert_eq!(
         Palette::T_SECONDARY,
         egui::Color32::from_rgb(0xb0, 0xb3, 0xbb)
-    ); // section labels, secondary actions
-    // The muted step is `#8A8E96`, not `#AEB2BA`: the old value differed from
-    // `T_SECONDARY` by two, two and one per channel (1.01:1 against it), so
-    // counts, timestamps and metadata all read at one value. It is legal on
-    // the panel and content surfaces, and NOT on a raised or selected one —
-    // there the caller steps up to `T_SECONDARY`.
-    assert_eq!(Palette::T_MUTED, egui::Color32::from_rgb(0x8a, 0x8e, 0x96)); // metadata, refs
-    // The fourth step: placeholders, dim path suffixes, hatches. Sub-AA on
-    // every audited surface by design, and therefore never the only rendering
-    // of something the user needs.
+    );
+    assert_eq!(Palette::T_MUTED, egui::Color32::from_rgb(0x8a, 0x8e, 0x96));
     assert_eq!(Palette::T_DIM, egui::Color32::from_rgb(0x6e, 0x72, 0x7a));
-    // The shell-facing names are aliases of the authoritative ramp, so a
-    // central change reaches both spellings.
     assert_eq!(Palette::INK, Palette::T_PRIMARY);
     assert_eq!(Palette::INK_2, Palette::T_SECONDARY);
     assert_eq!(Palette::INK_3, Palette::T_MUTED);
     assert_eq!(Palette::INK_4, Palette::T_DIM);
 }
 
-// --- §13 shape + type sizes ---------------------------------------------------
-
 #[test]
 fn shape_and_type_tokens_match_design_doc() {
-    // The chip and control radii are named once, at module level: the
-    // `Palette`-side duplicate spellings went with the sweep, so a chip radius
-    // has one source — `CHIP_RADIUS`, with no second `Palette` alias left to
-    // drift away from it.
-    assert_eq!(turbogit_ui::theme::CHIP_RADIUS, 3); // chips & badges
-    assert_eq!(turbogit_ui::theme::CONTROL_RADIUS, 4); // buttons, inputs, panels
-    assert_eq!(turbogit_ui::theme::TYPE_SECTION, 9.0); // uppercase section labels
-    assert_eq!(turbogit_ui::theme::TYPE_CHIP, 10.0); // chips/badges
-    assert_eq!(turbogit_ui::theme::TYPE_CONTROL, 11.0); // controls and metadata
-    assert_eq!(turbogit_ui::theme::TYPE_BODY, 12.0); // branch names and body
-    assert_eq!(turbogit_ui::theme::TYPE_DETAIL_TITLE, 13.0); // detail title
+    assert_eq!(turbogit_ui::theme::CHIP_RADIUS, 3);
+    assert_eq!(turbogit_ui::theme::CONTROL_RADIUS, 4);
+    assert_eq!(turbogit_ui::theme::TYPE_SECTION, 9.0);
+    assert_eq!(turbogit_ui::theme::TYPE_CHIP, 10.0);
+    assert_eq!(turbogit_ui::theme::TYPE_CONTROL, 11.0);
+    assert_eq!(turbogit_ui::theme::TYPE_BODY, 12.0);
+    assert_eq!(turbogit_ui::theme::TYPE_DETAIL_TITLE, 13.0);
 }
-
-// --- §14.1 branch row states ---------------------------------------------------
 
 #[test]
 fn row_fill_states_are_distinct() {
@@ -156,13 +108,6 @@ fn row_fill_states_are_distinct() {
     );
 }
 
-/// The three selection roles that survived are three *distinct* fills: the list
-/// row, the current ref, and the focus band the log table and the sidebar tree
-/// still use.
-///
-/// This is the ratchet that fires if the new selected-row fill is re-pointed at
-/// the current-ref token — the mistake the four-to-three split exists to
-/// prevent, and the one a reader cannot see without the numbers side by side.
 #[test]
 fn the_three_surviving_selection_roles_are_three_distinct_fills() {
     let list_row = row_fill(RowState::RowSelected);
@@ -170,8 +115,6 @@ fn the_three_surviving_selection_roles_are_three_distinct_fills() {
     let focus_band = row_fill(RowState::FocusSelected);
     println!("list row {list_row:?}, current ref {current_ref:?}, focus {focus_band:?}");
 
-    // Each role is the value it is documented as, so a role cannot be swapped
-    // for another and stay green.
     assert_eq!(
         list_row,
         Palette::ROW_SELECTED,
@@ -188,9 +131,6 @@ fn the_three_surviving_selection_roles_are_three_distinct_fills() {
         "the log/sidebar focus band keeps the translucent composite"
     );
 
-    // ... and the three are pairwise distinct. A bare `assert_ne!` on the first
-    // pair is the one that matters: the current-ref band and the list-row fill
-    // are the pair that got merged once already.
     assert_ne!(
         list_row, current_ref,
         "the list-row fill and the current-ref band are two strengths on purpose"
@@ -205,14 +145,6 @@ fn the_three_surviving_selection_roles_are_three_distinct_fills() {
     );
 }
 
-/// The negative rule, pinned at the construction site that decides the fills
-/// (`components::row_fill`): **no list row resolves to the selection token**.
-///
-/// [`Palette::SELECTION`] is the current-ref treatment — it belongs to
-/// `current_row_fill`, not to the row-fill decision. A render seam can only
-/// prove this at the sites a test enumerates, so the enumeration is every
-/// variant of the enum: a new state has to be added to this list, and a state
-/// re-pointed at the current-ref band fails even if nothing paints it yet.
 #[test]
 fn no_list_row_resolves_to_the_current_ref_token() {
     for state in ALL_ROW_STATES {
@@ -224,15 +156,11 @@ fn no_list_row_resolves_to_the_current_ref_token() {
              ROW_SELECTED."
         );
     }
-    // The current-ref band is still a real band, reachable exactly where the
-    // rule says: a current row that is also selected.
     assert_eq!(
         current_row_fill(RowState::RowSelected),
         Palette::SELECTION,
         "the current-ref treatment is the selected current row's band"
     );
-    // And the current-ref band is a *different* value from the list row's fill,
-    // which is the reason the two are kept apart rather than merged.
     assert_ne!(
         Palette::SELECTION,
         Palette::ROW_SELECTED,
@@ -240,10 +168,6 @@ fn no_list_row_resolves_to_the_current_ref_token() {
     );
 }
 
-/// The current branch is a fact about the repository, not about the pointer, so
-/// its row owns a resting band. That band must not be mistakable for either
-/// interaction state, and a current row that is also selected must not collapse
-/// into one muddy third state.
 #[test]
 fn current_row_band_is_distinct_from_hover_and_selection() {
     let rest = current_row_fill(RowState::Default);
@@ -269,21 +193,8 @@ fn current_row_band_is_distinct_from_hover_and_selection() {
     );
 }
 
-/// Every hand-painted row in the crate tracks selection and hover as two
-/// booleans and calls [`RowState::from_flags`] to turn them into a state
-/// (`log_window`, `settings_modal`, `welcome`, `interactive_rebase`,
-/// `multi_selection`). So the mapping `from_flags` performs *is* what those five
-/// surfaces paint, and it is pinned here: `selected` resolves to
-/// [`RowState::RowSelected`] — the one list-row selection fill, the opaque
-/// `ROW_SELECTED` a chosen row takes — and it wins over `hovered`, because a
-/// selected row keeps its selection fill while the pointer is on it. The two
-/// unselected neighbours resolve to the hover and rest states that
-/// [`row_fill_states_are_distinct`] already names, so the whole function is
-/// covered by assertion here rather than by leaving it to the five call sites
-/// to get right implicitly.
 #[test]
 fn from_flags_maps_selection_onto_the_list_row_band_and_keeps_hover_below_it() {
-    // Selected wins over hover, in both pointer positions.
     assert_eq!(
         RowState::from_flags(true, false),
         RowState::RowSelected,
@@ -294,14 +205,11 @@ fn from_flags_maps_selection_onto_the_list_row_band_and_keeps_hover_below_it() {
         RowState::RowSelected,
         "hovering a selected row must not demote it to the hover fill"
     );
-    // The list-row band is its own role, distinct from the focus band the log
-    // table and the sidebar tree take.
     assert_ne!(
         RowState::from_flags(true, false),
         RowState::FocusSelected,
         "from_flags paints the opaque list-row fill, not the translucent focus band"
     );
-    // The two unselected neighbours.
     assert_eq!(
         RowState::from_flags(false, true),
         RowState::Hover,
@@ -313,8 +221,6 @@ fn from_flags_maps_selection_onto_the_list_row_band_and_keeps_hover_below_it() {
         "an untouched row is the default state"
     );
 
-    // And the fills those states actually paint, so the mapping cannot be
-    // re-pointed at a different selection role without failing here.
     assert_eq!(
         row_fill(RowState::from_flags(true, false)),
         Palette::ROW_SELECTED,
@@ -343,7 +249,6 @@ fn from_flags_maps_selection_onto_the_list_row_band_and_keeps_hover_below_it() {
     );
 }
 
-/// Stale rows dim (never hide); current rows keep primary ink.
 #[test]
 fn stale_rows_dim_without_hiding() {
     use turbogit_ui::ui::components::row_ink;
@@ -351,43 +256,15 @@ fn stale_rows_dim_without_hiding() {
     assert_eq!(row_ink(true), Palette::T_MUTED);
 }
 
-// --- §14.1 painted: a selected list row is a fill, not an inversion (ticket 03)
-//
-// The rules above are about the *decision*; these three are about what a frame
-// actually paints, through the production row: the branch tree's branch row is
-// the app's canonical list row, and it is the row the dropped duplicate used to
-// be. So the fixture below is the real component (a bare view model plus a
-// `TreeState`, no git and no application state) with one row selected, and the
-// assertions read painted output — filled rects and galleys — rather than
-// calling the decision functions again.
-//
-// Everything is scoped **by row**, never by first match: a branch name paints
-// in its row and often again in a header chip, and "origin/main" paints in
-// every row that has an upstream, so each galley is located by the row rect that
-// contains it.
-
-/// The row the fixture selects. Named so the assertions read as the sentence
-/// they are.
 const SELECTED_ROW: &str = "beta";
-/// A second local row, unselected and not current — the comparison row.
 const PLAIN_ROW: &str = "gamma";
-/// The checked-out branch. Deliberately *not* the selected row: a current row
-/// answers through `current_row_fill`, so selecting it would prove nothing
-/// about `row_fill`.
 const CURRENT_ROW: &str = "alpha";
-/// The tracking branch every fixture row carries, so a row has metadata to
-/// compare as well as a name.
 const UPSTREAM: &str = "origin/main";
 
-/// The fixed "now" the fixture renders against, so painted staleness text is
-/// deterministic. 2026-06-01T12:00:00Z.
 fn fixture_now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(1_780_315_200, 0).expect("valid now")
 }
 
-/// A local branch that is five days old relative to [`fixture_now`] — fresh, so
-/// the row reads at primary ink and the fixture's ink assertions are about
-/// *selection* rather than about staleness.
 fn fresh_local(name: &str) -> Branch {
     Branch {
         name: name.to_string(),
@@ -425,9 +302,6 @@ fn fixture_root() -> Root {
     }
 }
 
-/// The harness state: the view model inputs, the tree's own state (with the
-/// selection made up front — this suite is about what a *selected* row paints,
-/// not about what clicking one does) and the fixed clock.
 struct RowFixture {
     roots: Vec<Root>,
     tags: HashMap<RootId, Vec<(String, turbogit_domain::model::RefState)>>,
@@ -435,12 +309,7 @@ struct RowFixture {
     now: chrono::DateTime<chrono::Utc>,
 }
 
-/// The branch tree with one row selected, rendered through the real component.
 fn selected_row_harness() -> Harness<'static, RowFixture> {
-    // Remotes off: the fixture's subject is local rows, and a remote group adds
-    // rows whose names repeat the local ones. The selection is made up front —
-    // this suite is about what a *selected* row paints, not about what clicking
-    // one does.
     let tree = TreeState {
         show_remotes: false,
         selected: Some(SELECTED_ROW.to_string()),
@@ -450,14 +319,6 @@ fn selected_row_harness() -> Harness<'static, RowFixture> {
     branch_tree_harness(vec![fixture_root()], tree, "row_fill_fixture")
 }
 
-/// A **multi-root** branch tree, with one repository in sync and one with a
-/// local edit, over distinct branch names so no row is ambiguous.
-///
-/// Multi-root is not decoration here. A single-root project suppresses the repo
-/// header's identity cluster — the status dot, the repo name and the current
-/// chip — and the state word rides the same header, so a one-root frame contains
-/// **no repository state at all** and an assertion about a state being coloured
-/// text would be asserting nothing. Two roots put the state on screen.
 fn dirty_repo_header_harness() -> Harness<'static, RowFixture> {
     let mut dirty = fixture_root();
     dirty.id = RootId(Arc::from(std::path::PathBuf::from("/beta")));
@@ -480,12 +341,6 @@ fn dirty_repo_header_harness() -> Harness<'static, RowFixture> {
     branch_tree_harness(vec![fixture_root(), dirty], tree, "state_text_fixture")
 }
 
-/// One branch tree over `roots`, through the real component, with the given tree
-/// state. Shared by the row fixtures and the state fixture so they differ only
-/// in their inputs.
-///
-/// Not `harness::widget_harness`, whose state is `()`: this frame's state *is* the
-/// fixture — the roots, tags and clock the tree is built from.
 fn branch_tree_harness(
     roots: Vec<Root>,
     tree: TreeState,
@@ -535,20 +390,10 @@ fn branch_tree_harness(
     harness
 }
 
-/// The row rect the selected row painted, as identified by its own fill.
-///
-/// Located by the fill rather than by counting rows: this is the assertion that
-/// says *which* row is selected, so deriving it from the row order would make
-/// the geometry and ink assertions below depend on the very thing they check.
 fn selected_row_rect(harness: &Harness<'_, RowFixture>) -> Rect {
     row_rect_painted_with(harness, Palette::ROW_SELECTED, "the selected list row")
 }
 
-/// The unselected comparison row's rect, found the same way: the current row
-/// answers through [`current_row_fill`], so it paints a band of its own and is
-/// the one unselected row in this fixture whose rect is legible from painted
-/// output. It carries the `current` pill, which is right-anchored and cannot
-/// reach the name's left edge — the very edge these tests compare.
 fn comparison_row_rect(harness: &Harness<'_, RowFixture>) -> Rect {
     row_rect_painted_with(
         harness,
@@ -571,10 +416,6 @@ fn row_rect_painted_with(harness: &Harness<'_, RowFixture>, fill: Color32, who: 
     hits.into_iter().next().expect("one row band")
 }
 
-/// The painted text of `needle` inside `row`, matched exactly and scoped to the
-/// row rather than taken first: a branch name also paints in the repo header's
-/// chip, and a tracking branch paints in *every* row that has one, so a
-/// first-match read would compare the selected row against its neighbour.
 fn text_in_row(
     harness: &Harness<'_, RowFixture>,
     row: Rect,
@@ -595,13 +436,6 @@ fn text_in_row(
     hits.into_iter().next().expect("one hit")
 }
 
-/// The fill of the selected list row is the one opaque selected-row value, and
-/// the current-ref band is nowhere in the frame.
-///
-/// This is the "list rows actually use the new fill" half of the ticket: the
-/// token existing is the easy half, and this is the assertion that reaches the
-/// call site through a real render. A row that still resolved to
-/// `Palette::SELECTION` — or to the translucent composite — fails here.
 #[test]
 fn a_selected_list_row_paints_the_selected_row_fill_and_not_the_current_ref_band() {
     let mut harness = selected_row_harness();
@@ -627,13 +461,6 @@ fn a_selected_list_row_paints_the_selected_row_fill_and_not_the_current_ref_band
         "the branch list is not a focus band surface: the translucent composite \
          belongs to the log table, the sidebar tree and blame"
     );
-    // **R1: the only brand fill in a branch tree is a rail.** Every brand-filled
-    // rect in the frame has to be the token's width at a row's leading edge, so
-    // the check is "is it a rail?" rather than "is it wide?" — the old version of
-    // this assertion only rejected brand bands *wider* than 200px, which quietly
-    // permitted exactly the regression this rule exists for: the v1 current-branch
-    // pill, a small brand-filled chip standing on every current row. Ticket 16
-    // removed it, and this is the ratchet that now notices if it comes back.
     let painted_rails = rails(&harness);
     let brand_fills: Vec<Rect> = filled_rects(&harness)
         .into_iter()
@@ -652,10 +479,6 @@ fn a_selected_list_row_paints_the_selected_row_fill_and_not_the_current_ref_band
          token's {RAIL_WIDTH}px rail ({painted_rails:?} are). A brand fill behind \
          running text is a button's shape, and this pane has one primary action."
     );
-    // The rail is really there, so the negative above is a claim about a frame
-    // that has rails rather than a frame with nothing in it. Two of them is the
-    // right number for this fixture: the selected row and the current row are
-    // different rows, and both are chosen.
     assert_eq!(
         painted_rails.len(),
         2,
@@ -673,10 +496,6 @@ fn a_selected_list_row_paints_the_selected_row_fill_and_not_the_current_ref_band
     );
 }
 
-/// The geometry ratchet: a selected list row's text origin is an unselected
-/// row's text origin. The rail is paint — reserving its width as padding shifts
-/// every row's content the moment it is selected, and the two rows' names stop
-/// lining up down the column.
 #[test]
 fn a_selected_list_rows_text_origin_equals_an_unselected_rows() {
     let mut harness = selected_row_harness();
@@ -691,9 +510,6 @@ fn a_selected_list_rows_text_origin_equals_an_unselected_rows() {
         selected_name.pos, selected, comparison_name.pos, comparison
     );
 
-    // Origin-for-origin: the name sits the same distance from its row's left
-    // edge, at the same x, whether or not the row is selected. This is the
-    // assertion that a rail reserved as *layout* breaks.
     assert_eq!(
         selected_name.pos.x - selected.left(),
         comparison_name.pos.x - comparison.left(),
@@ -703,15 +519,11 @@ fn a_selected_list_rows_text_origin_equals_an_unselected_rows() {
         selected_name.pos.x, comparison_name.pos.x,
         "both rows share one name column, selected or not"
     );
-    // The row itself is unchanged too: a selection that resized the row would
-    // move the name as surely as one that padded it.
     assert_eq!(
         selected.size(),
         comparison.size(),
         "selecting a row must not resize it"
     );
-    // The same for the metadata column: the tracking branch starts where it
-    // starts on an unselected row.
     let selected_meta = text_in_row(&harness, selected, UPSTREAM);
     let comparison_meta = text_in_row(&harness, comparison, UPSTREAM);
     assert_eq!(
@@ -720,8 +532,6 @@ fn a_selected_list_rows_text_origin_equals_an_unselected_rows() {
     );
 }
 
-/// The ink ratchet: selecting a row does not invert its ink. The branch name and
-/// the metadata are painted with exactly the inks an unselected row uses.
 #[test]
 fn selecting_a_row_does_not_invert_its_name_or_its_metadata() {
     let mut harness = selected_row_harness();
@@ -747,8 +557,6 @@ fn selecting_a_row_does_not_invert_its_name_or_its_metadata() {
          what the opaque list-row fill replaced"
     );
 
-    // The metadata: the tracking branch, which paints in every row that has an
-    // upstream, so this is the case the row-scoped lookup exists for.
     let selected_meta = text_in_row(&harness, selected, UPSTREAM);
     let comparison_meta = text_in_row(&harness, comparison, UPSTREAM);
     assert_eq!(
@@ -762,11 +570,6 @@ fn selecting_a_row_does_not_invert_its_name_or_its_metadata() {
     );
 }
 
-/// The kit's own row shell, at the construction site the ratchets above name:
-/// one fill behind the text, at the caller's rect, and nothing else. It is the
-/// smallest possible proof that the shell is *only* a fill — a shell that also
-/// shifted content or picked an ink would show up here as a second rect or a
-/// changed galley.
 #[test]
 fn the_row_shell_paints_the_handed_fill_at_the_handed_rect_and_nothing_else() {
     let mut harness = Harness::new_ui(|ui| {
@@ -810,7 +613,6 @@ fn the_row_shell_paints_the_handed_fill_at_the_handed_rect_and_nothing_else() {
     );
 }
 
-/// Mid-operation rows render a first-class label (design doc §10).
 #[test]
 fn mid_operation_label_is_first_class() {
     use turbogit_ui::ui::components::mid_op_label;
@@ -818,62 +620,12 @@ fn mid_operation_label_is_first_class() {
     assert_eq!(mid_op_label("rebasing"), "rebasing…");
 }
 
-// --- State is coloured text or a leading dot, never a chip (ticket 05) -------
-//
-// R6's other half, and the reason the blue soup leaves the branches screen at
-// all. A repository state is a *fact about the repository*, not a ref and not a
-// number, so it has no business being one of the three chips — and behind a
-// fill it stops reading as state altogether and starts reading as a category.
-//
-// The rule is asserted where it can be: at the three chip constructors (no chip
-// names a state colour, so there is no chip for a state to reach for), and at a
-// real render of the branches tree over a **dirty** root, where the state the
-// screen reports is `Dirty` and therefore owns the reserved counter orange. An
-// in-sync fixture would be worse than useless here: its state colour never
-// enters the frame, so a chip fill carrying it would not be distinguishable
-// from a frame with no state at all.
-//
-// The words themselves come from the one map — `RepoState::words()` beside
-// `RepoState::color()` — and a state never wears a fill: where a surface wants
-// a mark shape, `state_mark` is a filled circle with no fill rect, no radius,
-// no chip geometry and no node of its own. The branches band wants none of
-// that either: its summary is the coloured words alone.
-
-/// The state colours the one repository-state map produces for a **severity**,
-/// as a closed list of three.
-///
-/// **The seventh state is not in this table, and that is the decision.** A
-/// repository state is one of three severities — dirt, upstream drift, a
-/// conflict — or it is none of them. `RepoState::Uninitialized` (a submodule
-/// registered but never checked out) is *work the user is owed*, not something
-/// that went wrong, so it wears the **muted ink** rather than inventing a fourth
-/// tone: the ramp's own contract is what makes that safe, because `INK_3` is
-/// legal on the app, panel and content surfaces — the three the submodules pane
-/// and the sidebar's repository rows actually sit on — and measurably not legal
-/// on a raised or selected one.
-///
-/// The alternative was to add `INK_3` here as a fourth "state colour". Rejected:
-/// this table's role is *severity*, and the one place a chip's legality is
-/// decided already asks the better question — "is this colour **any** state the
-/// map can produce?", which covers `INK_3` without calling it a severity. Naming
-/// it here would make every future state colour a fourth row of a severity table
-/// and lose the distinction the seventh variant exists to draw. The exclusion is
-/// therefore *asserted* below rather than merely absent: the loop over
-/// [`ALL_REPO_STATES`] states both halves, and the painted negative in
-/// `a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill`
-/// sweeps the severities.
 const STATE_SEVERITY_COLORS: [(&str, Color32); 3] = [
     ("dirt / unpushed orange", Palette::COUNTER),
     ("ahead green", Palette::AHEAD),
     ("conflicted / diverged red", Palette::STATUS_DIVERGED),
 ];
 
-/// The one state the severity table deliberately excludes, and the colour it is
-/// allowed to wear instead.
-///
-/// Written as a table row of its own rather than a comment, because "the map can
-/// produce a colour that is not in the severity table" is the fact a future
-/// variant has to be able to check itself against.
 const THE_NON_SEVERITY_STATE: (turbogit_ui::theme::RepoState, &str, Color32) = (
     turbogit_ui::theme::RepoState::Uninitialized,
     "work the user is owed, not a severity",
@@ -882,14 +634,14 @@ const THE_NON_SEVERITY_STATE: (turbogit_ui::theme::RepoState, &str, Color32) = (
 
 /// Every repository state.
 ///
-/// **A new variant is a failing test here, not a compile error — and this comment
+/// **A new variant is a failing test here, not a compile error, and this comment
 /// used to claim the opposite.** The old note said "a new variant is a compile
 /// error here rather than a silent gap", and that was false: a fixed-length
 /// `[RepoState; 6]` is an ordinary array, so the seventh variant
 /// (`Uninitialized`, which a real change landed) compiled silently and every
 /// "all states" loop below quietly stopped covering it. Rust has no way to say
-/// "this enum gained a variant" from inside a test that has to compile — no
-/// reflection, no `variant_count` on stable — so the closure is checked the only
+/// "this enum gained a variant" from inside a test that has to compile, no
+/// reflection, no `variant_count` on stable, so the closure is checked the only
 /// way it can be: [`every_repo_state_variant_is_enumerated_here`] reads the
 /// variants out of `theme.rs`'s own declaration and compares them with the ones
 /// written here, and a mismatch names the variant that arrived.
@@ -907,13 +659,6 @@ const ALL_REPO_STATES: [turbogit_ui::theme::RepoState; 7] = [
     turbogit_ui::theme::RepoState::Uninitialized,
 ];
 
-/// Every variant `theme.rs` declares for `RepoState`, in declaration order.
-///
-/// The declaration is read from the source rather than restated, because a list
-/// that has to be restated is a list that can fall behind — and this one already
-/// did. Comments are blanked first (`code_lines`), so a doc comment on a variant
-/// is not mistaken for one, and a `#[derive]`-style attribute line is skipped
-/// rather than read as a name.
 fn declared_repo_state_variants() -> Vec<String> {
     let lines = srcscan::code_lines(Path::new(CRATE_SRC).join("theme.rs"));
     let start = lines
@@ -926,9 +671,6 @@ fn declared_repo_state_variants() -> Vec<String> {
         if trimmed == "}" {
             break;
         }
-        // A variant is a bare identifier on its own line. Anything else inside
-        // the braces (a doc comment is already blanked, an attribute carries
-        // `#[`, a `}` closes the enum) is not one.
         let looks_like_a_variant = !trimmed.is_empty()
             && !trimmed.starts_with('#')
             && trimmed
@@ -948,16 +690,6 @@ fn declared_repo_state_variants() -> Vec<String> {
     out
 }
 
-/// **The enumeration is closed.** Every variant `RepoState` declares is one of
-/// the states the rules below sweep, and every state the rules sweep is a
-/// declared variant.
-///
-/// Two halves, and both are needed: the first says a variant cannot be added
-/// without appearing here (so the sweeps cover it), the second says the list has
-/// not quietly grown a name the enum does not have (so the sweeps are not
-/// covering a fiction). The failure message names the variants on both sides,
-/// because "the loop does not cover the new state" is a much more expensive
-/// thing to discover than "you added a state and did not say what colour it is".
 #[test]
 fn every_repo_state_variant_is_enumerated_here() {
     let declared = declared_repo_state_variants();
@@ -990,8 +722,6 @@ fn every_repo_state_variant_is_enumerated_here() {
     );
 }
 
-/// The chip set, from the branches screen's side: the three chips the tree may
-/// reach for, and the assertion that none of them is a state.
 #[test]
 fn no_chip_in_the_set_is_a_repository_state() {
     use turbogit_ui::ui::widgets::{COUNT_CHIP_COLORS, CURRENT_CHIP_COLORS, REF_CHIP_COLORS};
@@ -1013,26 +743,10 @@ fn no_chip_in_the_set_is_a_repository_state() {
     }
 }
 
-/// The state vocabulary the branches screen paints: one map, one wording, and
-/// **every colour the map can produce** accounted for — the three severities, or
-/// the one state that is deliberately not one.
-///
-/// The map's own app-wide test is `p0_repo_state_shared_mapping_is_app_wide` in
-/// `design_tokens.rs`, which pins the mapping against the sidebar's dot and the
-/// sync badge too. What this adds is the chip set's half of the same claim, so
-/// the two suites cannot disagree about whether a state has become a chip — and
-/// it asks the stronger question, looping over `state.color()` for every state
-/// rather than over a transcribed list of colours, so the seventh variant cannot
-/// slip past the way it did the first time.
 #[test]
 fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
     use turbogit_ui::ui::widgets::{COUNT_CHIP_COLORS, CURRENT_CHIP_COLORS, REF_CHIP_COLORS};
 
-    // Every state has a colour, and every state that has something to report has
-    // words — the words and their colour can never disagree, because there is
-    // only one source for both halves. `Clean` is the one state that says
-    // nothing: a repository with nothing outstanding is not an event worth a
-    // sentence, and its band paints nothing at all.
     for state in ALL_REPO_STATES {
         if state == turbogit_ui::theme::RepoState::Clean {
             assert_eq!(
@@ -1049,10 +763,6 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
         println!("{state:?}: {:?} in {:?}", state.words(), state.color());
     }
 
-    // **(1) The severity table is closed over the map.** Every state either takes
-    // one of the three severity colours or it is the one documented exception,
-    // which is named rather than absent — so "the severity table covers the map"
-    // is a claim with both halves checked rather than a coincidence.
     let (odd_state, odd_reason, odd_color) = THE_NON_SEVERITY_STATE;
     for state in ALL_REPO_STATES {
         let color = state.color();
@@ -1082,8 +792,6 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
              here: this suite stops covering the map otherwise."
         );
     }
-    // …and the exception really is the only one: exactly one state wears a
-    // colour the severity table does not carry, and it is the one named.
     let outside: Vec<turbogit_ui::theme::RepoState> = ALL_REPO_STATES
         .iter()
         .copied()
@@ -1101,10 +809,6 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
          not been made."
     );
 
-    // **(2) No chip is any state**, asked over the whole map rather than over the
-    // severity table: a chip that filled the muted ink to carry a state would be
-    // the same mistake as a chip that filled the orange, and asking the map's own
-    // answer is the only form of the question that covers the seventh variant.
     for (who, colors) in [
         ("ref chip", REF_CHIP_COLORS),
         ("current chip", CURRENT_CHIP_COLORS),
@@ -1127,19 +831,11 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
     }
 }
 
-/// **The render half.** A dirty root's state reaches the branches screen as
-/// one thing and one only: the state in words, inked from the one map. No
-/// dot leads it — the band's summary is words alone — and no filled rectangle
-/// anywhere in the frame wears a repository-state colour, which is what
-/// "state is not a chip" means once it reaches pixels.
 #[test]
 fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill() {
     let mut harness = dirty_repo_header_harness();
     settle(&mut harness);
 
-    // The state the fixture actually produced. Read from the words the frame
-    // painted rather than assumed, so a fixture that stopped being dirty fails
-    // here for the honest reason instead of passing vacuously.
     let words = "dirty";
     let expected_ink = turbogit_ui::theme::RepoState::Dirty.color();
     assert_eq!(
@@ -1149,12 +845,6 @@ fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill(
          of the two things that colour is for"
     );
 
-    // (1) Coloured text. The words paint, once, in the map's colour. Scoped by
-    // string, and the count is asserted rather than assumed: a second copy of
-    // the summary elsewhere in the tree would make "which one" unanswerable.
-    // Whole-galley equality, not `contains`: this fixture's own branches are
-    // named `dirty-current` and `dirty-feature`, and a substring test would
-    // count their name chips as state words.
     let hits: Vec<_> = painted_galleys(&harness)
         .into_iter()
         .filter(|g| g.text == words)
@@ -1169,9 +859,6 @@ fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill(
         "the state word wears the one repository-state colour map's ink"
     );
 
-    // (2) And no dot leads it. The band's summary is the words alone, so no
-    // circle in the state's colour reaches the frame — the dot's one painter
-    // (`state_mark`) no longer runs on the branches band.
     let dots: Vec<_> = filled_circles(&harness)
         .into_iter()
         .filter(|(_, _, fill)| *fill == expected_ink)
@@ -1182,10 +869,6 @@ fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill(
         "the band states the state in words alone, with no leading dot: {dots:?}"
     );
 
-    // (3) And never as a fill. No filled rectangle in the whole frame carries a
-    // repository-state colour — the orange included. This is the claim the two
-    // parts above exist to make unnecessary, and it is the one a future "let me
-    // just badge this dirty" breaks.
     for (state_name, state_color) in STATE_SEVERITY_COLORS {
         let chip_fills: Vec<Rect> = filled_rects(&harness)
             .into_iter()
@@ -1201,21 +884,14 @@ fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill(
     }
 }
 
-// --- §14.2 section header -----------------------------------------------------
-
 #[test]
 fn section_label_is_uppercase_and_carries_no_count() {
     use turbogit_ui::ui::components::section_label;
-    // The live count is a badge beside the label (§3.3), never characters
-    // appended to it.
     assert_eq!(section_label("Local"), "LOCAL");
     assert_eq!(section_label("Remote"), "REMOTE");
     assert_eq!(section_label("Tags"), "TAGS");
 }
 
-// --- §14.3 sync badge ----------------------------------------------------------
-
-/// A destructive action is separated at rest, not only by a divider.
 #[test]
 fn danger_rests_tinted_and_grows_stronger() {
     use turbogit_ui::ui::widgets::WidgetState::{Active, Disabled, Hovered, Idle};
@@ -1242,9 +918,6 @@ fn danger_rests_tinted_and_grows_stronger() {
 
 #[test]
 fn sync_badge_contract_matches_design() {
-    // One entry per direction, stated as its direction glyph and its count. The
-    // word is gone and the arrow carries it, which is the spelling the sidebar's
-    // repository rows and the branches popup already use.
     assert_eq!(
         sync_badge(2, 0, false),
         vec![(SyncKind::Ahead, "↑2".to_string())]
@@ -1253,7 +926,6 @@ fn sync_badge_contract_matches_design() {
         sync_badge(0, 1, false),
         vec![(SyncKind::Behind, "↓1".to_string())]
     );
-    // Diverged is the pair, not one combined marker.
     assert_eq!(
         sync_badge(2, 1, false),
         vec![
@@ -1261,9 +933,7 @@ fn sync_badge_contract_matches_design() {
             (SyncKind::Behind, "↓1".to_string()),
         ]
     );
-    // In sync says nothing — an empty list, not a label.
     assert_eq!(sync_badge(0, 0, false), vec![]);
-    // A deleted upstream wins over any count, and stays a word.
     assert_eq!(
         sync_badge(3, 0, true),
         vec![(SyncKind::Gone, "gone".to_string())]
@@ -1272,7 +942,7 @@ fn sync_badge_contract_matches_design() {
 
 /// The face a sync badge is laid out in must own both of its glyphs. A badge is
 /// arrow plus digit, and in the chrome chain the arrow only resolves through a
-/// fallback cut — two typefaces inside a three-glyph mark. This pins the half
+/// fallback cut, two typefaces inside a three-glyph mark. This pins the half
 /// that does not depend on which fallbacks the chain happens to carry: the data
 /// face covers both arrows itself. `a_current_row_keeps_its_state_marks` pins the
 /// other half, that a painted badge really is monospace.
@@ -1305,8 +975,8 @@ fn the_data_face_owns_both_direction_arrows() {
 /// The band's summary paints its counts through the chrome words
 /// (`state_words`), so the arrows ride whatever the proportional chain resolves
 /// them through. That
-/// chain changing is invisible to every text assertion — tofu still lays out as
-/// text — so the coverage the band now depends on is pinned the way the data
+/// chain changing is invisible to every text assertion, tofu still lays out as
+/// text, so the coverage the band now depends on is pinned the way the data
 /// face's is.
 #[test]
 fn the_chrome_chain_resolves_the_arrows_the_band_summary_needs() {
@@ -1332,26 +1002,19 @@ fn the_chrome_chain_resolves_the_arrows_the_band_summary_needs() {
     }
 }
 
-// --- §14.4/§14.7 truncation ----------------------------------------------------
-
 #[test]
 fn middle_truncate_keeps_identifying_ends() {
-    // `mre`-style names stay readable on both ends (design doc §14.7).
     assert_eq!(
         middle_truncate("feature/multi-root-executor", 22),
         "feature/multi…executor"
     );
-    // Short names are returned whole.
     assert_eq!(middle_truncate("main", 22), "main");
-    // The rule "never a bare end ellipsis" holds at tiny widths too.
     let t = middle_truncate("features", 4);
     assert!(
         t.starts_with("fe") && t.ends_with('s') && t.contains('…'),
         "got {t:?}"
     );
 }
-
-// --- §14.5 buttons: four variants, four states -----------------------------------
 
 #[test]
 fn primary_button_uses_accent_and_brightens_on_engagement() {
@@ -1407,8 +1070,6 @@ fn quiet_button_is_text_only_and_quiet() {
 fn danger_button_keeps_red_ink_on_a_tinted_block() {
     assert_eq!(KitButton::Danger.ink(WidgetState::Idle), Palette::DANGER);
     assert_eq!(KitButton::Danger.ink(WidgetState::Hovered), Palette::DANGER);
-    // Ticket 07: Delete no longer rests fully transparent — a destructive
-    // action separated only by a divider was still not separated at rest.
     assert_ne!(
         KitButton::Danger.fill(WidgetState::Idle),
         egui::Color32::TRANSPARENT
@@ -1427,23 +1088,19 @@ fn disabled_buttons_dim_to_muted_ink() {
     }
 }
 
-// --- §12 geometry -----------------------------------------------------------------
-
 #[test]
 fn geometry_constants_match_spec() {
     use turbogit_ui::ui::components::{
         BRANCH_ROW_H, CLICK_TARGET_MIN, KIT_ICON, SECTION_H, SIDE_PANEL_W, TOOLBAR_H,
     };
-    assert_eq!(BRANCH_ROW_H, 30.0); // dense IDE list row
-    assert_eq!(SECTION_H, 26.0); // Local / Remote / Tags header
-    assert_eq!(TOOLBAR_H, 36.0); // branch toolbar: one centered row of controls
-    assert_eq!(SIDE_PANEL_W, 220.0); // left repo tree / metadata panel
-    assert_eq!(KIT_ICON, 12.0); // icons draw at 12–13px (§14)
+    assert_eq!(BRANCH_ROW_H, 30.0);
+    assert_eq!(SECTION_H, 26.0);
+    assert_eq!(TOOLBAR_H, 36.0);
+    assert_eq!(SIDE_PANEL_W, 220.0);
+    assert_eq!(KIT_ICON, 12.0);
     assert_eq!(KIT_ICON_LARGE, 13.0);
-    assert_eq!(CLICK_TARGET_MIN, 24.0); // every clickable target ≥24px tall (§14)
+    assert_eq!(CLICK_TARGET_MIN, 24.0);
 }
-
-// --- Render smoke: the kit paints and targets stay clickable ----------------------
 
 type ClickFlag = Rc<Cell<bool>>;
 
@@ -1470,8 +1127,6 @@ fn kit_smoke_renders_and_targets_stay_clickable() {
     let mut harness = kit_harness(primary.clone(), danger.clone());
     harness.step();
 
-    // The section label paints on its own; the strip (accessible label "Local")
-    // is the click target.
     let _ = harness.get_by_label("LOCAL");
     for label in ["Local", "New Branch", "Delete", "Quiet"] {
         let node = harness.get_by_label(label);
@@ -1491,40 +1146,10 @@ fn kit_smoke_renders_and_targets_stay_clickable() {
     assert!(danger.get(), "danger kit button must be clickable");
 }
 
-// --- 07 — the shared row module: its primitives, the one rail, the one fill ---
-//
-// Everything above is the row *decision*. This section is the row module's own
-// surface and the geometry a frame actually paints, in the order the ticket
-// states them:
-//
-// 1. **the primitive set and its caller counts** — structural, because a caller
-//    count is not something a render can observe, and a comment asserting one is
-//    worth nothing. This section reads the crate's own `src` tree, in the house
-//    style of `tests/menu_host.rs` and `tests/git_log.rs`.
-// 2. **the rail** — one painter, one width definition site, both pre-existing
-//    rail sites absorbed, and no surface left painting one from a literal.
-// 3. **painted geometry** — the rail's width and its position at the leading
-//    edge, and a selected row's text origin against an unselected row's.
-// 4. **the fills** — every list row's resting, hover and selected fill, read off
-//    painted output and identified with the one row-fill decision.
-//
-// The painted ratchets render the **sidebar**, one of the two screens that own
-// an absorbed rail, through a real workspace and a real click on a repo row.
-
-// --- the structural ratchets: reading the crate's own source ----------------
-
-/// The crate's own `src` tree — the tree the structural ratchets below read.
 const CRATE_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
-/// Modules that are vocabulary rather than a screen. A call from one of these is
-/// the shared grammar reaching for its own primitive, not a second screen
-/// adopting a row, so it does not count towards "at least two screens".
 const NOT_A_SCREEN: [&str; 5] = ["components", "widgets", "kit", "icons", "theme"];
 
-/// The distinct screens a primitive is called from (sorted), with its call sites.
-///
-/// **Kept, and it is a policy rather than a scanner.** What a *screen* is is this
-/// rule's own granularity; a shared parser would make every suite inherit it.
 fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
     let src_root = Path::new(CRATE_SRC);
     let mut sites: Vec<(String, String, usize)> = Vec::new();
@@ -1552,19 +1177,6 @@ fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
     (screens, where_)
 }
 
-/// The `pub fn`s in the row vocabulary that take a `Rect` — the painting
-/// primitives, as opposed to the kit's decision functions (`row_fill`,
-/// `row_ink`, `middle_truncate`, …) and its controls (`pill`, `kit_button`,
-/// `section_header`), none of which paint into a caller-allocated row rect.
-///
-/// **Kept, and it is a classification rather than a scanner.** Which signatures
-/// count as "paints into a caller-allocated row rect" is a judgement about the row
-/// grammar, written here so the ratchet below stays total.
-/// The classification is mechanical rather than a hand list, which is what makes
-/// the ratchet total: a primitive added to either row home is either two screens'
-/// worth of use or a declared construction site, with no third option and
-/// nothing to remember. Signatures are accumulated to their opening brace, so a
-/// wrapped parameter list is read whole.
 fn rect_primitives(rel: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut pending: Option<(String, String)> = None;
@@ -1597,16 +1209,6 @@ fn rect_primitives(rel: &str) -> Vec<String> {
     out
 }
 
-/// Every primitive the shared row vocabulary exports: the name, the module that
-/// declares it, and the screens that call it.
-///
-/// All three parts are asserted exhaustively by
-/// `every_shared_row_primitive_is_used_by_at_least_two_screens`, so this table
-/// cannot quietly fall behind the tree: a screen that starts calling a primitive
-/// fails until it is written down here, a caller that goes away fails until the
-/// row is corrected, and a primitive added to either module fails until it is
-/// added here. That is the difference between "used by at least two screens"
-/// being a ratchet and being a claim in a doc comment.
 const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
     (
         "paint_row",
@@ -1620,25 +1222,6 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
             "welcome",
         ],
     ),
-    // The rail painter lives in the row-state grammar rather than in
-    // `widgets/rows.rs` because that module is private and its public surface is
-    // exactly what `widgets/mod.rs` re-exports: a `pub fn` added there is
-    // unreachable from every screen, which this workspace's `deny(warnings)`
-    // turns into a compile error rather than an invisible helper.
-    //
-    // `branch_tree_view` joined the list in ticket 16: the branches pane's
-    // selected and current rows take the rail at their leading edge, through this
-    // one painter, instead of the brand band they used to paint. A screen that
-    // adopts the primitive is written down here — that is what this list is for.
-    //
-    // `log_window` is deliberately **absent**, and that is a fact about how it
-    // adopted the rail rather than about whether it has one (ticket 14): the
-    // log's rows go through the shared shell (`components::row_shell`, the
-    // `Railed` variant), which is where this painter lives one call away. The
-    // rule above counts *callers*, so a surface that reaches the rail through
-    // the shell contributes to the primitive's use without appearing as a
-    // screen of its own. The painted proof that the log's rows carry a rail at
-    // all is `tests/git_log.rs`'s.
     (
         "paint_rail",
         "ui/components.rs",
@@ -1646,30 +1229,10 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
     ),
 ];
 
-/// The row-vocabulary painters that are **not** screen-facing primitives, named
-/// here so the classification above stays total.
-///
-/// `row_shell` is the one painter that lays a row's shell down (ticket 14) —
-/// the fill, and the leading-edge rail for a chosen row — for both of the
-/// shell's variants, and it is also the row fill's construction site: the
-/// former `fill` was the same `(ui, rect, state)` call, so its decision, its
-/// control radius and its "no text geometry" rule now live in the shell's own
-/// `Fill` arm rather than in a sibling spelling. It is reached two ways,
-/// neither of which is a screen calling a screen-facing primitive: through
-/// `widgets::paint_row` for `RowShell::Fill` (the six call sites above), and
-/// directly by the log's own rows for `RowShell::Railed`, which is the escape
-/// hatch that lets a virtualised list adopt the vocabulary without a shell that
-/// re-measures per row. One caller of the railed variant is not a case for a
-/// shared primitive *yet* — the shell is where the two variants are defined, and
-/// the rail itself is a primitive with two screens behind it either way.
 const ROW_CONSTRUCTION_SITES: [&str; 1] = ["row_shell"];
 
-/// Every primitive the shared row module exports is used by at least two
-/// screens, and the set is pinned against the module's own source.
 #[test]
 fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
-    // 1. The shared row module's whole public surface, read from the module, so a
-    //    second `pub fn` cannot be added without this failing.
     assert_eq!(
         srcscan::declared_fns(&srcscan::read_source(
             Path::new(CRATE_SRC).join("ui/widgets/rows.rs"),
@@ -1679,26 +1242,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
          primitive that is not two screens' worth of use does not live here"
     );
 
-    // 2. …and the classification is *total*: every painter in either row home is
-    //    a declared primitive or a declared construction site. This is the half
-    //    that catches a primitive added *with* a caller, which the table alone
-    //    would not notice.
-    //
-    //    Step 0 is the deletion's own half, and it lives here rather than in a
-    //    test of its own because the loop below is what makes it a ratchet:
-    //    `rect_primitives` stops reporting `fill` the moment the function is
-    //    gone, so the closed-set claim is what would have caught a second one.
-    //    Spelling the absent name here also pins the other direction — a
-    //    `components::fill` reappearing returns to the set with no screen of its
-    //    own and fails as unclassified, which is the same failure in the same
-    //    words.
-    //
-    //    Free function at column zero, not a method: `declared_fns` trims, so
-    //    `KitButton::fill` — the branch-kit button's own fill decision, a
-    //    different role — would otherwise satisfy the claim it is meant to
-    //    catch. Reading column 0 by hand is the same assertion the struct-field
-    //    reader in `menu_item.rs` makes: srcscan has no free-standing-fn-only
-    //    seam, so the precision is written where the claim is made.
     let components = Path::new(CRATE_SRC).join("ui/components.rs");
     let free = |name: &str| {
         srcscan::code_lines(&components)
@@ -1711,9 +1254,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
          `row_shell`'s `Fill` arm, and a second spelling of it is the \
          two-opinion case the row vocabulary exists to prevent"
     );
-    // The positive half, so the claim cannot pass by the file being unread:
-    // the surviving name really is declared there, and it really is the one
-    // the fill's body now lives inside.
     assert!(
         free("row_shell"),
         "`components::row_shell` must still be declared in ui/components.rs"
@@ -1745,7 +1285,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     }
 
     for (name, home, screens) in ROW_PRIMITIVES {
-        // 3. Exactly one declaration, in the module this table names.
         let homes: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
             .into_iter()
             .filter(|path| {
@@ -1766,7 +1305,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
             "`{name}` must be declared exactly once, in {home}"
         );
 
-        // 4. The caller count, counted over the tree, in screens.
         let (found, sites) = screens_calling(name);
         assert!(
             found.len() >= 2,
@@ -1785,19 +1323,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     }
 }
 
-/// **The row shell's contract: it accepts an already-allocated rect and never
-/// measures one.**
-///
-/// This is the half of the log's adoption that no frame can show. A shell that
-/// re-measured per row would still paint a correct-looking row — a *pitch* out
-/// of step with the virtualised list that asked for it, which is exactly the
-/// regression the log's virtualisation suites are there to catch, and exactly
-/// the rewrite the variant exists to avoid. So the claim is asserted from the
-/// shell's own source: the rect arrives as a parameter, nothing is handed back,
-/// and the body names no way of measuring, allocating or laying out.
-///
-/// The list of measurement APIs is spelled rather than inferred, because the
-/// mutation it has to catch is a shell that grew *one* of them.
 #[test]
 fn the_row_shell_paints_a_caller_allocated_rect_and_never_measures_one() {
     let src = srcscan::fn_code(
@@ -1840,8 +1365,6 @@ fn the_row_shell_paints_a_caller_allocated_rect_and_never_measures_one() {
     }
 }
 
-/// The rail marks a **chosen** row: exactly the two selection roles, and neither
-/// of the two that are not.
 #[test]
 fn the_rail_marks_exactly_the_two_selection_roles() {
     for (state, is_a_selection) in [
@@ -1859,10 +1382,6 @@ fn the_rail_marks_exactly_the_two_selection_roles() {
     }
 }
 
-/// A harness painting four rows — one per (`variant`, `state`) pair the shell is
-/// reached with — so the two variants are pinned by what they paint rather than
-/// by what the log happens to ask for. The rows are at known y offsets and the
-/// whole frame is nothing but shell, so every fill in the output is a row's.
 fn shell_harness() -> Harness<'static, ()> {
     use turbogit_ui::ui::components::{RowShell, row_shell};
     let mut harness = widget_harness(egui::vec2(400.0, 400.0), move |ui| {
@@ -1886,9 +1405,6 @@ fn shell_harness() -> Harness<'static, ()> {
     harness
 }
 
-/// The shell's two variants, read off painted output: the railed one adds the
-/// one rail at the leading edge of a **chosen** row, and the fill-only one never
-/// does — whatever state it is handed.
 #[test]
 fn the_row_shells_railed_variant_adds_the_one_rail_and_its_fill_variant_never_does() {
     let harness = shell_harness();
@@ -1901,9 +1417,6 @@ fn the_row_shells_railed_variant_adds_the_one_rail_and_its_fill_variant_never_do
     let (focus_railed, row_railed, focus_filled, hover_railed) =
         (rect(0), rect(1), rect(2), rect(3));
 
-    // Each row's band is the one row-fill decision's answer, painted at the
-    // rect the caller allocated — which is the visible half of "it does not
-    // measure": the painted band *is* the caller's rect, to the point.
     for (row, state) in [
         (focus_railed, RowState::FocusSelected),
         (row_railed, RowState::RowSelected),
@@ -1946,13 +1459,9 @@ fn the_row_shells_railed_variant_adds_the_one_rail_and_its_fill_variant_never_do
     }
 }
 
-/// The rail width is a token-layer dimension: defined once, and read by the
-/// two places that draw one — the row rail painter and the tab underline.
 #[test]
 fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
-    // The value.
     assert_eq!(RAIL_WIDTH, 2.0, "the rail width dimension");
-    // The definition: one `pub const`, in the token layer.
     let theme = srcscan::code_lines(Path::new(CRATE_SRC).join("theme.rs"));
     assert_eq!(
         theme
@@ -1962,8 +1471,6 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
         1,
         "the rail width is defined in the token layer and nowhere else"
     );
-    // A width, not a radius. The two 2px roles are two declarations, and the
-    // coincidence of their numbers is exactly the trap.
     assert_eq!(
         theme
             .iter()
@@ -1973,24 +1480,6 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
         "the 2px *radius* role stays its own declaration"
     );
 
-    // Who reads it. Exactly three files may name it, and each for a stated
-    // reason:
-    //
-    // - `theme.rs` defines it.
-    // - `components.rs` is the one rail **painter**: a 2px vertical bar at a
-    //   row's leading edge, which is what the width is for.
-    // - `tabs.rs` is the one other place the *number* is the whole point: the
-    //   active tab's 2px accent underline, which is R1's second non-button job
-    //   for the brand and is the same thickness as the rail. It reads the token
-    //   rather than restating `2.0` precisely so the two cannot drift apart — and
-    //   it is still not a *rail site*: the underline is a horizontal rule at a
-    //   tab's bottom edge, so it does not go through `components::paint_rail`,
-    //   which paints a vertical bar. Sharing the width is not sharing the
-    //   painter, and this ratchet pins the set of *readers of the width*, not a
-    //   set of painters.
-    //
-    // A fourth file is a second opinion about how thick the accent is, which is
-    // the drift the token exists to prevent.
     let naming: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
         .into_iter()
         .filter(|path| {
@@ -2021,9 +1510,6 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
          dimension. A fourth is a second definition of the width under another \
          name — or a rail that grew one."
     );
-    // The third reader really does read the *token*, not a literal that happens
-    // to equal it: this is the distinction the comment above turns on, and it is
-    // the mutation that a hand-rolled rail would introduce.
     let tabs = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/widgets/tabs.rs"));
     assert!(
         tabs.iter()
@@ -2033,16 +1519,6 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     );
 }
 
-/// No surface paints an accent rail at a hard-coded width.
-///
-/// The negative half of "the width is written down in exactly one place", and it
-/// is deliberately narrower than "no `2.0`": four things in the tree are 2px and
-/// are not rails — the two BRAND rings around a focused conflict-pane header and
-/// result cell, the BRAND_INK dash inside the tri-state partial checkbox, and the
-/// icon stroke weight. So the rule is scoped to a **2px extent in the same
-/// statement as a brand/Accent colour** (`Stroke::new(2.0, …)`,
-/// `Vec2::new(2.0, …)`), which is the form both absorbed rail sites used.
-/// Centring arithmetic (`size().y / 2.0`) is a division, not an extent.
 #[test]
 fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
     let mut offenders: Vec<String> = Vec::new();
@@ -2053,8 +1529,6 @@ fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        // Statements, not lines: the diff pane's rail spanned three of them, and
-        // a line-based rule would have missed it entirely.
         let mut statement = String::new();
         let mut start = 1usize;
         for (index, line) in lines.iter().enumerate() {
@@ -2072,14 +1546,7 @@ fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
                 || dense.contains("Palette::BRAND)")
                 || dense.contains("Palette::ACCENT,")
                 || dense.contains("Palette::ACCENT)");
-            // A hard-coded 2px *extent*: `2.0` as a direct call argument or a
-            // local binding (`Stroke::new(2.0, …)`, `Vec2::new(2.0, …)`,
-            // `let rail = 2.0;`) — never `… / 2.0`, which is centring.
             let hard_coded_2px = ["(2.0", ",2.0", "=2.0"].iter().any(|p| dense.contains(p));
-            // A focused conflict-pane cell's 2px BRAND *ring* is a border, not a
-            // rail: it strokes the whole cell rather than filling a bar at one
-            // edge, and it is a real geometry difference rather than a second
-            // definition of the rail.
             if brands && hard_coded_2px && !dense.contains("rect_stroke") {
                 offenders.push(format!("{rel}:{start}: {compact}"));
             }
@@ -2093,13 +1560,6 @@ fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
     );
 }
 
-// --- the painted ratchets: the sidebar, which owns one of the two rails ------
-
-/// One initialised repository with a commit, under `parent`: `main`, one commit
-/// touching `base.txt`, no remote.
-///
-/// **Not `git_seed::repo_with_one_commit`:** same shape, but it seeds `README.md`, and
-/// a fixture that is "the same" has to be the same *file*.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).expect("repo dir");
@@ -2122,13 +1582,6 @@ fn two_repo_workspace() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (dir, alpha, beta)
 }
 
-/// The sidebar screen with `beta` focused: the real shell, at the width that keeps
-/// the left rail visible, driven exactly as `tests/workspace_sidebar.rs` drives
-/// it. The focus is made by clicking the row, so the fixture exercises the real
-/// selection path rather than poking `AppState` internals.
-///
-/// Kept as [`shell_harness_over_unstyled`] at the 1280×800 the sidebar ratchets
-/// measure: the focus bands and row fills are read off painted rects.
 fn focused_sidebar() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let (dir, alpha, beta) = two_repo_workspace();
     let state = AppState::for_roots(dir.path(), &[alpha, beta]);
@@ -2139,11 +1592,6 @@ fn focused_sidebar() -> (Harness<'static, AppState>, tempfile::TempDir) {
     (harness, dir)
 }
 
-/// Filled rects painting exactly `color`.
-///
-/// Generic over the harness's state so the vocabulary's own ratchets can read a
-/// frame that is nothing but the shell under test, and the sidebar's can read the
-/// shell through it.
 fn filled_with<S>(harness: &Harness<'_, S>, color: Color32) -> Vec<Rect> {
     filled_rects(harness)
         .into_iter()
@@ -2152,10 +1600,6 @@ fn filled_with<S>(harness: &Harness<'_, S>, color: Color32) -> Vec<Rect> {
         .collect()
 }
 
-/// The painted focus bands **inside `row`** — the sidebar's active-row band, read
-/// off the token through the one row-fill decision so it keeps tracking the
-/// theme, and scoped to the row because a focus-band fill is not unique to the
-/// tree: the shell's own selected surfaces paint the same composite.
 fn focus_bands(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Rect> {
     filled_with(harness, row_fill(RowState::FocusSelected))
         .into_iter()
@@ -2163,7 +1607,6 @@ fn focus_bands(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Rect> {
         .collect()
 }
 
-/// The painted accent rails: brand-filled rects exactly a rail wide.
 fn rails<S>(harness: &Harness<'_, S>) -> Vec<Rect> {
     filled_with(harness, Palette::BRAND)
         .into_iter()
@@ -2171,7 +1614,6 @@ fn rails<S>(harness: &Harness<'_, S>) -> Vec<Rect> {
         .collect()
 }
 
-/// The one painted galley of exactly `text` inside `row`.
 fn label_in_row(
     harness: &Harness<'_, AppState>,
     row: Rect,
@@ -2189,7 +1631,6 @@ fn label_in_row(
     hits.into_iter().next().expect("one hit")
 }
 
-/// The colours painted inside `row`.
 fn fills_in_row(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Color32> {
     filled_rects(harness)
         .into_iter()
@@ -2198,15 +1639,10 @@ fn fills_in_row(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Color32> {
         .collect()
 }
 
-/// The selected row is marked by the one rail: the token's width, at the row's
-/// leading edge, for the row's full height — and by nothing else.
 #[test]
 fn a_selected_row_paints_exactly_one_rail_of_the_token_width_at_its_leading_edge() {
     let (harness, _workspace) = focused_sidebar();
 
-    // The band is painted at the row's own rect, so the rail's position is
-    // measured against the row's real geometry rather than against a value this
-    // test invented.
     let row = harness.get_by_label("beta").rect();
     let bands = focus_bands(&harness, row);
     assert_eq!(
@@ -2250,7 +1686,6 @@ fn a_selected_row_paints_exactly_one_rail_of_the_token_width_at_its_leading_edge
         "the rail is RAIL_WIDTH wide and no more"
     );
 
-    // The unselected sibling carries no rail: one rail, for one selection.
     let plain = harness.get_by_label("alpha").rect();
     for other in rails(&harness) {
         assert!(
@@ -2260,14 +1695,6 @@ fn a_selected_row_paints_exactly_one_rail_of_the_token_width_at_its_leading_edge
     }
 }
 
-/// The rail is **paint**: selecting a row indents neither its text nor the
-/// content region of its band.
-///
-/// A rail reserved as layout padding shifts every row's content the moment it is
-/// selected, and the rows' names stop lining up down the column. Both halves are
-/// asserted because they are the same mistake: the band's leading edge *is* the
-/// row's content region, so a band that starts at `row.left() + RAIL_WIDTH` is a
-/// selected row whose content is indented whether or not the label itself moved.
 #[test]
 fn a_selected_row_indents_neither_its_text_nor_its_band() {
     let (harness, _workspace) = focused_sidebar();
@@ -2307,15 +1734,12 @@ fn a_selected_row_indents_neither_its_text_nor_its_band() {
     );
 }
 
-/// Every list row's resting, hover and selected fill comes from the one row-fill
-/// decision, read off painted output.
 #[test]
 fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
     let (mut harness, _workspace) = focused_sidebar();
     let selected = harness.get_by_label("beta").rect();
     let plain = harness.get_by_label("alpha").rect();
 
-    // Resting: the decision for an untouched row is to paint nothing.
     assert_eq!(
         row_fill(RowState::Default),
         Color32::TRANSPARENT,
@@ -2333,7 +1757,6 @@ fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
         );
     }
 
-    // Selected: the focused row takes the decision's focus band, painted.
     let selected_painted = fills_in_row(&harness, selected);
     assert!(
         selected_painted.contains(&row_fill(RowState::FocusSelected)),
@@ -2342,7 +1765,6 @@ fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
         row_fill(RowState::FocusSelected)
     );
 
-    // Hover: the pointer on the unselected row takes the decision's hover fill.
     harness.get_by_label("alpha").hover();
     settle(&mut harness);
     let hovered = fills_in_row(&harness, plain);
@@ -2357,8 +1779,6 @@ fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
         Palette::RAISED_ON_CARD,
         "hover steps up from the surface the list sits on"
     );
-    // And the selected row is still selected while the pointer is on its
-    // neighbour: the two states never swap.
     let still_selected = fills_in_row(&harness, selected);
     assert!(
         still_selected.contains(&row_fill(RowState::FocusSelected)),
@@ -2367,18 +1787,8 @@ fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
     );
 }
 
-/// A standard list row takes the named row height for its kind, on both screens
-/// this suite can render: a repository row in the sidebar is the group-row
-/// height, and the branch tree's list row is the branch row height.
-///
-/// This is the seam-available half of "the row module owns row height per row
-/// kind". The kinds are the named roles (`theme::GROUP_ROW_HEIGHT`,
-/// `components::BRANCH_ROW_H`, and `theme::FILE_ROW_HEIGHT` for a group/folder
-/// row), so a call site that picked a literal of its own shows up here as a row
-/// of the wrong height — and a selection that resized a row would too.
 #[test]
 fn a_standard_list_row_takes_its_named_row_height() {
-    // The sidebar's repository row.
     {
         let (harness, _workspace) = focused_sidebar();
         for label in ["alpha", "beta"] {
@@ -2393,7 +1803,6 @@ fn a_standard_list_row_takes_its_named_row_height() {
         }
     }
 
-    // The branch tree's list row, from the fixture above.
     let mut harness = selected_row_harness();
     settle(&mut harness);
     let selected = selected_row_rect(&harness);
@@ -2405,29 +1814,11 @@ fn a_standard_list_row_takes_its_named_row_height() {
     );
 }
 
-// --- R3: a section label is the muted ink, never the dim step (ticket 21) -----
-//
-// The dim step's whole reason for existing is that it is a **named
-// restriction**: "placeholders, dim path suffixes and hatches, and never the only
-// rendering of something the user needs". A name is the only thing in this
-// codebase that can enforce a restriction, so the ramp's geometry half is as
-// load-bearing as the contrast half — and the column header already has a
-// painted ratchet saying so (`a_column_header_is_ink_3_and_never_the_dim_ink` in
-// `tests/widget_library.rs`). The *section* label is the other 9px tracked mark
-// in the app, it was drawn with the dim value in the same target frames, and it
-// had no such assertion. This is it.
-///
-/// Read off painted output through the real branch tree, and located by the
-/// fixture's own rows rather than by a hard-coded position: the label paints
-// once per section, so a second copy would make "which one" unanswerable.
 #[test]
 fn a_section_label_is_ink_3_and_never_the_dim_ink() {
     let mut harness = selected_row_harness();
     settle(&mut harness);
 
-    // The fixture's sections. `show_remotes` is off, so LOCAL and TAGS are the
-    // two that paint, and the local one is there twice over (two roots' worth of
-    // grouping is not in play — one root, three local branches).
     let mut labels: Vec<test_support::harness::PaintedGalley> = painted_galleys(&harness)
         .into_iter()
         .filter(|g| g.text == "LOCAL" || g.text == "TAGS")
@@ -2441,13 +1832,6 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
     labels.sort_by(|a, b| a.pos.y.total_cmp(&b.pos.y));
     for label in &labels {
         println!("section label `{}` in {:?}", label.text, label.color);
-        // **The rule: never the dim step.** `INK_4` is the ramp's one step with
-        // no legal surface — placeholders, dim path suffixes and hatches, and
-        // never the only rendering of something the user needs. A 9px section
-        // label is something the user needs, so this is the assertion; the
-        // column header has its twin in `tests/widget_library.rs` and the target
-        // frames were drawn with the dim value in both places, which is why
-        // neither is left to a comment.
         assert_ne!(
             label.color,
             Palette::INK_4,
@@ -2463,17 +1847,6 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
             "…and the two spellings of the dim step stay distinct, or this \
              ratchet would be checking a name rather than a value"
         );
-        // **The value it paints today, pinned with its gap named.** R3's role
-        // table assigns `INK_3` to section labels, and the branches tree's own
-        // `section_header` paints them one step higher, at `INK_2`
-        // (`components.rs::section_header`, the shared header the branches
-        // screen wears). That is a legal ink on this surface — it clears AA by a
-        // wide margin — so it is a *brighter* label than the role table asks
-        // for rather than an illegible one, and this ticket's job is to ratchet
-        // the contract rather than to re-colour a screen. So the value is pinned
-        // as it paints, with the gap written down: aligning it with the table is
-        // a deliberate edit to this assertion plus one line in
-        // `components::section_header`, and it is not a silent improvement.
         assert_eq!(
             label.color,
             Palette::INK_2,
@@ -2482,8 +1855,6 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
              section labels). If it moved, move it on purpose and say why here."
         );
     }
-    // Whatever the value, it has to be one of the ramp's steps that may carry a
-    // label — which is the part of the rule that is not a matter of taste.
     for label in &labels {
         assert!(
             is_a_label_bearing_step(label.color),
@@ -2493,9 +1864,6 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
             label.color
         );
     }
-    // The two restrictions are different restrictions, restated on the geometry
-    // side: a section label is a *ramp* step, and the dim step stays the one
-    // with no legal surface.
     assert_ne!(
         Palette::INK_3,
         Palette::INK_4,
@@ -2504,40 +1872,15 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
     );
 }
 
-/// Whether a colour is one of the ramp's steps that may carry a label.
-///
-/// Deliberately not a contrast measurement: the *legality* claim is the ramp's
-/// (see `design_tokens.rs`), and re-deriving it here would be a second copy of
-/// the ink sweep that could disagree with the first. This only asks "is it a step
-/// the ramp has", so a label that switched to a surface colour or a state tone
-/// fails here.
 fn is_a_label_bearing_step(ink: Color32) -> bool {
     [Palette::INK, Palette::INK_2, Palette::INK_3].contains(&ink)
 }
 
-// --- R4: the sidebar's active band is the focus role, and why (ticket 21) ------
-//
-// Ticket 19 found that the left rail's active row takes
-// `RowState::FocusSelected` (the translucent `selection_bg()` composite) where
-// R4's criterion says "a selected list row is `ROW_SELECTED` plus a rail", and
-// parked the question with its answer written down. The answer is **keep the
-// focus band**, and this is the ratchet that holds it — with the measurement
-// that settles the "but which one is it really?" part of the question, so nobody
-// has to re-derive it before spending a change on the swap.
-//
-// Both halves matter. The first says the sidebar still paints the focus role
-// (so a swap is a deliberate edit to this assertion, not a silent drift). The
-// second says *why the swap would be invisible*: composited over the app
-// background, the two fills are within one 8-bit step per channel of each other,
-// so the choice is about which role the band claims and not about what the user
-// can see. A change that cannot be seen is a change that must earn its place
-// some other way, and this is the note that says it did not.
 #[test]
 fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apart() {
     use turbogit_ui::theme::Palette;
     use turbogit_ui::ui::components::{RowState, row_fill};
 
-    // (1) The decision, from the sidebar's own paint.
     let (harness, _workspace) = focused_sidebar();
     let row = harness.get_by_label("beta").rect();
     let bands = focus_bands(&harness, row);
@@ -2546,9 +1889,6 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
         1,
         "one focused row paints one band; found {bands:?}"
     );
-    // The row paints more than the band — the rail, and the rail's own surface
-    // behind it — so the claim is about *which selection fill* it paints, not
-    // about the whole list.
     let fills = fills_in_row(&harness, row);
     assert!(
         fills.contains(&row_fill(RowState::FocusSelected)),
@@ -2566,23 +1906,6 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
         Palette::ROW_SELECTED
     );
 
-    // (2) The measurement that settles it. `selection_bg()` is a **premultiplied**
-    // translucent composite, so what it looks like depends entirely on what it is
-    // composited over, and that is not the same answer everywhere. Composited over
-    // the app background (the log table's host) it lands on `#233455` against the
-    // list row's `#243456` — one 8-bit step on two channels and none on the third.
-    // Over the left rail's own surface, which is a shade darker than the app
-    // background, it lands on `#213252`: three, two and four steps. Both are
-    // inside a rounding step of the same colour, which is the point: the two
-    // fills are the same object to the eye, so the choice is about which *role*
-    // the band claims and not about what the user can see. A change that cannot be
-    // seen is a change that has to earn its place some other way, and this is the
-    // note that says it did not.
-    //
-    // The arithmetic is done in floating point and never rounded, because the
-    // rounding is exactly the size of the thing being measured: `premultiplied +
-    // host × (1 − a)` is 35.5 and 85.5 on the app background, and asking whether
-    // that is 35 or 36 is asking which way a compositor rounds.
     let focus = row_fill(RowState::FocusSelected);
     assert!(
         !focus.is_opaque(),
@@ -2636,26 +1959,11 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
     }
 }
 
-// --- R6: the mark pair is a dot and words, at its construction site (ticket 21) -
-//
-// The render half of "state is not a chip" is
-// `a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill`:
-// in a real frame, no filled rect wears a state colour. The construction half is
-// here, because a frame only shows the states a fixture happens to produce, and
-// the failure this guards is `state_mark` itself growing a chip body — which
-// would put a filled rect *behind* the state word in every state the app shows
-// and in every state it does not.
 #[test]
 fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
-    // The scan target is `mark`, the dot painter behind `state_mark`: the dot's
-    // geometry is decided there and nowhere else. A second copy of these claims
-    // would have to be a second mark, which is what this guards.
     let components = Path::new(CRATE_SRC).join("ui/components.rs");
     let src = srcscan::fn_code(&srcscan::read_source(&components), "mark");
 
-    // The mark is a circle: a filled circle, no fill rect. A state behind a rect
-    // stops reading as state and starts reading as a category, which is the
-    // whole of R6's second half.
     assert!(
         !src.contains("rect_filled"),
         "the mark pair paints no fill rect: it is a dot and a word, and a rect \
@@ -2666,8 +1974,6 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
         "the mark pair borrows no chip geometry — no radius, no chip height, no \
          chip body. It reserves a band to centre a dot in, and that is all. {src}"
     );
-    // The colours arrive as arguments, so a second state vocabulary cannot start
-    // here; the one map is `RepoState::color()` at the call site.
     for own_map in [
         "Palette::COUNTER",
         "Palette::AHEAD",
@@ -2680,10 +1986,6 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
              `RepoState::color()` map at the call site. {src}"
         );
     }
-    // …and it really is a dot: the circle is painted by the mark's own body, in
-    // the same function, at the caller's colour. Both assertions read one
-    // function now, which is the point — the dot's geometry and the words
-    // beside it are one thing's business.
     let dot = srcscan::fn_code(&srcscan::read_source(&components), "mark");
     assert!(
         dot.contains("circle_filled"),
@@ -2695,10 +1997,6 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
          second state map. {dot}"
     );
 
-    // The forwarder is gone: `state_dot` had an interface identical to the egui
-    // primitive it called, and exactly one caller, so it taught a reader
-    // nothing `Painter::circle_filled` would not have. The positive claim
-    // above is what proves the behaviour survived rather than being dropped.
     let components = Path::new(CRATE_SRC).join("ui/components.rs");
     assert!(
         !srcscan::code_lines(&components)
@@ -2709,8 +2007,6 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
          of the primitive rather than a role"
     );
 
-    // And the painted half, at the render seam too: one state mark, one circle,
-    // one galley, no rect.
     let mut harness = Harness::new_ui_state(
         |ui, _| {
             turbogit_ui::theme::configure_style(ui.ctx());
@@ -2742,26 +2038,10 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
     );
 }
 
-// --- Purity: the branch view builder is git-free and egui-free (ticket 21) ----
-//
-// `build_branch_view` is a pure function over a view model: it asks the caller
-// per repository and returns a tree, with no git, no `egui::Ui`, and no styling
-// import. That property is currently enforced by a doc comment and by the
-// dependency shape, and neither fails: a sweep adding `use egui::Color32;` to
-// decide a row's colour would compile, look reasonable, and quietly turn the
-// builder into a second place a colour is decided — which is the one thing the
-// view sweep exists to prevent.
-//
-// So the property is asserted, at the source, which is the one altitude that can
-// see it: a comment saying "no egui here" is not a ratchet, and this is. The
-// fixture in this suite already calls the builder (every painted ratchet above
-// goes through it), so the claim and its user live in the same file.
 #[test]
 fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
     let src = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/branches_tree.rs"));
 
-    // No egui: not a type, not a path, not an import. `egui` as a whole word, so
-    // a use of any part of the framework is caught.
     for (index, line) in src.iter().enumerate() {
         for banned in ["egui", "Ui", "Painter", "Color32", "RichText", "Visuals"] {
             assert!(
@@ -2774,9 +2054,6 @@ fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
             );
         }
     }
-    // No styling import and no token: the same argument, spelled for the module
-    // the tokens live in, because `use crate::theme::Palette` is the most likely
-    // way the property would be lost and it does not contain the word `egui`.
     for banned in ["theme", "Palette", "components", "widgets"] {
         assert!(
             !src.iter()
@@ -2786,8 +2063,6 @@ fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
              how anything looks, and an import is where that would start."
         );
     }
-    // No git either — the model is the input, and a `std::process` or a
-    // `git2` reference in here would mean the view is doing a read.
     for banned in ["std::process", "Command::", "git2", "Repository"] {
         assert!(
             !src.iter().any(|line| line.contains(banned)),
@@ -2796,8 +2071,6 @@ fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
              make the branches screen's tree depend on a subprocess"
         );
     }
-    // …and the claim is not vacuous: the function this suite renders through is
-    // really declared there, takes the model, and hands a model back.
     let code = src.join("\n");
     for expected in [
         "pub fn build_branch_view(",
@@ -2816,17 +2089,6 @@ fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
     }
 }
 
-// --- R6: count pluralisation answers from the one helper ------------------------
-
-/// The one count-pluralisation helper takes the noun pair, and the pair is the
-/// interface rather than a detail of its body.
-///
-/// The blocker on folding the per-call-site conditionals was the signature: a
-/// two-argument `counted` could not express `repositories`, so every site kept
-/// its private answer to "one reads singular, every other count reads plural".
-/// Reading the declaration from the source — rather than calling the function
-/// and trusting it — is what makes a later narrowing fail here instead of
-/// silently re-opening the bypass question.
 #[test]
 fn the_count_helper_owns_the_noun_pair_and_the_six_former_bypasses() {
     let code = srcscan::fn_code(
@@ -2849,54 +2111,20 @@ fn the_count_helper_owns_the_noun_pair_and_the_six_former_bypasses() {
         "`counted` must take the singular and the plural, got {params:?}"
     );
 
-    // The values, so the rule itself is pinned and not only its shape: one
-    // reads singular, every other count reads plural — zero included, which is
-    // the case a hand-rolled conditional most often gets wrong.
     use turbogit_ui::ui::components::counted;
     assert_eq!(counted(1, "repo", "repos"), "1 repo");
     assert_eq!(counted(2, "repo", "repos"), "2 repos");
     assert_eq!(counted(0, "branch", "branches"), "0 branches");
 }
 
-/// No file under `src/ui/` answers the pluralisation question for itself, with
-/// two named keeps.
-///
-/// The rebased-parity spec mandates a SINGLE shared helper, and a per-call-site
-/// conditional is exactly what drifts: six of them existed, and they were the
-/// reason the helper could not be adopted until it took the noun pair; fifteen
-/// more survived that ticket, and eight of them were invisible to a reader that
-/// matched one physical line. So the scan is the tree's — every `.rs` under
-/// `src/ui/`, no allowlist — and a new one anywhere fails.
-///
-/// The shape is spelled literally — a count compared to one, with a `} else {`
-/// inside the same block — because that is the only form that *is* the bypass:
-/// the noun sits in the branch, so the rule is answered where the text is
-/// painted. Both arm layouts are read, because the arms are the same rule
-/// whether rustfmt kept them on one line or spread them over five, and the eight
-/// that hid behind that distinction are what made the one-line reader
-/// worthless. What is not the bypass is an `if` on a count whose arms are
-/// computed elsewhere and decide no plural.
-///
-/// The two keeps are named, because neither is a bypass. `rollback_reason` in
-/// `branch_divergence.rs` wants a bare noun with no count — "You may roll back
-/// the repositories where it succeeded" — which `counted` does not return, and
-/// `components.rs` holds the helper's own `if n == 1`, which is the rule itself
-/// rather than a copy of it. `branch_divergence.rs` is asserted by line, so its
-/// keep cannot grow quietly; `components.rs` is a path keep alone, because
-/// pinning the destination's implementation would contradict the fold.
 #[test]
 fn no_file_under_ui_answers_pluralisation_for_itself() {
-    /// The bypass shape, and nothing else: a count compared to one, with a
-    /// `} else {` inside the same block. Returns the 1-based line of each
-    /// opening `if`, so one shape cannot be counted twice under two readers.
     fn suffix_pluraliser_lines(lines: &[String]) -> Vec<usize> {
         let mut hits = Vec::new();
         for (index, line) in lines.iter().enumerate() {
             if !line.contains("== 1 {") {
                 continue;
             }
-            // Walk to the block's own closing brace, so a later `} else {` in
-            // the same function cannot be read as this `if`'s other arm.
             let mut arms = String::new();
             for follower in &lines[index..] {
                 arms.push_str(follower);
@@ -2912,7 +2140,6 @@ fn no_file_under_ui_answers_pluralisation_for_itself() {
         hits
     }
 
-    // Every module under `src/ui/`, at any depth: no pluraliser in any spelling.
     let src_root = Path::new(CRATE_SRC).join("ui");
     let offenders: Vec<(String, Vec<usize>)> = srcscan::rust_files(&src_root)
         .into_iter()
@@ -2940,34 +2167,16 @@ fn no_file_under_ui_answers_pluralisation_for_itself() {
          where `counted`'s own `if n == 1` lives."
     );
 
-    // …and the recorded keep really is the only one in its own file, so the
-    // residual above cannot grow quietly.
     let divergence = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/branch_divergence.rs"));
     let suffix: Vec<usize> = suffix_pluraliser_lines(&divergence);
     assert_eq!(
-        suffix,
-        vec![121],
+        suffix.len(),
+        1,
         "branch_divergence.rs carries more than its recorded `repositories` keep: \
          the suffix pluraliser lines are {suffix:?}"
     );
 }
 
-// --- Shell edges: direct calls on the one shared painter, no private alias ------
-
-/// The shell's structural edges are **direct** calls on the shared painter.
-///
-/// The shell paints exactly one edge rule: the status bar's. The tab strip's
-/// rule is the shared tab view widget's own direct call
-/// (`ui/widgets/tabs.rs`). What this suite pins here is the shell-side half:
-/// the status bar's call is direct, and the private wrapper whose whole job
-/// was to fix the tone to [`Palette::LINE`] — one forwarding call, one
-/// caller — stays gone.
-///
-/// The reader choice is load-bearing: a plain `fn` at column 0 **is** read by
-/// `top_level_items`, whose head list is `pub fn` / `fn` / `pub const` /
-/// `const`, whereas `declared_fns` only sees `pub fn` and would pass vacuously
-/// on a private function. `top_level_items` is the right seam here and
-/// `declared_fns` would be the wrong one.
 #[test]
 fn the_shell_has_no_private_alias_for_the_edge_painter() {
     let shell = srcscan::read_source(Path::new(CRATE_SRC).join("ui/shell.rs"));
@@ -2980,8 +2189,6 @@ fn the_shell_has_no_private_alias_for_the_edge_painter() {
          eventually loses"
     );
 
-    // One edge, one direct call — the number is the claim. The tab strip's
-    // call lives in `ui/widgets/tabs.rs`.
     let calls: Vec<usize> = shell
         .lines()
         .enumerate()

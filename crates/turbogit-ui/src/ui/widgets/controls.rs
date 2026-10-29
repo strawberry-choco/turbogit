@@ -1,5 +1,3 @@
-//! Interactive control states, shared buttons, focus, and segmented choices.
-
 use egui::{
     Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, Sense, Stroke, StrokeKind,
     TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
@@ -8,21 +6,12 @@ use egui::{
 use crate::theme::{CHIP_RADIUS, CONTROL_RADIUS, Palette, TYPE_BODY, chrome_font};
 use crate::ui::icons::{self, Icon};
 
-const BUTTON_HEIGHT: f32 = 32.0; // .tg-btn
-const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
-/// Public like the other re-exported band metrics (`PANE_HEADER_HEIGHT`): a
-/// host band reserves the cluster's exact width from it (the tab strip's
-/// action cluster) instead of restating the number.
+const BUTTON_HEIGHT: f32 = 32.0;
+const COMPACT_BUTTON_HEIGHT: f32 = 28.0;
 pub const ICON_BUTTON_SIZE: f32 = 28.0;
-const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
-/// The space held between a button's icon and its label.
+const BUTTON_ICON_SIZE: f32 = 16.0;
 const ICON_LABEL_GAP: f32 = 6.0;
 
-// The compact primary's whole reason to exist is the pane-header band, so the
-// compact height **is** the band height. Asserted here rather than restated at
-// the call site: a band that grew would otherwise leave a button that no longer
-// fits it, and the failure would show up as a pane whose header is taller than
-// every other pane's rather than as a number that disagrees with a number.
 const _: () = {
     assert!(
         COMPACT_BUTTON_HEIGHT == super::containers::PANE_HEADER_HEIGHT,
@@ -31,8 +20,6 @@ const _: () = {
     )
 };
 
-// --- Token-derived color math ----------------------------------------------
-
 /// Linear blend of two opaque colors; `t` is the amount of `b` mixed into `a`.
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
@@ -40,16 +27,10 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()))
 }
 
-/// Opaque tint of `accent` over the app background (spec §2.4 derived colors).
-///
-/// Blending over `BG` keeps chips deterministic and legible on panel fills.
 pub fn tint_over_bg(accent: Color32, t: f32) -> Color32 {
     mix(Palette::BG, accent, t)
 }
 
-// --- Interactive-state decisions --------------------------------------------
-
-/// The four interactive states every widget must style (task/spec §2.5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WidgetState {
     Idle,
@@ -59,13 +40,6 @@ pub enum WidgetState {
 }
 
 impl WidgetState {
-    /// The interactive-state ladder every widget paints from (task/spec §2.5):
-    /// disabled wins; else pointer-held is Active; else hovered is Hovered;
-    /// else Idle.
-    ///
-    /// This is the producer half of the seam [`ButtonVariant::fill`] owns as
-    /// consumer: `enabled` is the host's own disabled axis, so a host with no
-    /// such axis passes `true` rather than inventing one.
     pub fn from_response(enabled: bool, response: &Response) -> Self {
         if !enabled {
             Self::Disabled
@@ -79,40 +53,16 @@ impl WidgetState {
     }
 }
 
-/// Button families in the vocabulary (spec §7.1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
-    /// Transparent-at-rest toolbar/dialog button (`.tg-toolbar-btn` / `.tg-btn`).
     Ghost,
-    /// Solid brand action (`.tg-btn-primary`); brightens on hover instead of
-    /// taking a surface fill.
     Primary,
-    /// Small ghost (`h-7 px-3 text-xs`); shares ghost color decisions.
     Compact,
-    /// Square ghost holding only an icon (e.g. dialog close X).
     Icon,
-    /// The primary at the **band height** (28 px): the brand primary sized to sit
-    /// in a pane header's fixed-height band.
-    ///
-    /// This is [`Self::Primary`] and nothing else. It exists because the shared
-    /// vocabulary had a 32 px primary and a 28 px *ghost* and no brand button at
-    /// the height a pane header is, so the one place that needed a primary
-    /// inside a header band reached for a page-local button family instead — which
-    /// is a second vocabulary, and the R1 primary is precisely the thing that must
-    /// not have two spellings. It is a **height**, not a colour: the fill and ink
-    /// ladders are shared with `Primary` arm for arm (and
-    /// `tests/widget_library.rs` asserts the two ladders are equal), because a
-    /// brand button that is 4 px shorter must not also be a slightly different
-    /// blue.
-    ///
-    /// A host that needs a *third* height, a different radius, or a different
-    /// fill is not this variant: R5 says the host knows its own surface, and this
-    /// vocabulary deliberately has no flags to be configured with.
     CompactPrimary,
 }
 
 impl ButtonVariant {
-    /// Token-driven fill for one interactive state (§2.5 table + §7.2 rules).
     pub fn fill(self, state: WidgetState) -> Color32 {
         use WidgetState::{Active, Disabled, Hovered, Idle};
         match (self, state) {
@@ -129,10 +79,6 @@ impl ButtonVariant {
         }
     }
 
-    /// Token-driven ink for one interactive state.
-    ///
-    /// Ghost-family text steps INK_2 → INK when engaged; primary keeps brand
-    /// ink on its solid fill; everything drops to muted INK_3 when disabled.
     pub fn text(self, state: WidgetState) -> Color32 {
         use WidgetState::{Active, Disabled, Hovered, Idle};
         match (self, state) {
@@ -143,15 +89,7 @@ impl ButtonVariant {
         }
     }
 }
-// --- Focus -------------------------------------------------------------------
 
-/// Paint the token-spec keyboard-focus ring (§7.2): a 1px `BRAND` stroke just
-/// outside the widget rect, approximating the mockups' CSS box-shadow spread.
-///
-/// The vocabulary buttons ([`button_response_sized`]) and inputs
-/// ([`input_frame`]) paint their own rings inline; this helper is for the
-/// custom-drawn controls (rows, tabs, rail buttons, chips, cards) so keyboard
-/// focus is never ambiguous anywhere in the shell (issue #23).
 pub fn focus_ring(ui: &Ui, response: &Response) {
     if response.has_focus() {
         ui.painter().rect_stroke(
@@ -162,8 +100,6 @@ pub fn focus_ring(ui: &Ui, response: &Response) {
         );
     }
 }
-
-// --- Disabled control scope -------------------------------------------------
 
 /// Run `contents` in a child scope, disabling that child when `enabled` is
 /// false, then advance the caller's cursor past whatever the child consumed.
@@ -197,44 +133,22 @@ pub fn disabled_child_scope<R>(
     out
 }
 
-// --- Buttons -----------------------------------------------------------------
-
-/// Ghost button (`.tg-toolbar-btn` / `.tg-btn`): transparent at rest,
-/// SURFACE_2 hover, SURFACE_3 pressed.
 pub fn ghost_button(ui: &mut Ui, icon: Option<Icon>, label: &str) -> Response {
     button_response(ui, ButtonVariant::Ghost, icon, Some(label))
 }
 
-/// Primary button (`.tg-btn-primary`): solid brand fill that brightens on
-/// hover/press instead of taking surface fills.
 pub fn primary_button(ui: &mut Ui, icon: Option<Icon>, label: &str) -> Response {
     button_response(ui, ButtonVariant::Primary, icon, Some(label))
 }
 
-/// **The brand primary at the band height** (28 px): [`ButtonVariant::CompactPrimary`]
-/// as a control, for a pane header's right-aligned action slot.
-///
-/// It exists because [`PANE_HEADER_HEIGHT`](super::containers::PANE_HEADER_HEIGHT)
-/// is a fixed 28 px band that grows to fit its tallest child, so a 32 px
-/// [`primary_button`] in that slot makes one pane's header taller than every
-/// other pane's and pushes its own hairline down with it — and the cross-pane
-/// header-geometry ratchet in `tests/widget_library.rs` is right to catch that.
-/// Before this, the one call site that needed it reached for a page-local button
-/// family, which is a second spelling of the R1 primary. Same brand ladder, same
-/// ink, same radius: only the height differs, and the height is what the band
-/// names.
 pub fn compact_primary_button(ui: &mut Ui, label: &str) -> Response {
     button_response(ui, ButtonVariant::CompactPrimary, None, Some(label))
 }
 
-/// Compact ghost button (`h-7 px-3 text-xs`) for dense toolbars and footers.
 pub fn compact_button(ui: &mut Ui, label: &str) -> Response {
     button_response(ui, ButtonVariant::Compact, None, Some(label))
 }
 
-/// The one enabled-flag primitive both button families gate through. The
-/// disabled path is built inside a [`disabled_child_scope`] so its styling
-/// cannot leak into the widgets beside it; the enabled path calls `build`.
 pub fn button_enabled(ui: &mut Ui, enabled: bool, build: impl Fn(&mut Ui) -> Response) -> Response {
     if enabled {
         return build(ui);
@@ -242,42 +156,18 @@ pub fn button_enabled(ui: &mut Ui, enabled: bool, build: impl Fn(&mut Ui) -> Res
     disabled_child_scope(ui, enabled, |child| build(child))
 }
 
-/// [`compact_button`] with an explicit `enabled` flag (issue 32 popup row
-/// actions): disabled dims the button and turns clicks into no-ops, painted
-/// through [`button_enabled`], which contains the disabled state. Pair it with
-/// `on_disabled_hover_text` so the gating reason stays discoverable.
 pub fn compact_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Response {
     button_enabled(ui, enabled, |ui| compact_button(ui, label))
 }
 
-/// Square ghost button holding only an icon (e.g. dialog close X).
 pub fn icon_button(ui: &mut Ui, icon: Icon) -> Response {
     button_response(ui, ButtonVariant::Icon, Some(icon), None)
 }
 
-/// [`icon_button`] with an explicit `enabled` flag (issue 32 commit-window
-/// chevrons). A flag, not a hidden control: a chevron that vanished would reflow
-/// its own meta row. Disabled state is contained by [`button_enabled`].
 pub fn icon_button_enabled(ui: &mut Ui, icon: Icon, enabled: bool) -> Response {
     button_enabled(ui, enabled, |ui| icon_button(ui, icon))
 }
 
-/// The ghost icon-button state ladder — one definition of how a borderless
-/// icon button fills and inks as it is hovered, held, and disabled, built over
-/// [`ButtonVariant::Ghost`] and [`WidgetState`] so every ghost icon button in
-/// the app fills, inks, and rounds identically.
-///
-/// The rect is the size parameter: a host either allocates a standard square
-/// and passes it in, or allocates a dense, deliberately-shaped hit rect of its
-/// own (a diff gutter cell) and passes that. The vocabulary owns the fill, the
-/// ink, the corner radius, the accessibility node, and the single brand focus
-/// ring; the host owns its id, its tooltip, and its glyph — `paint_content`
-/// receives the resolved [`WidgetState`] so it can take its own ink from
-/// `ButtonVariant::Ghost.text(state)` rather than re-deriving a second ladder.
-///
-/// This is deliberately not a configurable universal button: a host that
-/// needs a different fill, ink, or radius has a different role and keeps its
-/// own paint rather than growing a flag here.
 pub fn ghost_icon_button(
     ui: &mut Ui,
     rect: Rect,
@@ -305,23 +195,11 @@ pub fn ghost_icon_button(
     }
     paint_content(ui, rect, state);
 
-    // Accessibility: a labeled Button, so kittest and screen readers find it.
-    // The info is materialized only when actually requested, never eagerly.
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     focus_ring(ui, &response);
     response
 }
 
-/// Full-width stacked action button (issue 15 details-pane Actions section):
-/// ghost at rest, or the solid-brand primary when `primary`; `enabled =
-/// false` dims it and turns clicks into no-ops, painted through
-/// [`disabled_child_scope`] so the disabled state never leaks into the
-/// caller's remaining widgets.
-///
-/// Unlike [`compact_button_enabled`], this button always builds and paints the
-/// control — the full-width measure and the widget itself are the same either
-/// way, so only the `disable()` call is conditional. The two shapes are kept
-/// deliberately distinct rather than flattened into one.
 pub fn action_button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Response {
     let variant = if primary {
         ButtonVariant::Primary
@@ -383,7 +261,7 @@ fn button_response_sized(
         .unwrap_or_else(|| crate::theme::chrome_font(crate::theme::TYPE_CONTROL));
 
     let pad_x = pad_x_override.unwrap_or(match variant {
-        ButtonVariant::Compact | ButtonVariant::CompactPrimary => 12.0, // px-3
+        ButtonVariant::Compact | ButtonVariant::CompactPrimary => 12.0,
         ButtonVariant::Icon => 6.0,
         _ => ui.style().spacing.button_padding.x,
     });
@@ -394,7 +272,6 @@ fn button_response_sized(
     });
     let icon_size = icon_size_override.unwrap_or(BUTTON_ICON_SIZE);
 
-    // Measure once (color is overridden at paint time), allocate, decide.
     let galley = label.map(|l| {
         ui.painter()
             .layout_no_wrap(l.to_owned(), font_id.clone(), Color32::WHITE)
@@ -406,11 +283,6 @@ fn button_response_sized(
     } else {
         0.0
     };
-    // The extent of the painted group, which the centering below measures the
-    // group's left edge against. It must count the icon's own width even when
-    // there is no label: an icon-only button takes its width from `height`, so a
-    // measure of 0 leaves the group's left edge at the button's centre and the
-    // glyph lands half an icon to the right of it.
     let content_w = icon_w + gap + label_w;
     let width = width_override.unwrap_or(if icon_only {
         height
@@ -436,7 +308,6 @@ fn button_response_sized(
         painter.rect_filled(rect, radius, fill);
     }
     if response.has_focus() {
-        // Focus ring: BRAND 1px stroke approximating the CSS box-shadow (§7.2).
         painter.rect_stroke(
             rect.expand(1.0),
             radius,
@@ -445,7 +316,6 @@ fn button_response_sized(
         );
     }
 
-    // Center the [icon][gap][label] group inside the button.
     let ink = variant.text(state);
     let cy = rect.center().y;
     let mut x = rect.left() + (rect.width() - content_w) / 2.0;
@@ -459,9 +329,6 @@ fn button_response_sized(
         painter.galley_with_override_text_color(Pos2::new(x, cy - g.size().y / 2.0), g, ink);
     }
 
-    // Accessibility: labeled buttons are queryable/clickable via kittest and
-    // screen readers alike. The label is materialized only when the info is
-    // actually requested (interaction events) — never eagerly per frame.
     response.widget_info(|| {
         WidgetInfo::labeled(
             WidgetType::Button,
@@ -472,7 +339,6 @@ fn button_response_sized(
     response
 }
 
-/// Paint one icon primitive centered at `origin` without disturbing layout.
 fn paint_icon_at(ui: &mut Ui, icon: Icon, origin: Pos2, size: f32, color: Color32) {
     let mut child = ui.new_child(
         UiBuilder::new()
@@ -481,21 +347,9 @@ fn paint_icon_at(ui: &mut Ui, icon: Icon, origin: Pos2, size: f32, color: Color3
     );
     icons::icon(&mut child, icon, size, color);
 }
-// --- Segmented control ------------------------------------------------------
 
-/// Compact segmented control (spec §8.4, issue #01): SURFACE_2 track, the
-/// selected segment sits on SURFACE_3 with INK ink. Returns the clicked
-/// option index (the caller applies the change to its own state).
-///
-/// The widget is the shared picker used by every surface that needs a
-/// token-exact two-, three- or four-way choice — diff side-by-side/unified,
-/// file/hunk/line granularity, CLI/libgit2/Auto backend, strategy pickers,
-/// the push dialog's PUSH SCOPE — so these controls render identically
-/// everywhere and a new surface can adopt the widget instead of inventing a
-/// second variant.
 pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
     const SEGMENT_H: f32 = 24.0;
-    // Segments are controls, so they take the shared button padding.
     let pad_x = crate::theme::BUTTON_PADDING.x;
     let font_id = chrome_font(TYPE_BODY);
 
@@ -525,8 +379,6 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
         let resp = ui.interact(seg, id, Sense::click());
         let is_selected = i == selected;
         if is_selected {
-            // The inset step inside a CONTROL_RADIUS track is the compact chip
-            // radius — the same 3 px a badge rounds at, not a new role.
             ui.painter()
                 .rect_filled(seg, CornerRadius::same(CHIP_RADIUS), Palette::SURFACE_3);
         }
@@ -535,7 +387,6 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
         } else {
             Palette::INK_2
         };
-        // The shared two-axis centring, measured and painted in one call.
         super::paint_centered_text(ui.painter(), seg, option, font_id.clone(), ink);
         resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, *option));
         focus_ring(ui, &resp);

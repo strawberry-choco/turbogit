@@ -1,14 +1,3 @@
-//! Smart group rule editor (issue #07): a small modal opened from the
-//! sidebar's SMART GROUPS "+" (new rule) or a rule row's pencil (edit).
-//!
-//! Editing model follows the Settings modal: opening snapshots a draft
-//! rule into [`turbogit_app::state::UiState::smart_rule_draft`]; rows edit
-//! the draft only. **Save** commits the draft into
-//! `UiState::smart_group_rules` (replacing the edited entry, appending a
-//! new one) and persists the workspace's `ui.ron`; **Cancel** (and the
-//! window X) discards. Save is disabled until the label is non-empty;
-//! blank patterns store as "any" (`None`).
-
 use egui::{RichText, TextEdit, Ui, WidgetInfo, WidgetType};
 
 use super::widgets;
@@ -17,16 +6,12 @@ use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Toast};
 
 const MODAL_WIDTH: f32 = 440.0;
-/// Pattern inputs share their row with a caption; the name field does not.
 const PATTERN_WIDTH: f32 = 200.0;
 
-/// Render the modal when open; a closed window is a no-op.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.smart_rule_editor_open {
         return;
     }
-    // Snapshot a blank draft once per open (the caller pre-seeds the draft
-    // when editing an existing rule).
     if state.ui.smart_rule_draft.is_none() {
         state.ui.smart_rule_draft = Some(SmartGroupRule::default());
     }
@@ -38,8 +23,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         .default_width(MODAL_WIDTH)
         .resizable(false)
         .show(&ctx, |ui| body(ui, state));
-    // Two close paths meet here: the window X / Esc flip `open`, the footer
-    // Cancel cleared the flag from inside the body. Either discards.
     let body_cancelled = !state.ui.smart_rule_editor_open;
     state.ui.smart_rule_editor_open = open && !body_cancelled;
     if !state.ui.smart_rule_editor_open {
@@ -103,8 +86,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     footer(ui, state);
 }
 
-/// One wildcard pattern row: a single-line input whose blank content reads
-/// as "any" (`None`).
 fn pattern_row(ui: &mut Ui, caption: &str, label: &str, slot: &mut Option<String>) {
     let mut buf = slot.clone().unwrap_or_default();
     ui.horizontal(|ui| {
@@ -116,8 +97,6 @@ fn pattern_row(ui: &mut Ui, caption: &str, label: &str, slot: &mut Option<String
     });
 }
 
-/// One count threshold row: an enable checkbox plus a ≥-number stepper.
-/// Unchecked stores `None` (no constraint); checking defaults to 1.
 fn threshold_row(ui: &mut Ui, caption: &str, slot: &mut Option<usize>) {
     let mut on = slot.is_some();
     ui.horizontal(|ui| {
@@ -136,8 +115,6 @@ fn threshold_row(ui: &mut Ui, caption: &str, slot: &mut Option<usize>) {
 }
 
 fn labeled_text_input(ui: &mut Ui, label: &str, buf: &mut String, width: f32) -> egui::Response {
-    // Explicit id_salt: auto ids collide for the pattern rows (each lives
-    // in its own horizontal child), which would fuse the inputs.
     let resp = ui.add(
         TextEdit::singleline(buf)
             .id_salt(label)
@@ -154,7 +131,6 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         .as_ref()
         .is_some_and(|d| !d.label.trim().is_empty());
     widgets::dialog_footer(ui, |ui| {
-        // right-to-left layout: the first button renders rightmost.
         let saved = ui
             .scope(|ui| {
                 if !valid {
@@ -167,13 +143,11 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
             save_rule(state);
         }
         if widgets::compact_button(ui, "Cancel").clicked() {
-            // `show` reconciles this with the window X and drops the draft.
             state.ui.smart_rule_editor_open = false;
         }
     });
 }
 
-/// Commit the draft into live state + `.turbogit/ui.ron` and close.
 fn save_rule(state: &mut AppState) {
     let Some(mut rule) = state.ui.smart_rule_draft.clone() else {
         return;

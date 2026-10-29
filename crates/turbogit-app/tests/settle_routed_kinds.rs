@@ -1,14 +1,3 @@
-//! The settlement module's routing table, as values over the two enums it
-//! spans: `Operation` (what the Shell can dispatch) and `OpKind` (what
-//! settlement routes on).
-//!
-//! Either half can drift from the other. A kind an operation produces that the
-//! module never routes is a verb that settles on the generic path by accident;
-//! a kind the module routes that nothing produces is a rule waiting for the
-//! operation that will need it. So the two sets are compared as *values* here —
-//! one operation per variant, through `Operation::kind()`, against the set the
-//! module says it routes — rather than by reading either file.
-
 use std::path::PathBuf;
 
 use turbogit_app::OwnedOperation;
@@ -20,7 +9,6 @@ use turbogit_app::root_caches::Affected;
 use turbogit_app::settle::ROUTED_KINDS;
 use turbogit_domain::model::{CleanTreeMethod, MergeOpts, Patch, RebaseOpts, RootId, VcsSettings};
 
-/// A full commit id, as the log carries it.
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn root(name: &str) -> RootId {
@@ -40,9 +28,6 @@ fn push_request() -> PushRequest {
     )
 }
 
-/// One operation per [`Operation`] variant — the exhaustive set of what the
-/// Shell can actually dispatch. `Push` appears twice because the recovery plan
-/// is what makes the same variant two identities.
 fn one_of_every_variant() -> Vec<Operation> {
     let r = root("alpha");
     let s = settings();
@@ -127,17 +112,11 @@ fn sorted(kinds: impl IntoIterator<Item = OpKind>) -> Vec<OpKind> {
     kinds
 }
 
-/// The two sets are the same set. A kind added to `OpKind` without a row in
-/// the module's routing table is a compile error at its total match *and* a
-/// failure here; an `Operation` variant that settles under an identity nobody
-/// routes is only caught here.
 #[test]
 fn every_kind_an_operation_produces_is_one_settlement_routes() {
     let produced = sorted(one_of_every_variant().iter().map(Operation::kind));
     let routed = sorted(ROUTED_KINDS.iter().copied());
 
-    // Uniqueness first, so a duplicate names the side that has one instead of
-    // arriving as a diff between two lists that are otherwise the same set.
     let mut deduped = produced.clone();
     deduped.dedup();
     assert_eq!(

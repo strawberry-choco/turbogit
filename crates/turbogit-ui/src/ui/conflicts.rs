@@ -1,11 +1,3 @@
-//! Conflict resolution (G1–G9): list conflicted files, accept ours/theirs,
-//! resolve-all-simple, and the redesigned 3-way merge editor (issue #15):
-//! three EQUAL panes Local | Result | Incoming with discrete conflict blocks
-//! (marker strips + tinted yours/theirs sections), per-block Accept buttons
-//! driving a READ-ONLY composed Result, an "N conflicts remaining" counter,
-//! and an Apply gated at zero remaining (spec §8.7; free-text editing is
-//! explicitly deferred).
-
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::kit::conflict_pane::Side;
@@ -20,22 +12,10 @@ use turbogit_domain::model::{
 
 use std::path::Path;
 
-/// Parse a file's conflict markers into alternating normal / conflict blocks.
-/// Returns (segments, conflict_count) where each segment is
-/// `(ours, theirs, is_conflict)`; for normal segments `theirs` is empty.
-///
-/// Thin delegate onto the canonical parser in `core::conflict`, which the
-/// Phase L1 parity tests also compare the structured merge against.
 fn parse_conflicts(content: &str) -> (Vec<(String, String, bool)>, usize) {
     conflict::parse_conflict_markers(content)
 }
 
-/// Segments opening the merge editor (Phase L1): a structured 3-way merge of
-/// the index's base/ours/theirs when in-process merges are enabled and all
-/// three versions resolve through the engine seam; otherwise the raw-marker
-/// parser over the working-tree file, verbatim. Both produce the same
-/// `(ours, theirs, is_conflict)` tuple stream, so pane rendering, per-block
-/// resolution, and Apply gating are unchanged either way.
 pub(crate) fn merge_editor_segments(
     state: &AppState,
     root: &Option<std::path::PathBuf>,
@@ -57,11 +37,6 @@ pub(crate) fn merge_editor_segments(
     parse_conflicts(content)
 }
 
-/// The resolution-choice vocabulary and its text mapping, owned by
-/// `turbogit_services::conflict` (which also owns the marker grammar). Re-exported
-/// through the app crate's conflict re-export so the resolver keeps importing
-/// these names — its own copy is what the re-duplication ratchet refuses — and
-/// the UI crate still holds no `turbogit-services` dependency.
 pub(crate) use turbogit_app::conflict::{
     CHOICE_BOTH_OURS_FIRST, CHOICE_BOTH_THEIRS_FIRST, CHOICE_OURS, CHOICE_THEIRS,
     resolved_block_text,
@@ -70,7 +45,7 @@ pub(crate) use turbogit_app::conflict::{
 /// The opener prologue both conflict surfaces repeat: read the file, build its
 /// segments, and seed `conflict_segs` / `conflict_res` together. Handing back
 /// the fresh resolution vector is what lets each opener keep composing its own
-/// way — display text with the inline placeholder here, the final buffer in
+/// way, display text with the inline placeholder here, the final buffer in
 /// the resolver.
 ///
 /// A file that cannot be read sets the toast and NO other field, so a caller
@@ -92,9 +67,6 @@ pub(crate) fn seed_conflict_state(
     Some(res)
 }
 
-/// Open the structured 3-way merge editor for one conflicted file of
-/// `root` — the changelist's "Merge…" button and the cascade monitor's
-/// Resolve deep link (issue 10) both land here.
 pub(crate) fn open_conflict_editor(state: &mut AppState, root: &Path, path: &Path) {
     let Some(res) = seed_conflict_state(state, root, path) else {
         return;
@@ -103,21 +75,10 @@ pub(crate) fn open_conflict_editor(state: &mut AppState, root: &Path, path: &Pat
     state.ui.conflict_open = Some(path.to_path_buf());
 }
 
-/// Compose the final file text from segments + per-conflict resolutions.
-///
-/// Unresolved blocks fall back to our side; this is only reachable before
-/// Apply, which is gated at zero remaining.
-///
-/// That fallback is the one behavioural difference the two surfaces keep: the
-/// resolver's Result buffer IS this text, so an unresolved block reads as ours
-/// there, while the inline editor paints `compose_display`, which renders
-/// `<< unresolved >>` instead. One composer, two readings, on purpose.
 pub(crate) fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     compose_impl(segs, res, false)
 }
 
-/// Compose the READ-ONLY display text: unresolved blocks render a visible
-/// placeholder so the user sees what is still missing.
 pub(crate) fn compose_display(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     compose_impl(segs, res, true)
 }
@@ -150,13 +111,11 @@ fn compose_impl(segs: &[(String, String, bool)], res: &[Option<u8>], placeholder
     out
 }
 
-/// Record one block resolution and refresh the composed read-only result.
 fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
     state.ui.conflict_res[seg_idx] = Some(choice);
     state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &state.ui.conflict_res);
 }
 
-/// Render the conflict section inside the Commit tab (only when conflicts exist).
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     let id = match &state.selected_root {
         Some(id) => id.clone(),
@@ -172,8 +131,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     ui.separator();
-    // The canonical "Merge conflicts" group in the changelist tree owns the
-    // listing; this section only hosts the resolution tools.
     ui.heading("Conflict resolution");
     let root = state.selected_root.clone();
     for path in &conflicted {
@@ -211,8 +168,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     {
         state.dispatch(writes::resolve_simple(&r, &status));
     }
-    // Structured 3-way merge editor window (issue #15 redesign): three equal
-    // panes Local | Result | Incoming over discrete conflict blocks.
     if let Some(path) = state.ui.conflict_open.clone() {
         let ctx = ui.ctx().clone();
         let path_disp = path.display().to_string();
@@ -224,7 +179,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 let segs = state.ui.conflict_segs.clone();
                 let remaining = state.ui.conflict_res.iter().filter(|r| r.is_none()).count();
 
-                // Pane headers: three EQUAL panes; Result is outlined as focused.
                 crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
                     crate::ui::kit::conflict_pane::pane_header(
                         &mut cols[0],
@@ -243,8 +197,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     .id_salt("conflict_segments")
                     .max_height(400.0)
                     .show(ui, |ui| {
-                        // Conflict resolutions are indexed by conflict ORDINAL,
-                        // not by segment position (normal segments interleave).
                         let mut ci = 0usize;
                         for (ours, theirs, is_conf) in segs.iter() {
                             if !*is_conf {
@@ -260,10 +212,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                 let res_i = ci;
                                 ci += 1;
                                 let block = res_i + 1;
-                                // Marker strips frame the discrete conflict block.
-                                // The three literals come from `turbogit_domain` —
-                                // the crate that also parses them — so this painter
-                                // cannot name a different marker than the parser.
                                 crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
                                     crate::ui::kit::conflict_pane::marker_strip(
                                         &mut cols[0],
@@ -278,7 +226,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         CONFLICT_MARKER_THEIRS,
                                     );
                                 });
-                                // Tinted yours/theirs sections + read-only result.
                                 let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
                                 let result_text = chosen
                                     .and_then(|choice| resolved_block_text(ours, theirs, choice));
@@ -298,7 +245,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         Side::Incoming,
                                     );
                                 });
-                                // Per-block resolutions drive the composed Result.
                                 ui.horizontal(|ui| {
                                     if ui.button(format!("Accept Yours {block}")).clicked() {
                                         resolve(state, res_i, CHOICE_OURS);
@@ -317,8 +263,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    // Through the one shared pluralisation helper,
-                    // not this file's own conditional.
                     ui.label(
                         RichText::new(
                             components::counted(remaining, "conflict", "conflicts") + " remaining",
@@ -326,8 +270,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         .color(Palette::INK_2),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Apply enables ONLY at zero remaining and writes the
-                        // composed result through the engine's resolution flow.
                         if ui
                             .add_enabled(remaining == 0, egui::Button::new("Apply"))
                             .clicked()
@@ -358,10 +300,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 mod tests {
     use super::*;
 
-    /// The mapping's owner (`conflict`) and this module's composer agree: for
-    /// each of the four named choices the mapping returns the block's text, and
-    /// that text is exactly what the composer writes into the composed buffer
-    /// for the same choice.
     #[test]
     fn resolved_block_text_matches_the_composer_for_every_choice() {
         let ours = "OURS\n";

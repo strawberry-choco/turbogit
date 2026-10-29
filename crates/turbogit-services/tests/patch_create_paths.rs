@@ -1,22 +1,9 @@
-//! The `Patch File Settings` transforms: what a created patch's paths say, how many
-//! leading directories can be taken off them, what a comment turns into, and which
-//! bytes reach the file.
-//!
-//! These patches are hand-written in git's own syntax rather than produced by
-//! `git diff`, because the assertion is about the *transform* — a path moved, a
-//! segment dropped, a content line left alone — and an expected value has to come
-//! from somewhere other than the code that computes it. The suites in
-//! `crates/turbogit-engine/tests/` pin the other half: that git really answers
-//! `patch_bytes` with these shapes.
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::PatchEncoding;
 use turbogit_services::patch_create::{
     self, clipboard_text, encode, file_name, removable_leading_directories, rewrite_paths,
 };
 
-/// A patch with paths deep enough that three directories can come off every one of
-/// them — the shape the counting repair pair is for.
 const DEEP: &str = "diff --git a/src/main/java/App.java b/src/main/java/App.java
 --- a/src/main/java/App.java
 +++ b/src/main/java/App.java
@@ -26,8 +13,6 @@ const DEEP: &str = "diff --git a/src/main/java/App.java b/src/main/java/App.java
  context
 ";
 
-/// The same patch with one shallow path beside the deep ones: a removal that would
-/// erase `README.md`'s name is not available to either.
 const MIXED: &str = "diff --git a/README.md b/README.md
 --- a/README.md
 +++ b/README.md
@@ -46,8 +31,6 @@ fn root(parent: &Path) -> PathBuf {
     parent.join("project")
 }
 
-/// Three removals leave one directory, and two restores give both back: the count is
-/// the state, and each step means exactly one segment on every path.
 #[test]
 fn removal_counts_segments_on_every_path() {
     let tmp = tempfile::tempdir().unwrap();
@@ -69,12 +52,9 @@ fn removal_counts_segments_on_every_path() {
         "the bound is reachable, and the file's own name survives it"
     );
     assert_eq!(removed(0), DEEP, "no removal is git's own answer");
-    // The restore half of the pair: two back off three is one removed.
     assert_eq!(removed(3 - 2), removed(1), "restore is the inverse press");
 }
 
-/// The bound is the **shallowest** path, because one press rewrites every section: a
-/// count that erased a file name would be a broken patch, not a shorter path.
 #[test]
 fn the_removal_bound_is_the_shallowest_path_in_the_patch() {
     assert_eq!(
@@ -84,11 +64,6 @@ fn the_removal_bound_is_the_shallowest_path_in_the_patch() {
     );
 }
 
-/// Base path is the directory the patch's paths are read from. The default — the
-/// project itself — leaves git's repo-relative answer alone; a base above the
-/// project makes every path carry the project's name; a base inside it strips that
-/// prefix. Those three are the field's whole grammar, and the reference's own
-/// wording ("normally, this is your project directory") is why the first is default.
 #[test]
 fn the_base_path_moves_which_directory_the_paths_are_read_from() {
     let tmp = tempfile::tempdir().unwrap();
@@ -128,8 +103,6 @@ fn the_base_path_moves_which_directory_the_paths_are_read_from() {
     );
 }
 
-/// Base and removal compose: the count is of the directories the patch now writes,
-/// which is what makes the two fields one dialog rather than two competing edits.
 #[test]
 fn a_base_path_and_a_removal_compose() {
     let tmp = tempfile::tempdir().unwrap();
@@ -144,8 +117,6 @@ fn a_base_path_and_a_removal_compose() {
     );
 }
 
-/// Rename and copy lines name the same paths as the section header, and a patch
-/// whose four spellings disagree is a patch that renames to somewhere else.
 #[test]
 fn every_line_naming_a_path_is_rewritten() {
     let tmp = tempfile::tempdir().unwrap();
@@ -180,9 +151,6 @@ index 1234567..89abcde 100644
     );
 }
 
-/// A create and a delete name one side as `/dev/null`. That is not a path to move: a
-/// rewrite that turned it into a relative path would make the patch create a file
-/// called `dev/null`.
 #[test]
 fn the_no_side_of_a_create_or_delete_is_left_alone() {
     let tmp = tempfile::tempdir().unwrap();
@@ -200,9 +168,6 @@ fn the_no_side_of_a_create_or_delete_is_left_alone() {
     }
 }
 
-/// A path with a space is quoted on a `diff --git` line, because two tokens are
-/// parsed there; the rewrite keeps the quoting rather than emitting a line that
-/// splits into three paths.
 #[test]
 fn a_path_with_a_space_stays_parsable() {
     let tmp = tempfile::tempdir().unwrap();
@@ -215,9 +180,6 @@ fn a_path_with_a_space_stays_parsable() {
     );
 }
 
-/// The body is not the header. A patch's content lines are its file's bytes, which
-/// git does not promise are text: the rewrite must copy them through unchanged, or
-/// the artifact differs from the repository it came from.
 #[test]
 fn a_content_line_is_copied_byte_for_byte() {
     let tmp = tempfile::tempdir().unwrap();
@@ -244,9 +206,6 @@ fn a_content_line_is_copied_byte_for_byte() {
     );
 }
 
-/// The comment is the file name — and a comment is free text while a name is a path,
-/// so every separator, parent step and empty comment has to be resolved here rather
-/// than handed to the filesystem.
 #[test]
 fn a_comment_becomes_one_sane_file_name() {
     assert_eq!(
@@ -287,8 +246,6 @@ fn a_comment_becomes_one_sane_file_name() {
     );
 }
 
-/// Encoding, stated as the bytes on disk. The default writes git's own output and
-/// cannot corrupt it; the other two decode first and refuse rather than guess.
 #[test]
 fn the_encoding_field_is_a_statement_about_bytes() {
     let utf8 = "© one\n".as_bytes();
@@ -322,9 +279,6 @@ fn the_encoding_field_is_a_statement_about_bytes() {
     );
 }
 
-/// The clipboard route is the one place a created patch is decoded, so it is the one
-/// place a non-UTF-8 patch legitimately stops — with a reason, rather than with a
-/// silent loss that would make the clipboard differ from the file.
 #[test]
 fn the_clipboard_route_decodes_or_refuses() {
     assert_eq!(
@@ -338,8 +292,6 @@ fn the_clipboard_route_decodes_or_refuses() {
     );
 }
 
-/// A patch with no path header has nothing to remove — the state a surface reads as
-/// "disable the button", not as an error.
 #[test]
 fn a_patch_naming_no_path_removes_nothing() {
     assert_eq!(removable_leading_directories(b""), 0);
@@ -357,8 +309,6 @@ fn a_patch_naming_no_path_removes_nothing() {
     );
 }
 
-/// The module's own surface is small enough that the dialog can call it by name;
-/// pinning the re-export keeps the state layer from reaching into private helpers.
 #[test]
 fn the_transforms_are_the_public_surface() {
     assert_eq!(
@@ -371,17 +321,6 @@ fn the_transforms_are_the_public_surface() {
     let _ = patch_create::rewrite_paths as fn(&[u8], &Path, &str, usize) -> Vec<u8>;
 }
 
-/// A backslash is **not** one of this rewriter's quote triggers, so a path
-/// carrying one and no space is written raw on a freshly written `diff --git`
-/// line — and that raw backslash reaches `git apply` on a header line whose
-/// reader treats `\` as an escape introducer.
-///
-/// This is a characterization pin, not an approval: quoting backslash paths is a
-/// human ruling still owed, and this assertion is written to **fail** the moment
-/// somebody quotes it, because that failure is where the ruling lands. In the same
-/// edit, update the `HeaderPair` row of the leaf grammar's module doc — which
-/// names the omission as a preserved defect — and note that the escape table's
-/// backslash arm becomes reachable for the one case it exists for.
 #[test]
 fn a_backslash_path_is_written_unquoted_where_gits_own_spelling_would_escape_it() {
     let tmp = tempfile::tempdir().unwrap();

@@ -1,10 +1,3 @@
-//! The favourite star is an `AppState` entry, so presentation code has no
-//! writer for the app's own branch state.
-//!
-//! Driven through the Headless harness over **two** roots and asserting what
-//! the state becomes: the named root's branch flips, the other root's identical
-//! branch does not, and a second call flips it back.
-
 use std::path::Path;
 
 use test_support::git_seed::{git, repo_with_one_commit};
@@ -16,8 +9,6 @@ fn state_for(project: &Path, first: &Path, second: &Path) -> AppState {
     AppState::for_roots(project, &roots)
 }
 
-/// The star `name` carries in `root`, read straight off the app's own branch
-/// list — the value the row paints.
 fn star_of(state: &AppState, name: &str) -> Option<bool> {
     let id = state.selected_root.clone()?;
     state
@@ -29,8 +20,6 @@ fn star_of(state: &AppState, name: &str) -> Option<bool> {
         .map(|b| b.favorite)
 }
 
-/// The star `name` carries in whichever root is named, which is not always the
-/// focused one.
 fn star_in(state: &AppState, index: usize, name: &str) -> Option<bool> {
     state.multi.roots[index]
         .branches

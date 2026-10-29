@@ -1,16 +1,3 @@
-//! The **Shelf** store seen from the app: what the Shelf pane lists after a
-//! launch, and what a shelf verb does to `shelf.ron` when the launch could not
-//! read it.
-//!
-//! Both are the user-facing half of the record-preservation invariant that
-//! [`turbogit_services::shelve_stash`] now holds: a legacy store (written before
-//! the [`Shelf`] `root` field became required) has to reach the pane, and a verb has to
-//! leave the rows the launch never read exactly where they were. The second one
-//! is the data loss — `.turbogit/shelf.ron` held every shelf's *name*, and
-//! [`turbogit_services::shelve_stash::unshelve`] finds the parked content in git's
-//! stash list **only by that name**, so an overwritten index strands work that is
-//! still on disk.
-
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git, pin_eol_lf};
@@ -18,9 +5,6 @@ use turbogit_app::state::AppState;
 use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash::{self, shelf_path};
 
-/// A repository **at the project directory itself** — the single-root layout
-/// every legacy `shelf.ron` was written by, and the one
-/// [`crate::state`] discovers as `project_dir`. Returns that path.
 fn project_that_is_a_repo() -> TempDir {
     let project = TempDir::new().unwrap();
     git(
@@ -37,8 +21,6 @@ fn project_that_is_a_repo() -> TempDir {
     project
 }
 
-/// A repository in its **own** directory — one root of a multi-root workspace whose
-/// project directory is a plain folder, the shape the fix's stated cost describes.
 fn repo_at(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     git(dir, &["init", "-q", "-b", "main", dir.to_str().unwrap()]);
@@ -48,8 +30,6 @@ fn repo_at(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// What an **older build** wrote, reproduced by serialising the old field list
-/// rather than typing RON by hand, so the artefact is the real legacy shape.
 #[derive(serde::Serialize)]
 struct LegacyShelf {
     name: String,
@@ -80,10 +60,6 @@ fn write_legacy_store(project_dir: &Path, name: &str) {
     .unwrap();
 }
 
-/// A `shelf.ron` from before `Shelf::root` existed still **launches into the
-/// pane**: the launch load reads it, the row binds to the project's own root, and
-/// `shelves_for` lists it under the root the app registered — which is what makes
-/// the name available to an unshelve.
 #[test]
 fn a_legacy_shelf_store_launches_into_the_pane_of_its_own_root() {
     let project = project_that_is_a_repo();
@@ -108,11 +84,6 @@ fn a_legacy_shelf_store_launches_into_the_pane_of_its_own_root() {
     );
 }
 
-/// After a launch that could not read the store, the shelf verbs must not
-/// truncate it. This is the exact hole: the load failed, the in-memory list is
-/// what the session later built up, and a remove wrote that list over the file —
-/// discarding rows this process never read. Now the write is refused, the file is
-/// left byte-for-byte alone, and the refusal is reported rather than discarded.
 #[test]
 fn a_shelf_remove_after_an_unreadable_store_reports_and_preserves_the_file() {
     let project = project_that_is_a_repo();
@@ -126,8 +97,6 @@ fn a_shelf_remove_after_an_unreadable_store_reports_and_preserves_the_file() {
     );
     assert_eq!(state.ui.shelves.len(), 1, "a current store loads");
 
-    // Rows the process has never read now sit on disk — a hand-edit or a corrupt
-    // write from outside this session.
     let unreadable = "[not RON";
     std::fs::write(shelf_path(project.path()), unreadable).unwrap();
 
@@ -148,9 +117,6 @@ fn a_shelf_remove_after_an_unreadable_store_reports_and_preserves_the_file() {
     );
 }
 
-/// The shape an unshelved row has to keep for the verb to work at all: a shelf
-/// written by this build round-trips through the store with its root intact, so
-/// the legacy tolerance above did not quietly become the only shape that loads.
 #[test]
 fn a_current_shelf_round_trips_with_its_root() {
     let project = project_that_is_a_repo();
@@ -170,17 +136,9 @@ fn a_current_shelf_round_trips_with_its_root() {
     );
 }
 
-/// Parsed is not **usable**. The legacy row's whole point is that an unshelve can
-/// reach the parked content again, and `unshelve` needs both halves of the record:
-/// the *name* (which selects the stash entry in git's list) and the *root* (the
-/// repository it runs in). This drives the real verb through the app on a real
-/// repository, so the binding to `project_dir` is checked against git itself
-/// rather than against the pane's filter.
 #[test]
 fn a_legacy_row_unshelves_its_parked_content_through_the_real_verb() {
     let project = project_that_is_a_repo();
-    // Park work exactly as `shelve` does: a stash entry whose message is the shelf's
-    // name, then the pre-ticket-12 record that names it.
     std::fs::write(project.path().join("README.md"), "shelved work\n").unwrap();
     git(
         project.path(),
@@ -216,18 +174,9 @@ fn a_legacy_row_unshelves_its_parked_content_through_the_real_verb() {
     );
 }
 
-/// The cost the fix accepts, pinned rather than asserted in prose: in a
-/// **multi-root** project whose `project_dir` is not itself a repository, a legacy
-/// row binds to a root no pane lists. It must therefore read as absent (never as
-/// applied to the wrong tree), and it must still **survive** the writes the panes
-/// can make — the row rides in the in-memory slice, and because the binding is
-/// read-time its record goes back rootless, so the store gains no phantom root.
-/// Invisible is the deal; destroyed, or re-labelled as a recorded root, would not be.
 #[test]
 fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
     let parent = tempfile::tempdir().unwrap();
-    // A plain directory holding two repositories: the workspace shape where no root
-    // is the project directory.
     let roots = vec![
         repo_at(&parent.path().join("alpha")),
         repo_at(&parent.path().join("beta")),
@@ -253,8 +202,6 @@ fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
         );
     }
 
-    // A shelve for a listed root rewrites the whole store; the invisible row is in
-    // the slice, so it survives the truncation.
     let first_root = state.multi.roots[0].id.clone();
     state
         .ui
@@ -271,11 +218,6 @@ fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
     assert_eq!(names, vec!["wip: parser", "wip: cli"]);
 }
 
-/// A refused rewrite is a refused **verb**. The removal above reported the refusal
-/// and kept the file, but it had already dropped the row from the in-memory list:
-/// the pane stopped painting a shelf whose record still sits on disk, so the user
-/// is told to shelve again *and* sees the row come back at the next launch. The
-/// two halves of one verb have to move together — either both or neither.
 #[test]
 fn a_refused_removal_keeps_the_row_the_file_still_holds() {
     let project = project_that_is_a_repo();
@@ -318,11 +260,6 @@ fn a_refused_removal_keeps_the_row_the_file_still_holds() {
     );
 }
 
-/// The create half of the same hazard, at the seam the shelve dialog goes through.
-/// A row the store refused is a row the next launch drops — and by then the work it
-/// named has already been parked in git's stash list, where the Shelf pane cannot
-/// reach it because only this file carries the name that selects it. So a refused
-/// record is a refused shelf: nothing is added to the list.
 #[test]
 fn a_refused_creation_adds_no_row_that_the_next_launch_would_drop() {
     let project = project_that_is_a_repo();
@@ -370,9 +307,6 @@ fn a_refused_creation_adds_no_row_that_the_next_launch_would_drop() {
     );
 }
 
-/// The other direction, so the guard above is not mistaken for a shelf verb that
-/// never happens: an accepted record is both painted and durable, and the row the
-/// store got is the row the pane lists.
 #[test]
 fn an_accepted_creation_lands_in_the_pane_and_on_disk_together() {
     let project = project_that_is_a_repo();
@@ -406,13 +340,6 @@ fn an_accepted_creation_lands_in_the_pane_and_on_disk_together() {
     assert!(state.last_error.is_none(), "{:?}", state.last_error);
 }
 
-/// A per-row reading of the **wire**: which rows recorded a `root`.
-///
-/// The same instrument as the services suite's `WireRow` (integration tests cannot
-/// share a helper across crates), and deliberately not the store's own row type,
-/// which invents a root for a keyless row: `#[serde(default)]` on a plain `String`
-/// leaves the absent spelling empty, so "recorded" and "omitted" stay separately
-/// observable while the pane is being checked.
 #[derive(serde::Deserialize)]
 struct WireRow {
     name: String,
@@ -432,13 +359,6 @@ fn recorded_roots(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
         .collect()
 }
 
-/// A per-row reading of the **wire**: which rows recorded a `source`, and the payload file
-/// a recorded one names.
-///
-/// The same reason as [`WireRow`]: `ShelfSource` itself reads a missing key as `Stash`, so
-/// presence and absence would collapse. `ron::Value` sees the key and its fields (RON's
-/// enum tag is dropped in the generic value), so the tag is asserted from the file's text
-/// beside it, and any other spelling of a `source` fails loudly here.
 fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
     let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
     let value: ron::Value = ron::from_str(&text)
@@ -463,7 +383,6 @@ fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// The payload field a recorded `source` holds.
 fn payload_file(value: &ron::Value) -> String {
     match value {
         ron::Value::Map(fields) => match fields.get(&ron::Value::String("file".to_string())) {
@@ -474,7 +393,6 @@ fn payload_file(value: &ron::Value) -> String {
     }
 }
 
-/// A patch that applies cleanly to the `README.md` this suite's `repo_at` commits.
 const PATCH: &str = "diff --git a/README.md b/README.md\n\
                     --- a/README.md\n\
                     +++ b/README.md\n\
@@ -482,12 +400,6 @@ const PATCH: &str = "diff --git a/README.md b/README.md\n\
                     -x\n\
                     +y\n";
 
-/// An **imported** row's `source` is the only fact that names the file its parked bytes
-/// live in, and [`AppState::unshelve`] branches on it: read back as `Stash`, the verb goes
-/// looking for a git stash entry that was never made and fails over content the store is
-/// holding. So the relaunched row has to come back as the same variant addressing the same
-/// file — and the stash row written beside it must still go back keyless, because the store
-/// is rewritten whole on every verb.
 #[test]
 fn a_relaunched_imported_row_is_still_a_patch_row_addressing_its_own_payload() {
     let project = TempDir::new().unwrap();
@@ -544,10 +456,6 @@ fn a_relaunched_imported_row_is_still_a_patch_row_addressing_its_own_payload() {
     );
 }
 
-/// A store this build cannot read must not launch into an **empty pane**: the Shelf pane
-/// would then answer "nothing is shelved" over rows it never read, and the only reclaim
-/// left — the next shelve — is the write the store itself refuses. The launch therefore
-/// reports the failure, and reports it while the file is still byte-for-byte what it was.
 #[test]
 fn a_store_that_will_not_parse_launches_with_a_report_not_an_empty_pane() {
     let project = project_that_is_a_repo();
@@ -575,8 +483,6 @@ fn a_store_that_will_not_parse_launches_with_a_report_not_an_empty_pane() {
         "and reporting it costs nothing on disk"
     );
 
-    // The report is the session's, and it is not a licence to write: the first verb that
-    // rewrites the store is refused over the same file.
     let mut state = state;
     let refused = state.add_shelf(shelve_stash::make_shelf(
         "wip: cli",
@@ -593,18 +499,6 @@ fn a_store_that_will_not_parse_launches_with_a_report_not_an_empty_pane() {
         "so the rows the launch never read are still there"
     );
 }
-/// The **multi-root coincidence**, checked through the real create seam: a project
-/// whose roots are its own directory *and* a nested repository. `save_shelves`
-/// omits the `root` key for the row rooted at `project_dir` — the shape a legacy
-/// row arrives in — so the question this answers is whether that omission is a
-/// loss of information for a row that genuinely recorded the root.
-///
-/// It is not, and the reason is structural: the store lives at
-/// `<project_dir>/.turbogit/shelf.ron`, so the root it erases is always the very
-/// directory the store sits in, which is what [`shelve_stash::load_shelves`] binds
-/// an absent root to. The two spellings therefore carry one value, and the row
-/// still lists under the root `for_roots` registered — while the second, genuinely
-/// different root is recorded and lists under its own pane.
 #[test]
 fn a_project_dir_that_is_also_one_of_several_roots_round_trips_as_the_same_root() {
     let project = project_that_is_a_repo();
@@ -638,8 +532,6 @@ fn a_project_dir_that_is_also_one_of_several_roots_round_trips_as_the_same_root(
         "only the row whose root IS the store's own directory goes back rootless"
     );
 
-    // A relaunch reads the store and registers the roots again: each row comes
-    // back under the root it was shelved in, as the same `RootId` value.
     let relaunched = AppState::for_roots(project.path(), &roots);
     assert!(
         relaunched.last_error.is_none(),

@@ -1,6 +1,3 @@
-//! Issue #7 — Seam: the public `ui::icons` API asserted through painted
-//! shapes from a headless egui context (no GPU / window / display server).
-//! Mirrors the painted-output style of `shell_frame.rs` at module scope.
 use std::sync::Mutex;
 
 use egui::epaint::ColorMode;
@@ -8,7 +5,6 @@ use egui::{Color32, Pos2, Shape};
 use turbogit_ui::theme::{Palette, icon_color};
 use turbogit_ui::ui::icons;
 
-/// Run one headless frame painting via `paint`; return all painted shapes.
 fn painted_shapes(paint: impl Fn(&mut egui::Ui)) -> Vec<Shape> {
     let ctx = egui::Context::default();
     let raw = egui::RawInput {
@@ -26,7 +22,6 @@ fn painted_shapes(paint: impl Fn(&mut egui::Ui)) -> Vec<Shape> {
         .collect()
 }
 
-/// Stroked path primitives (what icon rendering emits).
 fn stroked_paths(shapes: &[Shape]) -> Vec<&egui::epaint::PathShape> {
     shapes
         .iter()
@@ -37,15 +32,12 @@ fn stroked_paths(shapes: &[Shape]) -> Vec<&egui::epaint::PathShape> {
         .collect()
 }
 
-/// The solid stroke color of a path, if any.
 fn stroke_color(p: &egui::epaint::PathShape) -> Option<Color32> {
     match p.stroke.color {
         ColorMode::Solid(c) => Some(c),
         _ => None,
     }
 }
-
-// --- Cycle 1: a known name renders vector primitives at size & color ---
 
 #[test]
 fn known_icon_paints_strokes_at_requested_size_and_color() {
@@ -67,7 +59,6 @@ fn known_icon_paints_strokes_at_requested_size_and_color() {
         );
     }
 
-    // Geometry fits the requested box (extent ≤ size + stroke tolerance).
     let mut min = Pos2::new(f32::INFINITY, f32::INFINITY);
     let mut max = Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
     for p in &paths {
@@ -151,10 +142,6 @@ fn icon_tint_derives_from_central_palette_tokens() {
     }
 }
 
-// --- Cycle 2: the complete documented set renders ---
-
-/// The icon names from spec §5.2 plus `pencil` (issue #07 rule rows) —
-/// the contract this module implements.
 const SPEC_NAMES: [&str; 58] = [
     "alert-circle",
     "alert-triangle",
@@ -218,7 +205,6 @@ const SPEC_NAMES: [&str; 58] = [
 
 #[test]
 fn every_documented_icon_name_renders_primitives() {
-    // The embedded set is exactly the documented set.
     assert_eq!(
         icons::Icon::ALL.len(),
         SPEC_NAMES.len(),
@@ -262,12 +248,9 @@ fn lookup_by_name_round_trips_every_icon() {
     assert_eq!(icons::Icon::from_name("check"), Some(icons::Icon::CHECK));
 }
 
-// --- Cycle 3: unknown names are safe misses ---
-
 mod log_capture {
     use std::sync::{Mutex, OnceLock};
 
-    /// Captured `(level, message)` records, shared process-wide.
     pub(crate) static RECORDS: OnceLock<Mutex<Vec<(log::Level, String)>>> = OnceLock::new();
 
     pub(crate) struct Capture;
@@ -294,7 +277,6 @@ mod log_capture {
 
 #[test]
 fn unknown_icon_name_logs_debug_and_draws_nothing() {
-    // Install once per process; a competing install is fine to lose.
     let _ = log::set_boxed_logger(Box::new(log_capture::Capture));
     log::set_max_level(log::LevelFilter::Debug);
     let records = log_capture::RECORDS.get_or_init(|| Mutex::new(Vec::new()));

@@ -1,12 +1,3 @@
-//! Issue 10 (deepen-git-engine) — every display shape, with no `git` binary.
-//!
-//! The diff view used to reach a rendered row through four private readers of
-//! git's text (a `@@` header parser, a `diff --git` scanner, a path-pair
-//! splitter and a prefix strip) plus a second parse of the same header at paint
-//! time. They all read the patch value now, so a suite can hand the display
-//! model every shape it has to survive by seeding the substitutable adapter with
-//! one canned patch.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,18 +8,10 @@ use turbogit_app::state::AppState;
 use turbogit_engine::fake::FakeExecutor;
 use turbogit_services::hunk_stats::HunkSpan;
 
-/// One committed file, so the headless harness has a root to read against.
-///
-/// The recipe's committed file is `README.md` rather than this builder's, and
-/// nothing reads it: the patch every shape is rendered from is the canned
-/// `EVERY_SHAPE` string handed to `FakeExecutor`, never read off the worktree.
 fn repo(dir: &Path) -> PathBuf {
     repo_with_one_commit(dir, "work")
 }
 
-/// A patch holding every shape the row model has to render: an edit with a
-/// funcname heading, a **Binary change**, a mode-only change, and a rename of a
-/// path containing a space.
 const EVERY_SHAPE: &str = "diff --git a/README.md b/README.md\n\
      index 1234567..89abcde 100644\n\
      --- a/README.md\n\
@@ -147,8 +130,6 @@ fn every_shape_builds_rows_without_a_git_binary() {
     assert_eq!((added, removed), (1, 1), "one line each way in the edit");
 }
 
-/// The ticket's visible win: a hunk header is read once, and the answer the
-/// paint path needed — is this hunk staged? — arrives with the row.
 #[test]
 fn a_hunk_row_carries_its_span_so_the_paint_path_never_reparses_the_header() {
     let tmp = tempfile::tempdir().unwrap();
@@ -174,9 +155,6 @@ fn a_hunk_row_carries_its_span_so_the_paint_path_never_reparses_the_header() {
         "the span is on the row, not something to parse back out of its label"
     );
 
-    // Gutter numbers come from the same place: the removed row knows its old
-    // line, the added row its new one, and neither is counted from a prefix.
-    // Side-by-side pairing lives in the display row, so read both shapes.
     let gutters: Vec<(RowKind, usize, usize)> = model
         .display
         .iter()
@@ -193,7 +171,6 @@ fn a_hunk_row_carries_its_span_so_the_paint_path_never_reparses_the_header() {
                 sides
             }
         })
-        // The hunk's own body, identified by content rather than by position.
         .filter(|(text, _, _, _)| matches!(*text, "one" | "two" | "TWO" | "three"))
         .map(|(_, kind, old, new)| (kind, old, new))
         .collect();

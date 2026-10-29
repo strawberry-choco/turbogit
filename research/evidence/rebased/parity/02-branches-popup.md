@@ -6,17 +6,17 @@
 
 ## Sources
 
-- https://www.jetbrains.com/help/idea/manage-branches.html — verified 200, 13864 chars → `docs-text/manage-branches.md`
-- `actions-labeled.tsv` — action ids, labels, default keys
-- `keymap-bindings.txt` — the shipped default accelerators
-- `strings/GitBundle.properties` — the `branches.*`, `checkout.*`, `delete.branch.*`, `smart.operation.*` families
+- https://www.jetbrains.com/help/idea/manage-branches.html, verified 200, 13864 chars → `docs-text/manage-branches.md`
+- `actions-labeled.tsv`, action ids, labels, default keys
+- `keymap-bindings.txt`, the shipped default accelerators
+- `strings/GitBundle.properties`, the `branches.*`, `checkout.*`, `delete.branch.*`, `smart.operation.*` families
 
 Docs resolve 1/1, so the flow half is fully evidenced. This is the richest UX
 surface in the set: it owns the dirty-checkout decision, the tracking-divergence
 decision, the immediate-delete-with-restore decision, the Recent cap, and
 directory grouping.
 
-## UI — what exists
+## UI, what exists
 
 ### Action inventory (bundle)
 
@@ -46,7 +46,7 @@ Two gaps the prefix missed, both first-class row verbs in this surface
 | `Git.AddCommitToRemoteBranch` | Add Commits to Remote Branch… | — |
 
 And the row-menu verbs, whose labels are in
-`strings/GitBundle.properties` (the action table carries no text for them) —
+`strings/GitBundle.properties` (the action table carries no text for them),
 this is the **actual per-row menu inventory**, and it is longer than the four
 documented items:
 
@@ -71,7 +71,7 @@ documented items:
 
 The Branches **pane** context menu (log-tab.md:83-129) adds `Show Diff with
 Working Tree`, `New Worktree from {selected_branch}`, and `Compare with
-{current_branch}` — the pane and the popup are near-identical surfaces with a
+{current_branch}`, the pane and the popup are near-identical surfaces with a
 few pane-only additions.
 
 ### Topology
@@ -79,10 +79,10 @@ few pane-only additions.
 The popup is a **tree of four fixed top-level nodes plus a settings gear**
 (manage-branches.md:59-70):
 
-1. `Recent` — "shows up to five recently checked-out branches"
-2. `Local Branches` — "lists all local branches"
-3. `Remote Branches` — "shows all remote branches available after the latest fetch"
-4. `Tags` — "lists all available tags that you can check out, compare with the
+1. `Recent`, "shows up to five recently checked-out branches"
+2. `Local Branches`, "lists all local branches"
+3. `Remote Branches`, "shows all remote branches available after the latest fetch"
+4. `Tags`, "lists all available tags that you can check out, compare with the
    working tree, merge, push, or delete"
 
 The bundle confirms the node titles: `group.Git.Recent.Branch.title=Recent`
@@ -90,7 +90,7 @@ The bundle confirms the node titles: `group.Git.Recent.Branch.title=Recent`
 
 Also on the popup chrome:
 
-- **Incoming/outgoing counters on the branch name itself** — "The VCS widget also
+- **Incoming/outgoing counters on the branch name itself**. "The VCS widget also
   indicates the number of incoming commits that have not yet been fetched (blue
   arrow icon next to the branch name) and the number of outgoing commits (green
   arrow icon next to the branch name)" (manage-branches.md:11). Corroborated by
@@ -105,7 +105,7 @@ Also on the popup chrome:
   - `Group by Repository` (GitBundle:1784)
   - `Show Recent Branches` (GitBundle:1785)
   - `Show Tags` (GitBundle:1786)
-- **Repository scope filter** — `Actions` / `Repositories`
+- **Repository scope filter**`Actions` / `Repositories`
   (GitBundle:1256-1258, `action.git.branches.popup.filter.by.*`). In multi-root
   projects "branches are automatically grouped by repositories. To check out the
   necessary branch, in the VCS widget, choose the repository first"
@@ -115,9 +115,9 @@ Also on the popup chrome:
 - **Directory grouping** is automatic: "IntelliJ IDEA automatically groups
   branches by directory and stores them in expandable lists. In order for
   branches to be grouped by directory, prefixes in branches' names should be
-  separated with forward slashes" — example given: `jd/2023.1`
+  separated with forward slashes", example given: `jd/2023.1`
   (manage-branches.md:68-69).
-- **Favourites pinned to the top** — "The main branch is marked as a favorite by
+- **Favourites pinned to the top**. "The main branch is marked as a favorite by
   default. Favorite branches are always displayed at the top" (line 50).
 
 ### State matrix
@@ -126,10 +126,10 @@ Also on the popup chrome:
 | --- | --- | --- | --- |
 | default | row | a favourite star outline is **hidden**; it appears on hover | manage-branches.md:52 |
 | hover | branch row | "hover over the branch name, and click the star outline that appears on the left" | manage-branches.md:52 |
-| hover | branch row | name is copyable — "To copy the name of a branch, hover over the branch and press Ctrl+C" | manage-branches.md:46 |
+| hover | branch row | name is copyable. "To copy the name of a branch, hover over the branch and press Ctrl+C" | manage-branches.md:46 |
 | pressed | star | branch becomes a favourite; "select the branch you want to mark as favourite and press Space" | manage-branches.md:53 |
 | selected | branch row | drives the incoming/outgoing counters and the row menu | manage-branches.md:11 |
-| selected | dirty tree | the popup is replaced by a **decision dialog**, not a menu — see UX | manage-branches.md:105 |
+| selected | dirty tree | the popup is replaced by a **decision dialog**, not a menu, see UX | manage-branches.md:105 |
 | disabled | `Interactively Rebase from Here` | three documented reasons, surfaced in the **status bar on hover** rather than a modal | apply-changes-from-one-branch-to-another.md:124-132 |
 | focus | search field | `⌃F` returns focus here from anywhere in the list | manage-branches.md:55 |
 | focus | popup | the gear's toggles are the only persisted popup state | manage-branches.md:70 |
@@ -137,7 +137,7 @@ Also on the popup chrome:
 | warning | widget | "Branches have diverged warning in the VCS widget … the root projects are on different branches" | manage-branches.md:177 |
 | error | blocked op | `Cannot {0} because of unmerged files` | GitBundle:1426 |
 
-## UX — how it behaves
+## UX, how it behaves
 
 ### How is it reached, and what hides behind a secondary affordance?
 
@@ -154,11 +154,11 @@ Hidden behind secondary affordances:
 - **Compare-with-current and show-diff-with-working-tree** are row-menu items,
   not toolbar buttons (manage-branches.md:118, 128).
 - **The unmerged-commit list after a delete** is a *link inside the notification*
-  (manage-branches.md:165) — the commits are not otherwise reachable.
+  (manage-branches.md:165), the commits are not otherwise reachable.
 - **Remote-branch removal after deleting a tracking local branch** is a second
   link in the same notification (manage-branches.md:166).
 - **Single-click behaviour** of the Branches pane is a setting, not a default:
-  "Branches Pane Settings — Select what action to perform on a single click:
+  "Branches Pane Settings. Select what action to perform on a single click:
   Update Branch Filter … Navigate Log to Branch Head" (log-tab.md:68-75). The
   corresponding action ids are `Git.Log.Branches.Change.Branch.Filter.On.Selection`
   and `Git.Log.Branches.Navigate.Log.To.Branch.On.Selection`, and the whole
@@ -178,16 +178,16 @@ IntelliJ IDEA displays a list of files that prevent you from checking out the
 selected branch, and suggests choosing between Force Checkout and Smart Checkout"
 (manage-branches.md:105).
 
-- `Force Checkout` — "your local uncommitted changes will be overwritten, and
+- `Force Checkout`, "your local uncommitted changes will be overwritten, and
   you will lose them" (line 106). Bundle key
   `checkout.operation.force.checkout=&Force Checkout` (GitBundle:1340).
-- `Smart Checkout` — "IntelliJ IDEA will shelve uncommitted changes, check out the
+- `Smart Checkout`, "IntelliJ IDEA will shelve uncommitted changes, check out the
   selected branch, and then unshelve the changes. **If a conflict occurs during
   the unshelve operation, you will be prompted to merge the changes**"
-  (line 107). **Smart Checkout can itself conflict — this is stated, not
+  (line 107). **Smart Checkout can itself conflict, this is stated, not
   inferred.**
 
-The dialog's north panel is templated, and the templates are in the bundle —
+The dialog's north panel is templated, and the templates are in the bundle,
 which is how we know the mechanism is *shelve* or *stash* by configuration, not
 two hardcoded buttons:
 
@@ -208,7 +208,7 @@ two hardcoded buttons:
   (GitBundle:431)
 
 So the *names* `Force Checkout` and `Smart Checkout` are the *resolved* values of
-templates parameterised on the operation name — which is why grepping the bundles
+templates parameterised on the operation name, which is why grepping the bundles
 for "Smart Checkout" returns nothing. Record this: **the literal string is not in
 the bundle; the template that produces it is.** Anyone re-harvesting must follow
 the `smart.operation.dialog.*` family, not literal-grep.
@@ -226,12 +226,12 @@ decision, and the automatic case is stated first:
 
 - "If no commits will be lost, and the local branch already tracks the remote,
   IntelliJ IDEA **automatically resets** the local branch to the remote branch and
-  then checks it out." (manage-branches.md:85) — **no dialog at all.**
+  then checks it out." (manage-branches.md:85), **no dialog at all.**
 - "If the local branch contains commits that can be lost because of the reset,
   IntelliJ IDEA will offer you to:" (line 87)
-  - `Drop Local Commits` — "will drop your local commits, reset the local branch,
+  - `Drop Local Commits`, "will drop your local commits, reset the local branch,
     and change tracking" (line 89)
-  - `Rebase onto Remote` — "will rebase your local branch onto the remote branch,
+  - `Rebase onto Remote`, "will rebase your local branch onto the remote branch,
     keep your local commits, reset the local branch, and change tracking" (line 91)
 
 Both prompts are bundled, and the bundled form is better than the doc's prose
@@ -247,7 +247,7 @@ commits that do not exist in '{1}'. Do you want to drop local commits?"
 **(c) Delete branch → immediate, no confirmation.** The sharpest policy on the
 surface.
 
-- "**Check out a branch that you are going to use for further work.**" — a
+- "**Check out a branch that you are going to use for further work.**", a
   *precondition the user must satisfy first*, stated as a step
   (manage-branches.md:161). You cannot delete the branch you are on.
 - "right-click the branch you want to delete and choose Delete" (line 163).
@@ -256,7 +256,7 @@ surface.
   a link allowing you to view the unmerged commits" (line 165). Bundled
   corroboration: `delete.branch.operation.name=branch deletion` (GitBundle:1373)
   and `delete.branch.operation.unmerged.commits.were.discarded=Unmerged commits
-  were discarded` (GitBundle:1356) — the outcome is stated as a *fact about
+  were discarded` (GitBundle:1356), the outcome is stated as a *fact about
   something that already happened*.
 - The unmerged-commits viewer is its own dialog:
   `branch.not.fully.merged.dialog.title=Branch Was Not Fully Merged`
@@ -268,7 +268,7 @@ So: **no preflight, forced delete, post-hoc disclosure, one-click restore.** The
 disclosure is retrospective by design.
 
 **(d) Delete remote branch → confirmed.** Different policy from local delete, in
-the same surface: `Delete remote {0,choice,1#branch|2#branches} {1}?` — a real
+the same surface: `Delete remote {0,choice,1#branch|2#branches} {1}?`, a real
 question (GitBundle:1436). Plus two follow-up questions:
 `Delete tracking local branch {0} as well` (GitBundle:1437) and
 `Delete tracking local {branches}` (GitBundle:1438), plus `Delete All`
@@ -287,7 +287,7 @@ action (GitBundle:1427-1428). Also `branch.ui.handler.merge.notification.descrip
 
 ### What can be undone, from where, and for how long?
 
-**Branch delete — the reference case for undo reach and lifetime.**
+**Branch delete, the reference case for undo reach and lifetime.**
 
 - Immediately: "After you have deleted a branch, a notification will be displayed
   in the bottom-right corner **from which you can restore the deleted branch**"
@@ -298,15 +298,15 @@ action (GitBundle:1427-1428). Also `branch.ui.handler.merge.notification.descrip
   (line 167).
 
 **Lifetime = until application restart.** Not until the branch list refreshes,
-not until a session marker — restart. That is a hard, citable bound, and it is
+not until a session marker, restart. That is a hard, citable bound, and it is
 the strongest single argument for TurboGit to have an equivalent.
 
 Three distinct links, so three distinct recoveries:
 
 1. **Restore the branch** (always, while the notification lives).
-2. **View the unmerged commits** — only when the branch had unmerged work
+2. **View the unmerged commits**, only when the branch had unmerged work
    (line 165). The commits survive; the reference to them lives in that link.
-3. **Remove the remote branch** — only when the deleted branch was tracking one
+3. **Remove the remote branch**, only when the deleted branch was tracking one
    (line 166): "If the deleted branch was tracking a remote branch, there will
    also be a link in this notification to remove the remote branch."
 
@@ -332,9 +332,9 @@ losing *files*.
 | Show Recent Branches | on, toggleable | manage-branches.md:70; `action.git.branches.show.recent.text=Show Recent Branches` |
 | Show Tags | on, toggleable | manage-branches.md:70; `action.git.branches.show.tags.text=Show Tags` |
 | Group by Repository | on in multi-root | manage-branches.md:99; `action.git.branches.group.by.repository.text` |
-| Recent node size | **hard cap of five** | manage-branches.md:61 — "Recent branches node shows up to five recently checked-out branches" |
-| Main branch favourited | **yes** | manage-branches.md:50 — "The main branch is marked as a favorite by default" |
-| Execute branch operations on all roots | off (multi-root opt-in) | manage-branches.md:175 — "note that this option is only available if your project has multiple roots" |
+| Recent node size | **hard cap of five** | manage-branches.md:61. "Recent branches node shows up to five recently checked-out branches" |
+| Main branch favourited | **yes** | manage-branches.md:50, "The main branch is marked as a favorite by default" |
+| Execute branch operations on all roots | off (multi-root opt-in) | manage-branches.md:175, "note that this option is only available if your project has multiple roots" |
 | Check for incoming and outgoing commits | on (the counters are described unconditionally) | manage-branches.md:11; `advanced.setting.git.update.incoming.outgoing.info` |
 
 Remembered between uses:
@@ -348,7 +348,7 @@ Remembered between uses:
   `new.branch.dialog.checkout.branch.checkbox=&Checkout branch` (GitBundle:1176)
   and title `branches.create.new.branch.dialog.title=Create New Branch`
   (GitBundle:1088). The docs say "make sure the Checkout branch option is
-  selected if you want to switch to that branch" (lines 20, 28, 34) — which
+  selected if you want to switch to that branch" (lines 20, 28, 34), which
   describes the intent, not a default. **The default state of that checkbox is
   UNVERIFIED**; see capture list. Re-tested 2026-10-06 against manage-branches
   (the only docs page describing the dialog; it says only "make sure the Checkout
@@ -356,12 +356,12 @@ Remembered between uses:
   settings-version-control-git (no branch-creation settings): no default stated → R3.
 - **Multi-root cross-repo branch creation** is an explicit dialog option:
   `new.branch.dialog.operation.create.description=Create new branches in other
-  repositories` (GitBundle:1168) — so "create in all roots" is opt-in per
+  repositories` (GitBundle:1168), so "create in all roots" is opt-in per
   invocation, not a default.
 - **Popup filter mode** (`Actions` vs `Repositories`,
   GitBundle:1256-1258) is a toggle, so it persists.
 - **Update method for this surface**: `dialog.message.update.branch` (GitBundle:1658)
-  — "You are about to update {0} from {1}. Choose 'Merge' if you want to create a
+  "You are about to update {0} from {1}. Choose 'Merge' if you want to create a
   merge commit, 'Rebase' if you want to rebase onto {1}." The *persisted* default
   lives in settings as `settings.update.method=Update method:` with values
   `settings.git.update.method.merge=Merge` / `…rebase=Rebase`.
@@ -371,27 +371,27 @@ Remembered between uses:
 Progress:
 
 - `Collecting unmerged commits…` while the delete's disclosure list is built
-  (GitBundle:1349) — **the app admits this is slow, after the fact.**
+  (GitBundle:1349), **the app admits this is slow, after the fact.**
 - `Restoring Branch {0}…` during a restore (GitBundle:1350).
 - `Deleting {0}` for a remote branch (GitBundle:1375 region).
 
 Success:
 
 - `Deleted branch {0}` (GitBundle:1354) and a bold variant
-  `<b>Deleted Branch:</b> {0}` (GitBundle:1355) — the notification leads with the
+  `<b>Deleted Branch:</b> {0}` (GitBundle:1355), the notification leads with the
   label, not a generic "done".
 - `Checked out {0}` (GitBundle:1337), `Checked out new branch {0} from {1}`
   (GitBundle:1338), and a repository-scoped variant
-  `checkout.operation.in={0}{1,choice,0#|1# in {2}}` (GitBundle:1339) — the
+  `checkout.operation.in={0}{1,choice,0#|1# in {2}}` (GitBundle:1339), the
   checkout confirmation names *which repository* when multi-root.
 - `Branch {0} was created` (GitBundle, `checkout.new.branch.operation.branch.was.created`).
 - Checkout on a clean tree: "a notification will pop up in the bottom-right
-  corner of the IntelliJ IDEA window" (manage-branches.md:103) — so even the
+  corner of the IntelliJ IDEA window" (manage-branches.md:103), so even the
   success case is a notification, not just a repaint.
 
-Failure — the multi-root pattern, and it recurs:
+Failure, the multi-root pattern, and it recurs:
 
-- `Could not {0} {1}` (GitBundle:1360) — operation name and reference.
+- `Could not {0} {1}` (GitBundle:1360), operation name and reference.
 - `Branch {0} wasn't deleted` (GitBundle:1353).
 - `Could not Restore {0}` (GitBundle:1352).
 - `Error during rollback of branch deletion` (GitBundle:1351).
@@ -416,22 +416,22 @@ Focus after the action:
 - After delete, the popup stays open on the same node set minus the deleted row
   (implied by the notification carrying the recovery, not a modal).
 - After `Restore`, `Restoring Branch {0}…` then the row returns (GitBundle:1350).
-- **UNVERIFIED**: where focus lands after a completed checkout — the popup
+- **UNVERIFIED**: where focus lands after a completed checkout, the popup
   closing, or staying with the new branch selected. Neither source states it.
   Re-tested 2026-10-06 against manage-branches/undo-changes: manage-branches
   documents only the success *notification* ("a notification will pop up in the
   bottom-right corner", line 103), silent on focus → needs runtime capture (R3).
 
-## Flow — how tasks chain
+## Flow, how tasks chain
 
 ### Entry points
 
 1. Header branch-name widget click (manage-branches.md:9).
-2. `Git | Branches…` main menu — `Git.Branches`, label `_Branches…`
+2. `Git | Branches…` main menu, `Git.Branches`, label `_Branches…`
    (`actions-labeled.tsv`).
 3. Branches pane of the Git tool window (manage-branches.md:10; log-tab.md:22).
 4. Row menu on a commit in the Log, for `Branch {branch_name}` / `Branches`
-   (log-tab.md:321-323) — the popup's actions are re-hosted on the commit row.
+   (log-tab.md:321-323), the popup's actions are re-hosted on the commit row.
 
 ### Internal sequence, with dialog chaining
 
@@ -451,7 +451,7 @@ from the current branch, from a selected local *or remote* branch
 (`New Branch from Selected`), and from a selected **commit** in the Log. The
 commit route is a separate action id, `Git.CreateNewBranch.FromCommit`, whose
 description is "Create a new branch starting from the selected commit"
-(`actions-labeled.tsv`) — so the *start point is a parameter*, not a second
+(`actions-labeled.tsv`), so the *start point is a parameter*, not a second
 dialog. `action.Git.New.Branch.description=Select only one branch to proceed
 create a new branch` (GitBundle:672) is the multi-selection guard.
 
@@ -494,7 +494,7 @@ dialog.** That is the flow fact a naive port misses.
 `Checkout and Update` is the same path plus an update step: "To automatically
 sync a branch with its remote version while switching, select Checkout and
 Update" (manage-branches.md:98), with the update method taken from
-`dialog.message.update.branch` (GitBundle:1658) — a merge/rebase choice.
+`dialog.message.update.branch` (GitBundle:1658), a merge/rebase choice.
 
 **Delete:**
 
@@ -566,20 +566,20 @@ popup → {branch} in repo A only → checkout
 | --- | --- | --- |
 | Unmerged files block the operation | `Cannot {0} because of unmerged files` (GitBundle:1426); "You need to resolve all merge conflicts before {0}" (GitBundle:1427) | `Resolve conflicts…` link in the same notification (GitBundle:1428) |
 | Checkout fails, multi-root | `However, checkout has succeeded for the following {repositories}` (GitBundle:1347) | `You may rollback … not to let branches diverge` (GitBundle:1345, 1358); docs at manage-branches.md:176 |
-| Delete fails | `Branch {0} wasn't deleted` (GitBundle:1353) | **UNVERIFIED** — no bundled recovery action; re-tested 2026-10-06 against manage-branches/undo-changes: docs cover success-with-restore only, never a failed delete → R3 |
-| Restore fails | `Could not Restore {0}` (GitBundle:1352); `Error during rollback of branch deletion` (GitBundle:1351) | **UNVERIFIED** — re-tested 2026-10-06 against manage-branches/undo-changes: silent on restore failure → R3 |
+| Delete fails | `Branch {0} wasn't deleted` (GitBundle:1353) | **UNVERIFIED**, no bundled recovery action; re-tested 2026-10-06 against manage-branches/undo-changes: docs cover success-with-restore only, never a failed delete → R3 |
+| Restore fails | `Could not Restore {0}` (GitBundle:1352); `Error during rollback of branch deletion` (GitBundle:1351) | **UNVERIFIED**, re-tested 2026-10-06 against manage-branches/undo-changes: silent on restore failure → R3 |
 | New branch creation fails | `Could not create new branch {0}` (GitBundle:1363 region) | error-during-rollback strings exist (`checkout.new.branch.operation.error.during.rollback`) but no user recovery documented |
-| Revision not found | `Revision not found{0,choice,0#|1# in {1}}` (GitBundle:1334); `Could not checkout {0}` (GitBundle:1333/1336) | **UNVERIFIED** — re-tested 2026-10-06 against manage-branches/undo-changes: docs document checkout of tags/branches but no failure recovery → R3 |
+| Revision not found | `Revision not found{0,choice,0#|1# in {1}}` (GitBundle:1334); `Could not checkout {0}` (GitBundle:1333/1336) | **UNVERIFIED**, re-tested 2026-10-06 against manage-branches/undo-changes: docs document checkout of tags/branches but no failure recovery → R3 |
 | Rebase from here disabled | three reasons, in the status bar on hover (apply-changes-from-one-branch-to-another.md:124-132) | read the status bar; requires the Status Text widget enabled |
 
 ### Escape / dismiss semantics
 
-- The smart-operation dialog's cancel is `Don't {0}` — the operation name
+- The smart-operation dialog's cancel is `Don't {0}`, the operation name
   repeated as a negative (GitBundle:433). Copying this: the cancel verb names
   what will *not* happen.
 - `Abort Merge` / `Abort Rebase` remain reachable from the widget for unfinished
   operations (apply-changes-from-one-branch-to-another.md:59, 99).
-- Delete has **no escape** — it is immediate by design. The recovery is
+- Delete has **no escape**, it is immediate by design. The recovery is
   post-hoc, and its lifetime is bounded by process restart.
 - Blocked-by-conflicts operations are not dismissible into a force; they are
   refused, with a resolve link.
@@ -589,14 +589,14 @@ popup → {branch} in repo A only → checkout
 | Dimension | Rebased behaviour | TurboGit behaviour | Why |
 | --- | --- | --- | --- |
 | UI | Popup is a floating panel anchored to the header widget; `Git.Branches` is a menu item | Branches is a full tab in the shell plus a separate status-bar popup (`crates/turbogit-ui/src/ui/branch_widget.rs`) | egui owns no native `NSMenu`/`NSPopover` equivalent with a live-updating tree and a gear menu. Match intent: same four nodes, same toggles, same accelerators, our own chrome. |
-| UI | Remote branches grouped as `Common Remote Branches` (sync on) vs `Repositories \| Remote Branches` (sync off) — one setting changes the node's *name and shape* (manage-branches.md:79) | Per-repo reveal via a remote rollup row; no setting-driven relabelling | A node that changes identity under a setting is a support burden. TurboGit's rollup keeps one shape and defers the difference to expansion. |
-| UX | Local delete is immediate, forced, with post-hoc restore + unmerged-commits link (manage-branches.md:165) | `Operation::DeleteBranch` runs `branch_delete(..., true)` — force — but **gated behind a confirmation** that already discloses what an unmerged delete loses (`crates/turbogit-app/src/operation.rs`, and `BranchDeletePending`/`BranchDeleteUndo` in `state.rs`) | TurboGit keeps the force semantics and the disclosure, but asks *before* rather than telling *after*. The information is identical; the ordering is safer, and TurboGit already models a delete-undo window. Deliberate, documented departure. |
+| UI | Remote branches grouped as `Common Remote Branches` (sync on) vs `Repositories \| Remote Branches` (sync off), one setting changes the node's *name and shape* (manage-branches.md:79) | Per-repo reveal via a remote rollup row; no setting-driven relabelling | A node that changes identity under a setting is a support burden. TurboGit's rollup keeps one shape and defers the difference to expansion. |
+| UX | Local delete is immediate, forced, with post-hoc restore + unmerged-commits link (manage-branches.md:165) | `Operation::DeleteBranch` runs `branch_delete(..., true)`, force, but **gated behind a confirmation** that already discloses what an unmerged delete loses (`crates/turbogit-app/src/operation.rs`, and `BranchDeletePending`/`BranchDeleteUndo` in `state.rs`) | TurboGit keeps the force semantics and the disclosure, but asks *before* rather than telling *after*. The information is identical; the ordering is safer, and TurboGit already models a delete-undo window. Deliberate, documented departure. |
 | UX | `Force Checkout` and `Smart Checkout` are the only two checkout resolutions, and the smart one's mechanism (shelve vs stash) is a global setting (`settings.clean.working.tree`) | `Operation::Merge` carries a per-invocation `clean: CleanTreeMethod` (`operation.rs`) | A global setting makes the destructive path's mechanism unpredictable across sessions. TurboGit makes it a per-dialog choice, which matches the docs' own framing that merge offers Smart merge as a suggestion (`apply-changes-from-one-branch-to-another.md:58`). Same items, saner scope. |
-| Flow | Smart Checkout can conflict during unshelve and chains into conflict resolution (manage-branches.md:107) | Same chain exists via `CleanTreeMethod` + the conflict resolver | No divergence — recorded to make explicit that the chain is required, not optional. |
+| Flow | Smart Checkout can conflict during unshelve and chains into conflict resolution (manage-branches.md:107) | Same chain exists via `CleanTreeMethod` + the conflict resolver | No divergence, recorded to make explicit that the chain is required, not optional. |
 | UX | Recent node hard-capped at five (manage-branches.md:61); main branch favourited by default (line 50) | Recent group exists in the status-bar popup only (`branch_widget.rs`); no favourite flag in the tree model | **Open gap, not a settled divergence.** Both are cheap and specified; see ticket 04. Logged here so the table does not imply agreement. |
 | UI | Directory grouping is automatic and optional per user setting; grouping key is the `/` prefix (manage-branches.md:68-69) | Directory grouping is automatic and **not** user-toggleable (`branches_tree.rs` `DirNode`) | Matching intent: the grouping rule matches, and the toggle is a one-line settings addition. Recorded as partial parity. |
 | UX | Multi-root failure offers to roll back the successful roots so branches do not diverge (manage-branches.md:176; GitBundle:1345/1358) | `PendingConfirm` and `Affected::All` exist, but no cross-root divergence rollback offer | **Open gap.** The idea is worth copying; see ticket 06. |
-| Flow | Rename offers `Unset upstream branch` in the same dialog, and warns that only the local branch is renamed (manage-branches.md:41-45) | `Dialog::RenameBranch` is a single input (`crates/turbogit-ui/src/ui/dialogs.rs`) | **Open gap** — the upstream-unset checkbox and the remote-creation consequence are both specified. See ticket 05. |
+| Flow | Rename offers `Unset upstream branch` in the same dialog, and warns that only the local branch is renamed (manage-branches.md:41-45) | `Dialog::RenameBranch` is a single input (`crates/turbogit-ui/src/ui/dialogs.rs`) | **Open gap**, the upstream-unset checkbox and the remote-creation consequence are both specified. See ticket 05. |
 
 ## Needs runtime capture
 
@@ -607,13 +607,13 @@ popup → {branch} in repo A only → checkout
 2. **Default state of the `Checkout branch` checkbox** in the New Branch dialog.
    The docs only say "make sure the … option is selected if you want to switch";
    they never say what it starts as. GitBundle:1176 proves the checkbox exists.
-3. **Focus target after a successful checkout** — does the popup close?
+3. **Focus target after a successful checkout**, does the popup close?
 4. **User-facing recovery for a failed branch delete or failed restore**
-   (GitBundle:1352-1353) — no bundled action, no documented route.
-5. **The exact Recent-node overflow affordance** — the cap of five is documented
+   (GitBundle:1352-1353), no bundled action, no documented route.
+5. **The exact Recent-node overflow affordance**, the cap of five is documented
    (manage-branches.md:61) but not whether a sixth entry is hidden entirely or
    reachable via a "show all" affordance.
-6. **The gear menu's own layout** — whether the four toggles are checkboxes in a
+6. **The gear menu's own layout**, whether the four toggles are checkboxes in a
    menu or a small popover with separators.
 7. **Whether the blocking-file list in the smart-operation dialog is scrollable
    and whether it is per-file or a count** when many files block.

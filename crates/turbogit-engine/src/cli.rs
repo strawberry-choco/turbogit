@@ -1,9 +1,3 @@
-//! CLI-backed [`GitExecutor`] that shells out to the system `git` binary.
-//!
-//! Every operation runs `git` with `current_dir(<root>)` so that paths and
-//! repository resolution are always correct. Output is parsed from porcelain /
-//! stable formats. See `engine/mod.rs` for the trait contract.
-
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
@@ -28,7 +22,6 @@ fn portable_path(p: &Path) -> PathBuf {
 
 static REBASE_TODO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Executor that drives git through the command line.
 pub struct CliExecutor {
     pub settings: VcsSettings,
 }
@@ -36,8 +29,7 @@ pub struct CliExecutor {
 /// The argv + env for one bounded, non-interactive `ls-remote` (log-open
 /// perf, D3): credential prompts disabled, http remotes bounded by git's
 /// low-speed timeouts, ssh remotes bounded by a `ConnectTimeout`. Consumed by
-/// `ref_decorations` only — no other git call gains these options. Pure and
-/// unit-tested without spawning git.
+/// `ref_decorations` only, no other git call gains these options. Pure and
 fn ls_remote_invocation(remote: &str) -> (Vec<String>, Vec<(&'static str, String)>) {
     let args = vec![
         "-c".to_string(),
@@ -54,20 +46,13 @@ fn ls_remote_invocation(remote: &str) -> (Vec<String>, Vec<(&'static str, String
     (args, envs)
 }
 
-/// The reference a history rewrite records its safety net in. Named here and
-/// nowhere else: the port's three backup verbs are the only way to touch it.
 pub const REWRITE_BACKUP_REF: &str = "refs/turbogit/preflight-backup";
 
-/// The line [`GitExecutor::exclude_dir`] puts above the rule it adds to
-/// `info/exclude`, so whoever opens that file can see which tool wrote the
-/// entry and that removing it only brings the directory back into `git status`.
-/// Written with the rule, never on its own — an already-listed directory
-/// returns before this is reached.
 const EXCLUDE_HEADING: &str =
     "# Added by TurboGit — the app's own project metadata (safe to delete)\n";
 
 /// Parse `git reflog --date=unix --grep-reflog "checkout:"` output into
-/// recent checkouts, newest first (the reflog's own order, kept as-is — the
+/// recent checkouts, newest first (the reflog's own order, kept as-is, the
 /// caller merges roots over it). Line shape:
 /// `<sha> HEAD@{<unix>}: checkout: moving from <from> to <to>`. The message
 /// may itself contain `": "`, so the selector ends at the FIRST occurrence,
@@ -104,23 +89,6 @@ impl CliExecutor {
             .is_ok()
     }
 
-    /// Refuse a read that names `HEAD` on a root with no commit.
-    ///
-    /// An unborn branch has no commit behind `HEAD`. The alternative to
-    /// refusing is to put the empty tree in HEAD's place, and this refuses
-    /// because that synthesis tells someone who has just run `git init` that
-    /// every line of every staged file is an addition relative to something,
-    /// and invents the "something" in order to make a pane render. Git's own
-    /// text there (`fatal: bad revision 'HEAD'`) is not readable to that
-    /// person either, so the guard replaces both with one sentence and a
-    /// variant a consumer can match. `unstage` below does branch on
-    /// `has_head`, and that is a different case: there a missing HEAD has a
-    /// real alternative command rather than a missing baseline.
-    ///
-    /// Only the literal `HEAD` is refused: a caller naming a branch or a sha on
-    /// such a root gets git's own error, because that revision is a different
-    /// thing that genuinely does not exist. Cost is one extra `rev-parse`
-    /// spawn, and only for a read that names `HEAD`.
     fn guard_unborn_head<'a>(&self, root: &Path, rev: &'a str) -> TgResult<&'a str> {
         if rev != "HEAD" || self.has_head(root) {
             return Ok(rev);
@@ -130,17 +98,12 @@ impl CliExecutor {
         })
     }
 
-    /// `git show :<stage>:<path>`. Index stages are this adapter's own
-    /// spelling: the port's file-content reads take a commit-ish, and the only
-    /// reader that means a stage is `conflict_versions`.
     fn show_index_stage(&self, root: &Path, stage: &str, path: &Path) -> TgResult<String> {
         let spec = format!(":{stage}:{}", path.to_string_lossy());
         let bytes = self.run_bytes(root, &["show", &spec])?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// A `:`-prefixed rev is git's index-stage syntax, which the raised reads
-    /// exist to retire. Refuse it, and name the read that answers the ask.
     fn reject_stage_rev(rev: &str) -> TgResult<()> {
         if rev.starts_with(':') {
             return Err(TgError::Other(format!(
@@ -151,9 +114,6 @@ impl CliExecutor {
         Ok(())
     }
 
-    /// Spawn `git` in `root` (used as the working directory), capturing stdout,
-    /// stderr and the exit code. On a non-zero exit, return
-    /// [`TgError::Cli`]; on success return `(stdout, stderr, 0)`.
     fn run(&self, root: &Path, args: &[&str]) -> TgResult<(String, String, i32)> {
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let output = Command::new(&bin)
@@ -170,10 +130,6 @@ impl CliExecutor {
         Ok((stdout, stderr, 0))
     }
 
-    /// [`Self::run`] variant capturing **raw stdout bytes** — binary-safe, no
-    /// UTF-8 conversion is applied to the payload (R8 image/binary diffs).
-    /// stderr is still decoded lossily for error reporting; error mapping is
-    /// identical to [`Self::run`].
     fn run_bytes(&self, root: &Path, args: &[&str]) -> TgResult<Vec<u8>> {
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let output = Command::new(&bin)
@@ -190,12 +146,6 @@ impl CliExecutor {
         Ok(output.stdout)
     }
 
-    /// One `git apply` invocation with the patch handed in on **stdin**, which
-    /// is the whole of what the engine's three patch verbs share: the flags say
-    /// index-or-worktree and check-or-write, the payload never changes. Feeding
-    /// it through stdin rather than a temporary file is what keeps a failed
-    /// `--check` from leaving a stray `.patch` in the repository the developer
-    /// then has to explain to git status.
     fn apply_patch_via_stdin(&self, root: &Path, patch: &Patch, args: &[&str]) -> TgResult<()> {
         use std::io::Write;
         let bin = turbogit_domain::model::git_binary(&self.settings);
@@ -220,9 +170,6 @@ impl CliExecutor {
         Ok(())
     }
 
-    /// [`Self::run`] variant with extra environment overrides (issue 31: the
-    /// tag dialog's tagger identity rides on `GIT_COMMITTER_*`, which is how
-    /// `git tag -a` picks the tagger). Error mapping is identical.
     fn run_env(
         &self,
         root: &Path,
@@ -247,11 +194,6 @@ impl CliExecutor {
 }
 
 impl GitExecutor for CliExecutor {
-    // ---------------------------------------------------------------- read ----
-
-    /// Run an arbitrary git command in `root` — the raw-args escape hatch
-    /// behind the "Custom command…" bulk operation (issue 13). Stdout is
-    /// returned; error mapping matches [`CliExecutor::run`].
     fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let (out, _, _) = self.run(root, &arg_refs)?;
@@ -266,10 +208,8 @@ impl GitExecutor for CliExecutor {
 
         for line in out.lines() {
             if line.starts_with('#') {
-                // Header lines (branch.head / branch.ab / branch.oid).
                 continue;
             } else if let Some(rest) = line.strip_prefix("1 ") {
-                // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>[\t<orig>]
                 let xy = match rest.split_whitespace().next() {
                     Some(x) => x,
                     None => continue,
@@ -283,10 +223,6 @@ impl GitExecutor for CliExecutor {
                     continue;
                 }
                 let status = map_xy(xy);
-                // Porcelain v2 `1 <XY>`: the first char is the index (staged)
-                // status; '.' means the index matches HEAD → unstaged. The
-                // second char is the worktree status; '.' means the worktree
-                // matches the index → nothing unstaged left.
                 let staged = !xy.starts_with('.');
                 let unstaged = xy.chars().nth(1).is_some_and(|y| y != '.');
                 changes.push(Change {
@@ -301,7 +237,7 @@ impl GitExecutor for CliExecutor {
                 // Rename/copy entry. Paths never contain tabs, so the LAST
                 // tab always separates `<path>` from `<origPath>`; the score
                 // column before `<path>` is space-separated on current git
-                // (older drafts documented a tab there — both accepted).
+                // (older drafts documented a tab there, both accepted).
                 // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>\t<origPath>
                 let tabs: Vec<&str> = rest.splitn(3, '\t').collect();
                 let (head, path, orig) = match tabs.as_slice() {
@@ -360,9 +296,6 @@ impl GitExecutor for CliExecutor {
                     continue;
                 }
                 let p = PathBuf::from(path);
-                // The pair right after `u` is the short-format unmerged code
-                // naming WHICH clash this is; the path is the last
-                // token, so the first token is read here and `last()` there.
                 let xy = rest.split_whitespace().next().unwrap_or("");
                 changes.push(Change {
                     path: p.clone(),
@@ -377,7 +310,6 @@ impl GitExecutor for CliExecutor {
                     conflict_kinds.push((p, kind));
                 }
             }
-            // Other porcelain lines (extension headers, etc.) are ignored.
         }
 
         Ok(RootStatus {
@@ -399,16 +331,12 @@ impl GitExecutor for CliExecutor {
         if let Some(n) = opts.max_count {
             a.push(format!("-n{}", n));
         }
-        // Paging: `--skip` is a rev-info option, so it belongs with the other
-        // limiting args — after it comes the rev, then `--` and the pathspec.
         if let Some(n) = opts.skip {
             a.push(format!("--skip={n}"));
         }
         if let Some(b) = &opts.branch {
             a.push(b.clone());
         }
-        // Pickaxe (issue 17): `git log -S<str>` keeps only commits where the
-        // occurrence count of the string changed — the code-change search.
         if let Some(s) = &opts.pickaxe {
             a.push(format!("-S{}", s));
         }
@@ -423,7 +351,7 @@ impl GitExecutor for CliExecutor {
                 // An unborn HEAD: `git log` in a repository nobody has committed
                 // in exits non-zero ("fatal: your current branch 'main' does not
                 // have any commits yet"). A repository with no history has an
-                // EMPTY history, which is an answer — and the Log surface's
+                // EMPTY history, which is an answer, and the Log surface's
                 // `No changes committed.` state, with its `Commit local changes`
                 // action, is only reachable if that is heard as one. Reported as
                 // a failure it reads `Error loading commits` to someone who has
@@ -466,8 +394,6 @@ impl GitExecutor for CliExecutor {
             let ce = f[5].to_string();
             let time: i64 = f[6].trim().parse().unwrap_or(0);
             let signature = parse_signature_state(f[7]);
-            // %B ends with git's trailing newline; rows/labels expect the
-            // message without it.
             let message = f[8].trim_end().to_string();
             commits.push(Commit {
                 id,
@@ -530,7 +456,7 @@ impl GitExecutor for CliExecutor {
         // Sync states (issue 17): remote-tracking refs report Gone when
         // their branch is missing from the remote, tags report pushed vs
         // local-only. Everything comes from one `ls-remote` per remote;
-        // states are only assigned when every remote could be consulted —
+        // states are only assigned when every remote could be consulted,
         // a failed ls-remote (offline) leaves refs unmarked rather than
         // misreporting pushed tags as local-only or live refs as gone.
         if has_tags || has_remote_refs {
@@ -548,7 +474,6 @@ impl GitExecutor for CliExecutor {
                     }
                 }
             } else {
-                // Per remote: the branch names and tag names it actually has.
                 let mut remote_refs: HashMap<String, (HashSet<String>, HashSet<String>)> =
                     HashMap::new();
                 let mut all_ok = true;
@@ -565,12 +490,10 @@ impl GitExecutor for CliExecutor {
                                 let refname = refname.trim();
                                 if let Some(branch) = short_ref(refname) {
                                     entry.0.insert(branch.to_string());
-                                } else if let Some(tag) = refname.strip_prefix("refs/tags/") {
-                                    // Skip peeled `^{}` duplicates — the
-                                    // plain ref's presence is the answer.
-                                    if !tag.ends_with("^{}") {
-                                        entry.1.insert(tag.to_string());
-                                    }
+                                } else if let Some(tag) = refname.strip_prefix("refs/tags/")
+                                    && !tag.ends_with("^{}")
+                                {
+                                    entry.1.insert(tag.to_string());
                                 }
                             }
                         }
@@ -585,8 +508,6 @@ impl GitExecutor for CliExecutor {
                         for r in refs.iter_mut() {
                             match r.kind {
                                 GitRefKind::Remote => {
-                                    // `<remote>/<branch…>` — gone when the
-                                    // remote no longer has that branch.
                                     if let Some((remote, branch)) = r.name.split_once('/')
                                         && let Some((heads, _)) = remote_refs.get(remote)
                                         && !heads.contains(branch)
@@ -642,9 +563,6 @@ impl GitExecutor for CliExecutor {
 
     fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
         let out = match question {
-            // The numstat twin of `commit_files` above: the same `-M` rename
-            // detection, so both lists report the same (new-side) paths, and the
-            // same `--root`, so a parentless commit still answers.
             ChangeQuestion::Commit { commit } => {
                 let (out, _, _) = self.run(
                     root,
@@ -660,9 +578,6 @@ impl GitExecutor for CliExecutor {
                 )?;
                 out
             }
-            // What merging `target` into `HEAD` brings in. The three-dot range
-            // is git's spelling of "since their merge base", and it lives here
-            // rather than in the service that asks.
             ChangeQuestion::MergeIntoHead { target } => {
                 let (out, _, _) =
                     self.run(root, &["diff", "--numstat", &format!("HEAD...{target}")])?;
@@ -676,11 +591,6 @@ impl GitExecutor for CliExecutor {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let (out, _, _) = self.run(root, &["branch", "-a", "-vv"])?;
-        // Branch-tip data, one `git for-each-ref` call: committer dates for
-        // the popup's stale badge (issue 32) plus the short hash / subject /
-        // author that power search-by-message and the detail panel's
-        // latest-commit block (issue 02). Keyed by (kind, short name) so
-        // every row gets data without an N-call fan-out.
         let mut last_touched: HashMap<(BranchKind, String), chrono::DateTime<chrono::Utc>> =
             HashMap::new();
         let mut tips: HashMap<(BranchKind, String), BranchTip> = HashMap::new();
@@ -708,9 +618,6 @@ impl GitExecutor for CliExecutor {
                 let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) else {
                     continue;
                 };
-                // `%(refname:short)` under refs/remotes is `origin/main`;
-                // strip the first component to match the -vv parser's short
-                // remote names (multi-remote safe).
                 let (kind, short) = match name.split_once('/') {
                     Some((_, rest)) => (BranchKind::Remote, rest.to_string()),
                     None => (BranchKind::Local, name.to_string()),
@@ -730,9 +637,7 @@ impl GitExecutor for CliExecutor {
             if trimmed.is_empty() {
                 continue;
             }
-            // Strip the leading "* " / "  " marker.
             let content = trimmed.strip_prefix('*').unwrap_or(trimmed).trim_start();
-            // First whitespace-delimited token is the ref name.
             let name = match content.split_whitespace().next() {
                 Some(n) => n,
                 None => continue,
@@ -761,8 +666,6 @@ impl GitExecutor for CliExecutor {
                     Some(i) => (inner[..i].trim(), &inner[i + 1..]),
                     None => (inner, ""),
                 };
-                // `<remote>/<branch>`, or a bare name when the "remote" is
-                // itself a local branch — git's own `.` remote.
                 tracking = Upstream::from_git_ref(up).or_else(|| {
                     (!up.is_empty()).then(|| Upstream {
                         remote: ".".to_string(),
@@ -822,7 +725,7 @@ impl GitExecutor for CliExecutor {
         // `reflog --max-count 50 --grep-reflog "checkout: --"`; as a regex
         // that quoted pattern matches no reflog message a checkout writes
         // ("checkout: moving from A to B"), so the capture is treated as the
-        // family prefix and the pattern is `checkout:` — which matches exactly
+        // family prefix and the pattern is `checkout:`, which matches exactly
         // the checkout entries and nothing else (rebase/reset entries say
         // "rebase (start): checkout …" / "reset: moving to …", neither of
         // which contains it). `--date=unix` is the one addition: the selector
@@ -839,12 +742,6 @@ impl GitExecutor for CliExecutor {
         match self.run(root, &args) {
             Ok((out, _, _)) => Ok(parse_reflog_checkouts(&out)),
             Err(TgError::Cli { code, stderr }) => {
-                // An unborn HEAD: git refuses the read outright ("fatal: your
-                // current branch 'main' does not have any commits yet"). A
-                // repository nobody has checked anything out in yet has an
-                // empty checkout history, which is an answer; every other
-                // failure — above all "not a git repository" — must propagate,
-                // or repo discovery mistakes an arbitrary directory for one.
                 if stderr.contains("does not have any commits yet") {
                     Ok(Vec::new())
                 } else {
@@ -898,7 +795,6 @@ impl GitExecutor for CliExecutor {
     }
 
     fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize> {
-        // The two-dot range is assembled here — `git rev-list --count from..to`.
         let (out, _, _) = self.run(root, &["rev-list", "--count", &format!("{from}..{to}")])?;
         out.trim()
             .parse()
@@ -917,8 +813,8 @@ impl GitExecutor for CliExecutor {
     fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
         // `git merge-base --is-ancestor` exits 0 when upstream IS an
         // `git merge-base --is-ancestor` exits 0 when upstream IS an
-        // ancestor of branch (i.e. branch is fully merged into upstream
-        // — safe to delete), and 1 otherwise. Anything else is an
+        // ancestor of branch (i.e. branch is fully merged into upstream,
+        // safe to delete), and 1 otherwise. Anything else is an
         // unexpected error.
         match self.run(root, &["merge-base", "--is-ancestor", upstream, branch]) {
             Ok(_) => Ok(true),
@@ -934,7 +830,7 @@ impl GitExecutor for CliExecutor {
         upstream: &str,
     ) -> TgResult<Vec<CommitId>> {
         // `git rev-list upstream..branch` prints one full SHA per line,
-        // newest-first — the same commits, in the same order, as
+        // newest-first, the same commits, in the same order, as
         // `git log @{u}..HEAD`.
         let (out, _, _) = self.run(root, &["rev-list", &format!("{upstream}..{branch}")])?;
         Ok(out
@@ -993,7 +889,6 @@ impl GitExecutor for CliExecutor {
         let (out, _, _) = self.run(root, &["stash", "list"])?;
         let mut result = Vec::new();
         for line in out.lines() {
-            // stash@{n}: WIP on branch: subject
             if let Some(colon) = line.find(": ") {
                 let prefix = &line[..colon];
                 let message = line[colon + 2..].to_string();
@@ -1027,10 +922,6 @@ impl GitExecutor for CliExecutor {
                     } else {
                         branch
                     };
-                    // The list is decoupled from the dirty probe (ticket 01):
-                    // dirtiness is computed per worktree on demand by
-                    // `worktree_dirty`, never here. A prunable (missing) worktree
-                    // still lists, with no branch resolution needed.
                     out.push(Worktree {
                         path: p,
                         branch: b,
@@ -1063,10 +954,6 @@ impl GitExecutor for CliExecutor {
     }
 
     fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
-        // The status bar asks this per root per frame, so the answer is a `stat`
-        // over git's own marker directory and never a git process. The ranking
-        // lives at the boundary, in `repo_state`, so no caller can hold a
-        // different one.
         turbogit_engine_api::repo_state::holding_operation_at(root)
     }
 
@@ -1076,7 +963,7 @@ impl GitExecutor for CliExecutor {
         // (`diff --quiet` exits 1 on the first difference and never touches
         // untracked files), or a single non-ignored untracked enumeration
         // (`--directory` collapses a whole untracked build dir into one
-        // entry). A prunable (missing) worktree — whose command cannot run —
+        // entry). A prunable (missing) worktree, whose command cannot run,
         // answers clean, matching the list's error-tolerant reading.
         let probe = (|| -> TgResult<bool> {
             let (conflicted, _, _) = self.run(path, &["ls-files", "-u"])?;
@@ -1085,7 +972,6 @@ impl GitExecutor for CliExecutor {
             }
             match self.run(path, &["diff", "--quiet", "HEAD"]) {
                 Ok(_) => {}
-                // Exit code 1 = differences were found.
                 Err(TgError::Cli { code: 1, .. }) => return Ok(true),
                 Err(e) => return Err(e),
             }
@@ -1109,7 +995,6 @@ impl GitExecutor for CliExecutor {
             let (idx, _, _) = self.run(root, &["ls-files", "-s"])?;
             let mut map = HashMap::new();
             for line in idx.lines() {
-                // "160000 <sha> <stage>\t<path>"
                 let Some((meta, path)) = line.split_once('\t') else {
                     continue;
                 };
@@ -1130,15 +1015,11 @@ impl GitExecutor for CliExecutor {
             if line.trim().is_empty() {
                 continue;
             }
-            // The status char is always the first byte of the raw line (' '
-            // included) — never trim before slicing it off.
             let status_char = line.chars().next().unwrap_or(' ');
             let mut tokens = line[1..].split_whitespace();
             let Some(sha) = tokens.next() else {
                 continue;
             };
-            // The path is the first token that is not a parenthetical
-            // describe (`(heads/main)` / `(<sha>)`).
             let Some(path) = tokens.find(|t| !t.starts_with('(')) else {
                 continue;
             };
@@ -1156,11 +1037,10 @@ impl GitExecutor for CliExecutor {
             result.push(Submodule {
                 path: PathBuf::from(path),
                 head,
-                recorded: recorded.get(path).cloned().or_else(|| {
-                    // Uninitialized lines carry the recorded sha in place of
-                    // a HEAD; `ls-files` agrees but belt-and-braces both.
-                    (state == SubmoduleState::Uninitialized).then(|| sha.to_string())
-                }),
+                recorded: recorded
+                    .get(path)
+                    .cloned()
+                    .or_else(|| (state == SubmoduleState::Uninitialized).then(|| sha.to_string())),
                 state,
                 root: RootId(root.into()),
             });
@@ -1170,12 +1050,10 @@ impl GitExecutor for CliExecutor {
 
     fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {
         // The index stages holding a merge's three sides: 1 = base, 2 = ours,
-        // 3 = theirs. They are this adapter's business — the port names sides,
+        // 3 = theirs. They are this adapter's business, the port names sides,
         // and a caller never assembles a stage rev.
         let read = |stage: &str| match self.show_index_stage(root, stage, path) {
             Ok(text) => Ok(Some(text)),
-            // git has no such stage for this path: an add/add has no base, a
-            // one-sided delete has no side. That is not an empty side.
             Err(TgError::Cli { .. }) => Ok(None),
             Err(e) => Err(e),
         };
@@ -1198,7 +1076,6 @@ impl GitExecutor for CliExecutor {
         let Some(merge) = self.config_get(root, &format!("branch.{branch}.merge"))? else {
             return Ok(None);
         };
-        // `merge` is git's full ref path; the branch name is the answer.
         let name = short_ref(&merge).unwrap_or(&merge);
         Ok(Some(Upstream {
             remote,
@@ -1218,7 +1095,6 @@ impl GitExecutor for CliExecutor {
                 }
             }
             Err(TgError::Cli { code, stderr }) => {
-                // git config --get exits 1 when the key is unset.
                 if code == 1 {
                     Ok(None)
                 } else {
@@ -1228,8 +1104,6 @@ impl GitExecutor for CliExecutor {
             Err(e) => Err(e),
         }
     }
-
-    // ---------------------------------------------------------- mutating ----
 
     fn init(&self, root: &Path) -> TgResult<()> {
         if let Some(parent) = root.parent() {
@@ -1329,7 +1203,7 @@ impl GitExecutor for CliExecutor {
         // git has refused to guess a reconciliation strategy for divergent
         // branches since 2.27: with no `pull.rebase` in the repository's
         // config, a bare `git pull` fails with "Need to specify how to
-        // reconcile divergent branches" — and the merge path is exactly the
+        // reconcile divergent branches", and the merge path is exactly the
         // rejected-push recovery's update, so the refusal would surface as an
         // update error. The port's `rebase` flag IS the answer; state it on the
         // command line instead of inheriting it from whoever cloned the repo.
@@ -1372,9 +1246,6 @@ impl GitExecutor for CliExecutor {
         }
         a.push(remote.to_string());
         if let Some(sha) = selected_oldest {
-            // Subset push (issue #24): the user selected a suffix of the
-            // outgoing list, so the oldest selected commit (inclusive)
-            // becomes the refspec target.
             a.push(format!("{sha}:refs/heads/{branch}"));
         } else {
             a.push(branch.to_string());
@@ -1398,7 +1269,6 @@ impl GitExecutor for CliExecutor {
         a.push(remote.to_string());
         a.push(branch.to_string());
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
-        // The human-readable dry-run report goes to stderr; stdout stays empty.
         let (_, stderr, _) = self.run(root, &args)?;
         Ok(stderr)
     }
@@ -1514,13 +1384,13 @@ impl GitExecutor for CliExecutor {
     }
 
     fn abort(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
-        let args = [op.git_subcommand(), "--abort"];
+        let args = [op.label(), "--abort"];
         self.run(root, &args)?;
         Ok(())
     }
 
     fn continue_op(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
-        let args = [op.git_subcommand(), "--continue"];
+        let args = [op.label(), "--continue"];
         self.run(root, &args)?;
         Ok(())
     }
@@ -1565,20 +1435,9 @@ impl GitExecutor for CliExecutor {
         root: &Path,
         conflicted: &[PathBuf],
     ) -> TgResult<Vec<PathBuf>> {
-        // No merge in progress → nothing to list.
         if !root.join(".git").join("MERGE_HEAD").exists() {
             return Ok(Vec::new());
         }
-        // `git diff-tree --name-only --diff-filter=M HEAD MERGE_HEAD` lists
-        // every path that changed between the two tips. We then subtract the
-        // conflicted paths (those still unmerged in the index) to get the
-        // auto-merged set — git has already resolved them onto HEAD.
-        // `git diff-tree --name-only --diff-filter=M -r MERGE_HEAD^1
-        // MERGE_HEAD` lists every path the merge attempted to resolve
-        // (auto-merged + conflicted). Subtracting the conflicted paths
-        // leaves the auto-merged set — files git resolved by itself.
-        // We use the first parent of MERGE_HEAD (the side branch tip)
-        // instead of HEAD so identical changes still show up.
         let (stdout, _, _) = self.run(
             root,
             &[
@@ -1602,9 +1461,6 @@ impl GitExecutor for CliExecutor {
         if plan.is_empty() {
             return Ok(());
         }
-        // A row the plan editor could not identify never reaches git: there is
-        // no honest todo line for it, and replaying it as any real verb would
-        // be the silent coercion the `Unknown` fallback exists to prevent.
         if let Some(entry) = plan.iter().find(|e| e.action == RebaseAction::Unknown) {
             return Err(TgError::Other(format!(
                 "{} carries an unknown rebase action — retarget or remove its row \
@@ -1612,8 +1468,8 @@ impl GitExecutor for CliExecutor {
                 entry.commit
             )));
         }
-        // "Update Ref" is not a per-commit verb in git's todo format — git's
-        // `update-ref` line takes a ref, not a commit — so the row's one bit
+        // "Update Ref" is not a per-commit verb in git's todo format, git's
+        // `update-ref` line takes a ref, not a commit, so the row's one bit
         // of intent (the refs touching this replay follow the rewrite) becomes
         // the command-level `--update-refs`, and the row itself replays as the
         // pick it is.
@@ -1622,13 +1478,10 @@ impl GitExecutor for CliExecutor {
         // injecting `update-ref refs/heads/<branch>` lines into the todo it
         // generates, and the todo below REPLACES git's via GIT_SEQUENCE_EDITOR,
         // which would silently drop them. So the engine does the injection
-        // itself — every branch pointing at a planned commit is pinned after
+        // itself, every branch pointing at a planned commit is pinned after
         // that row's line, updating to the replayed commit when the line runs.
         let mut refs_at_row: Vec<Vec<String>> = vec![Vec::new(); plan.len()];
         if update_refs {
-            // The branch being rebased is HEAD's own — git never "updates" it
-            // (it is rewritten wholesale), and an `update-ref` line naming it
-            // aborts the todo.
             let current = self.current_branch(root).ok().flatten();
             let (refs, _, _) = self.run(
                 root,
@@ -1678,12 +1531,6 @@ impl GitExecutor for CliExecutor {
             std::process::id(),
         ));
         std::fs::write(&tmp, todo)?;
-        // A reword's replacement message cannot ride in the todo — git's format
-        // has no slot for one — so it rides on the plan row (ADR-0025) and is
-        // substituted here instead. git opens its editor on the commit file for
-        // exactly the reworded row, so pointing the editor at a copy of this
-        // file IS the reword: the same substitution `GIT_SEQUENCE_EDITOR` gets
-        // below. One message per execution, which is all one reworded row keys.
         let mut message_tmp = None;
         if let Some(message) = plan.iter().find_map(|e| e.message.as_ref()) {
             let path = std::env::temp_dir().join(format!(
@@ -1750,7 +1597,6 @@ impl GitExecutor for CliExecutor {
     fn worktree_add(&self, root: &Path, path: &Path, branch: &str, create: bool) -> TgResult<()> {
         let mut a: Vec<String> = vec!["worktree".to_string(), "add".to_string()];
         if create {
-            // `-b` consumes the branch name: `git worktree add -b <branch> <path>`.
             a.push("-b".to_string());
             a.push(branch.to_string());
         }
@@ -1798,8 +1644,6 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    // --------------------------------------------------- staging / worktree ----
-
     fn add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         if paths.is_empty() {
             return Ok(());
@@ -1816,7 +1660,7 @@ impl GitExecutor for CliExecutor {
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         // `restore --staged` resets an index entry to its HEAD version, so it
         // needs a HEAD. On an unborn branch there is none and git refuses the
-        // whole call ("fatal: could not resolve 'HEAD'") — which is why the
+        // whole call ("fatal: could not resolve 'HEAD'"), which is why the
         // per-file checkbox could not un-stage in a repository nobody has
         // committed in yet. With no HEAD there is also nothing to reset
         // *against*: the index holds only additions, so dropping the entries is
@@ -1915,9 +1759,6 @@ impl GitExecutor for CliExecutor {
             .and_then(|n| n.to_str())
             .ok_or_else(|| TgError::Other(format!("no usable name to exclude: {dir:?}")))?;
         let pattern = format!("{name}/");
-        // `--absolute-git-dir` is the wrong answer for a linked worktree, whose
-        // own `info/exclude` git never reads (see the port). This is the
-        // `--git-common-dir` spelling for that reason, not by preference.
         let (common, _, _) = self.run(root, &["rev-parse", "--git-common-dir"])?;
         let common = Path::new(common.trim());
         let common = if common.is_absolute() {
@@ -1930,8 +1771,6 @@ impl GitExecutor for CliExecutor {
         if text.lines().map(str::trim).any(|line| line == pattern) {
             return Ok(());
         }
-        // A file whose last line has no newline would otherwise have the new
-        // rule glued onto it, and git would read one unmatchable line.
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
@@ -1942,8 +1781,6 @@ impl GitExecutor for CliExecutor {
         std::fs::write(&exclude, text)?;
         Ok(())
     }
-
-    // ----------------------------------------------------------- branches ----
 
     fn branch_create(
         &self,
@@ -1996,8 +1833,6 @@ impl GitExecutor for CliExecutor {
         self.run(root, &args)?;
         Ok(())
     }
-
-    // --------------------------------------------------------------- tags ----
 
     fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()> {
         let mut a: Vec<String> = vec!["tag".to_string()];
@@ -2069,8 +1904,6 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    // ------------------------------------------------------- diff / blame ----
-
     fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
         let mut a: Vec<String> = vec!["diff".to_string()];
         if opts.staged {
@@ -2087,8 +1920,6 @@ impl GitExecutor for CliExecutor {
         } else if let Some(c) = &opts.commit {
             a.push(format!("{}^!", c));
         } else if let Some(l) = &opts.left {
-            // A named HEAD on a root with no commit is refused here; see
-            // `guard_unborn_head`.
             a.push(self.guard_unborn_head(root, l)?.to_string());
         }
         if let Some(p) = &opts.path {
@@ -2097,14 +1928,10 @@ impl GitExecutor for CliExecutor {
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         let (out, _, _) = self.run(root, &args)?;
-        // git's format is interpreted here and stops existing here.
         Ok(turbogit_engine_api::patch::parse_patch(&out))
     }
 
     fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
-        // `--no-color` because a patch is an artifact, not a terminal view: the
-        // diff viewer's own read keeps its colour and this one must not carry
-        // escape codes into a file someone else applies.
         let mut a: Vec<String> = vec!["diff".to_string(), "--no-color".to_string()];
         if reverse {
             a.push("-R".to_string());
@@ -2112,15 +1939,10 @@ impl GitExecutor for CliExecutor {
         let paths: &[PathBuf] = match origin {
             // HEAD, not the index: a patch of **local changes** carries staged
             // and unstaged content together, which a plain `git diff` splits in
-            // two answers. Unversioned files are not in it — git has no diff for
-            // a path it has never held — and the surface says so rather than
+            // two answers. Unversioned files are not in it, git has no diff for
+            // a path it has never held, and the surface says so rather than
             // letting a created patch look complete.
             PatchOrigin::LocalChanges { paths } => {
-                // The same named refusal as the combined read, so an unborn
-                // branch is one sentence everywhere and not git's `fatal: bad
-                // revision 'HEAD'` text in this surface. `guard_unborn_head`
-                // only fires on the literal `HEAD`, which is what this arm
-                // always names.
                 a.push(self.guard_unborn_head(root, "HEAD")?.to_string());
                 paths
             }
@@ -2144,9 +1966,6 @@ impl GitExecutor for CliExecutor {
             }
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
-        // Raw bytes, not `run`: this answer crosses the surface as a file's
-        // content, and a lossy decode would already have replaced the bytes the
-        // encoding field is asked to write.
         self.run_bytes(root, &args)
     }
 
@@ -2163,8 +1982,6 @@ impl GitExecutor for CliExecutor {
     }
 
     fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>> {
-        // Stage 0 is the plain index entry; it is this adapter's spelling, not
-        // the port's.
         let spec = format!(":0:{}", path.to_string_lossy());
         let args = ["show", &spec];
         self.run_bytes(root, &args)
@@ -2179,15 +1996,11 @@ impl GitExecutor for CliExecutor {
     }
 
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
-        // Same spec convention as `show_file` (`<rev>:<path>`); `run_bytes`
-        // keeps the blob bytes intact for binary content.
         Self::reject_stage_rev(rev)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let args = ["show", &spec];
         self.run_bytes(root, &args)
     }
-
-    // ------------------------------------------------------ revert / undo ----
 
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()> {
         let args = ["revert", "--no-edit", commit];
@@ -2203,18 +2016,10 @@ impl GitExecutor for CliExecutor {
     }
 }
 
-// ----------------------------------------------------------------- helpers -
-
-/// The Nth whitespace-separated field of `s` (0-based).
 fn nth_field(s: &str, n: usize) -> &str {
     s.split_whitespace().nth(n).unwrap_or("")
 }
 
-/// Substring of `s` starting at the Nth whitespace-separated token (0-based).
-///
-/// Unlike [`nth_field`] this keeps the remainder of the line, so a final
-/// column that may contain spaces (rename/copy paths) survives intact.
-/// Returns `None` when `s` has fewer than `n + 1` tokens.
 fn tail_from_field(s: &str, n: usize) -> Option<&str> {
     let mut count = 0;
     let mut in_token = false;
@@ -2253,10 +2058,6 @@ fn conflict_kind_of(xy: &str) -> Option<ConflictKind> {
     }
 }
 
-/// Map a porcelain v2 XY status pair to a [`ChangeStatus`].
-///
-/// Prefers the index (X) letter; falls back to the worktree (Y) letter when the
-/// index is unchanged. Typechange (`T`) is reported as Modified.
 fn map_xy(xy: &str) -> ChangeStatus {
     let x = xy.chars().next().unwrap_or('.');
     let y = xy.chars().nth(1).unwrap_or('.');
@@ -2273,22 +2074,10 @@ fn map_xy(xy: &str) -> ChangeStatus {
     }
 }
 
-/// The short branch name behind `refs/heads/<name>`, or `None` when `refname` is
-/// not a local branch.
-///
-/// The `Option` is deliberate: refname sites must treat a non-branch as "not a
-/// branch", while the two `branch.<name>.merge` sites spell their own
-/// whole-string fallback. Letting the helper pick would hide which kind of value
-/// each site holds. Building a ref is [`Upstream::git_ref`]'s job.
 pub(crate) fn short_ref(refname: &str) -> Option<&str> {
     refname.strip_prefix("refs/heads/")
 }
 
-/// Map a `for-each-ref` refname to a [`CommitRef`] decoration (issue #12).
-///
-/// Local branches keep their short name; remote-tracking branches collapse
-/// `refs/remotes/<remote>/<name…>` to `<remote>/<name…>`; tags drop the
-/// `refs/tags/` prefix. Other namespaces (notes, stash, …) are ignored.
 fn parse_ref_name(refname: &str) -> Option<CommitRef> {
     let (kind, name) = if let Some(name) = short_ref(refname) {
         (GitRefKind::Branch, name)
@@ -2303,7 +2092,6 @@ fn parse_ref_name(refname: &str) -> Option<CommitRef> {
 
 /// `%G?` → [`SignatureState`] (issue 17): G verified good, B verified bad,
 /// U/E/X present but unverifiable, anything else (N) unsigned.
-///
 /// **Do not merge with `signature_state_of` in `git2_exec.rs`.** libgit2 can see
 /// a signature but never verify one, so that side can reach `Unverified` and
 /// `Unsigned` and nothing else: `Good` is reachable from exactly one backend
@@ -2318,10 +2106,8 @@ fn parse_signature_state(code: &str) -> SignatureState {
 }
 
 /// Parse one `git diff-tree --name-status` line into a [`Change`].
-///
 /// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins;
 /// the old path is carried as [`Change::orig_path`]).
-///
 /// **Do not merge with `commit_files` in `git2_exec.rs`.** These two exist only
 /// to be compared, and `crates/turbogit-engine/tests/change_stats.rs` is what
 /// fails if they drift.
@@ -2333,7 +2119,6 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
         'D' => ChangeStatus::Deleted,
         'R' => ChangeStatus::Renamed,
         'C' => ChangeStatus::Copied,
-        // Typechange and anything unexpected read as Modified.
         _ => ChangeStatus::Modified,
     };
     let (path, orig_path) = match status {
@@ -2359,9 +2144,8 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
 
 /// Parse `git diff-tree --numstat` output into `(path, insertions, deletions)`.
 /// Binary rows carry `-` in both count columns and read as `0/0`.
-///
 /// **Do not merge with `change_stats` in `git2_exec.rs`.** libgit2 has no
-/// numstat at all — that side walks the same diff's line events — so there is no
+/// numstat at all, that side walks the same diff's line events, so there is no
 /// shared code to extract.
 fn parse_numstat(s: &str) -> Vec<FileStat> {
     let mut out = Vec::new();
@@ -2375,8 +2159,6 @@ fn parse_numstat(s: &str) -> Vec<FileStat> {
         if path.is_empty() {
             continue;
         }
-        // A dash in a count column is git saying "this file has no line count"
-        // — a **Binary change**. It is one row either way, so the file counts.
         out.push(FileStat {
             path: PathBuf::from(numstat_path(path)),
             insertions: insertions.parse().ok(),
@@ -2402,7 +2184,6 @@ fn numstat_path(raw: &str) -> String {
         .map_or_else(|| raw.to_string(), |(_, new)| new.to_string())
 }
 
-/// Parse `git blame --line-porcelain` output into per-line records.
 fn parse_blame(s: &str) -> Vec<BlameLine> {
     let mut out: Vec<BlameLine> = Vec::new();
     let mut commit = String::new();
@@ -2434,7 +2215,6 @@ fn parse_blame(s: &str) -> Vec<BlameLine> {
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             time = rest.trim().parse().unwrap_or(0);
         } else if let Some(rest) = line.strip_prefix("author ") {
-            // `author-mail` / `author-tz` are handled by the prefix check order.
             author = rest.trim().to_string();
         }
     }
@@ -2486,7 +2266,6 @@ mod tests {
         assert_eq!(parse_signature_state(""), SignatureState::Unsigned);
     }
 
-    /// Verbatim `git diff-tree --no-commit-id --numstat -r --root -M` output from
     fn stat(path: &str, insertions: usize, deletions: usize) -> FileStat {
         FileStat {
             path: PathBuf::from(path),
@@ -2495,7 +2274,6 @@ mod tests {
         }
     }
 
-    /// a fixture repository (one edited file, one deleted file).
     #[test]
     fn numstat_lines_carry_per_file_line_counts() {
         let out = parse_numstat(
@@ -2515,9 +2293,6 @@ mod tests {
         );
     }
 
-    /// git reports a binary change as `-\t-\t<path>`: the row still exists, it
-    /// just has no line counts. That is its own case, not a measured zero — the
-    /// dash is decided here, once, and no caller sees it.
     #[test]
     fn binary_numstat_rows_have_no_line_counts() {
         let out = parse_numstat("-\t-\tlogo.png\n2\t0\tsrc/renamed.txt\n");
@@ -2534,10 +2309,6 @@ mod tests {
         );
     }
 
-    /// git collapses a rename into one path column: the two sides share their
-    /// prefix and/or suffix, written `pre/{old => new}post`, or nothing does,
-    /// written bare `old => new`. The new side is what `commit_files` reports,
-    /// so that is the key the counts must join on.
     #[test]
     fn rename_numstat_rows_resolve_to_their_new_path() {
         let out = parse_numstat(

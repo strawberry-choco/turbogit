@@ -1,17 +1,8 @@
-//! 3-way merge conflict model and resolution helpers.
-//!
-//! A merge conflict leaves up to three versions of a file in the index — the
-//! common ancestor, "ours", and "theirs" — and the [`GitExecutor`] answers them
-//! as one [`ConflictVersions`] value per path. This module reads that value and
-//! offers helpers to stage a resolved file or to apply the simplest automatic
-//! strategy.
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
 
-/// The three sides of one conflicted path, as the engine answers them.
 pub fn read_versions(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -31,7 +22,6 @@ pub fn write_resolution(
     vcs.add(root, &[path.to_path_buf()])
 }
 
-/// The side a resolution takes, or the error saying the merge left no such side.
 fn side(which: &str, chosen: &Option<String>) -> TgResult<String> {
     chosen.clone().ok_or_else(|| {
         TgError::Other(format!(
@@ -41,14 +31,12 @@ fn side(which: &str, chosen: &Option<String>) -> TgResult<String> {
     })
 }
 
-/// Resolve a conflict by taking our side verbatim.
 pub fn accept_ours(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
     let ours = side("ours", &versions.ours)?;
     write_resolution(vcs, root, path, &ours)
 }
 
-/// Resolve a conflict by taking their side verbatim.
 pub fn accept_theirs(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
     let theirs = side("theirs", &versions.theirs)?;
@@ -74,7 +62,6 @@ pub fn resolve_all_simple(
                 if v.ours == v.theirs {
                     match v.ours {
                         Some(ours) => write_resolution(vcs, root, path, &ours),
-                        // Both sides absent is not a change to write.
                         None => Ok(()),
                     }
                 } else {
@@ -86,7 +73,6 @@ pub fn resolve_all_simple(
         .collect()
 }
 
-/// Number of conflicts still awaiting resolution.
 pub fn unresolved(status: &RootStatus) -> usize {
     status.conflicted.len()
 }
@@ -99,17 +85,17 @@ pub const CHOICE_THEIRS: u8 = 1;
 pub const CHOICE_BOTH_OURS_FIRST: u8 = 2; // the merge editor's "Ignore"
 pub const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
 
-/// The text one resolved conflict block shows for `choice` — the single owner
+/// The text one resolved conflict block shows for `choice`, the single owner
 /// of the mapping the merge editor, the resolver's previews and the propagation
 /// composer all read.
 ///
 /// A choice outside the four named ones is unresolved (`None`); each caller
-/// reads that `None` for itself — the merge editor's `<< unresolved >>`
+/// reads that `None` for itself, the merge editor's `<< unresolved >>`
 /// placeholder or its ours fallback, the propagation composer's refusal to
 /// rewrite a partially-resolved hunk.
 ///
 /// `CHOICE_BOTH_THEIRS_FIRST` reads theirs before ours, deliberately distinct
-/// from `CHOICE_BOTH_OURS_FIRST` (the "Ignore" choice) — issue #22.
+/// from `CHOICE_BOTH_OURS_FIRST` (the "Ignore" choice), issue #22.
 pub fn resolved_block_text(ours: &str, theirs: &str, choice: u8) -> Option<String> {
     match choice {
         CHOICE_OURS => Some(ours.to_owned()),
@@ -124,22 +110,21 @@ pub fn resolved_block_text(ours: &str, theirs: &str, choice: u8) -> Option<Strin
 ///
 /// Returns `(segments, conflict_count)` where each segment is
 /// `(ours, theirs, is_conflict)`; for normal segments `theirs` is empty.
-/// This is the canonical marker parser for the merge editor — the UI's
+/// This is the canonical marker parser for the merge editor, the UI's
 /// fallback path when no base version is available for a structured 3-way
 /// merge, and the reference the Phase L1 parity tests compare
 /// [`turbogit_services::diff_engine::merge_segments`] against.
 ///
 /// The three markers come from `turbogit_domain::model`, which is also where the two
 /// surfaces that *paint* them read theirs, so the parser and both painters cannot name
-/// different markers. A fourth — git's `|||||||` common-ancestor form, which this parser
-/// does not handle — can only arrive by changing one place.
+/// different markers. A fourth, git's `|||||||` common-ancestor form, which this parser
+/// does not handle, can only arrive by changing one place.
 pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, usize) {
     let mut segs: Vec<(String, String, bool)> = Vec::new();
     let mut conflicts = 0usize;
     let mut normal = String::new();
     let mut ours = String::new();
     let mut theirs = String::new();
-    // mode: 0 = normal, 1 = inside ours, 2 = inside theirs
     let mut mode = 0u8;
     for line in content.lines() {
         if line.starts_with(CONFLICT_MARKER_OURS) {
@@ -198,9 +183,6 @@ mod tests {
         assert_eq!(calls.len(), 1, "one stage call recorded");
     }
 
-    /// The mapping's one owner: each of the four named choices resolves to its
-    /// block text, and anything else is unresolved — a `None` the callers read
-    /// for themselves rather than a silent fallback to ours.
     #[test]
     fn resolved_block_text_maps_each_named_choice_and_reports_the_rest_unresolved() {
         let ours = "OURS\n";

@@ -1,23 +1,9 @@
-//! Built-in smart groups (issue #06, screens 01/04): computed sections of
-//! the workspace tree that collect repos by a predicate over per-root
-//! status — ahead/behind, conflicts, dirty count — never a manual list.
-//!
-//! Pure presentation logic (sidebar / hunk_nav precedent): the predicates
-//! and the membership computation live here; `super::sidebar` renders the
-//! rows and applies the active group as a tree filter. Since the workspace
-//! tree is recursive (sidebar-project-tree issue 01), every pass below
-//! walks the recursive [`ProjectTree`] in pre-order instead of a flat
-//! group list; the narrowing re-collapses the survivors with the same
-//! path labels.
-
 use std::path::Path;
 
 use crate::theme::RepoState;
 use crate::ui::project_tree::{ProjectTree, RepoNode, filter_repos, iter_repos};
 use turbogit_app::smart_rules::{RepoFacts, SmartGroupRule};
 
-/// The active group filter: a built-in predicate or a user-defined rule
-/// (issue #07), both narrowing the tree the same way.
 #[derive(Debug, Clone)]
 pub enum GroupFilter {
     BuiltIn(SmartGroup),
@@ -33,7 +19,6 @@ impl GroupFilter {
     }
 }
 
-/// Project one tree node onto the plain facts a rule's predicate reads.
 fn repo_facts(repo: &RepoNode) -> RepoFacts {
     RepoFacts {
         name: repo.name.clone(),
@@ -45,24 +30,20 @@ fn repo_facts(repo: &RepoNode) -> RepoFacts {
     }
 }
 
-/// How many repos of the tree a user-defined rule collects (the custom
-/// row's badge). Recomputed from live state by the caller each frame.
 pub fn rule_count(tree: &ProjectTree, rule: &SmartGroupRule) -> usize {
     iter_repos(tree)
         .filter(|r| rule.matches(&repo_facts(r)))
         .count()
 }
 
-/// The built-in groups, each a predicate over one repo's per-root status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SmartGroup {
-    /// Ahead **and** behind the upstream — the two histories diverged.
+    /// Ahead **and** behind the upstream, the two histories diverged.
     Diverged,
-    /// Has unresolved merge conflicts.
     Conflicted,
     /// Has local commits the upstream lacks (ahead > 0).
     Unpushed,
-    /// Has incoming commits not yet pulled (behind > 0) — the status bar's
+    /// Has incoming commits not yet pulled (behind > 0), the status bar's
     /// `unpulled` counter as a sidebar group (issue 02).
     Unpulled,
     /// Has uncommitted work (modified or unversioned paths).
@@ -80,22 +61,10 @@ impl SmartGroup {
         SmartGroup::Dirty,
     ];
 
-    /// The row label (screen 01's lowercase style) — the words of the state
-    /// this group stands for, so the label the user reads and the dot beside it
-    /// cannot be two vocabularies.
     pub fn label(&self) -> &'static str {
         self.state().words()
     }
 
-    /// The repository state each group stands for, declared beside the
-    /// variants. This is the module's whole correspondence claim: the row's
-    /// label is this state's words and the row's dot is this state's colour,
-    /// so a new state has one place to be added and a wording change is one
-    /// edit rather than three.
-    ///
-    /// A **membership** question is not asked here and cannot be — the group
-    /// answers "does this repo match", which overlaps by design, while one
-    /// state is the single worst thing about the repo. See [`Self::matches`].
     pub fn state(self) -> RepoState {
         match self {
             SmartGroup::Diverged => RepoState::Diverged,
@@ -113,10 +82,6 @@ impl SmartGroup {
         match self {
             SmartGroup::Diverged => RepoState::is_diverged(repo.ahead, repo.behind),
             SmartGroup::Conflicted => repo.conflicts > 0,
-            // The three arms below read **counts**, not a `RootStatus`, and the
-            // owner's dirty rule is defined over a status because that is what
-            // the ladder has. A column of numbers asks whether the number is
-            // non-zero; it is not asking for a repository's state.
             SmartGroup::Unpushed => repo.ahead > 0,
             SmartGroup::Unpulled => repo.behind > 0,
             SmartGroup::Dirty => repo.dirty_count > 0,
@@ -124,7 +89,6 @@ impl SmartGroup {
     }
 }
 
-/// One non-empty group and its live member count (the row's badge).
 #[derive(Debug, Clone)]
 pub struct SmartGroupEntry {
     pub group: SmartGroup,
@@ -158,9 +122,6 @@ pub fn filter_to_group(
     filter_to(project_dir, tree, group.map(GroupFilter::BuiltIn).as_ref())
 }
 
-/// The generalized narrowing behind [`filter_to_group`]: one filter —
-/// built-in or custom (issue #07) — keeps only its member repos, then
-/// re-collapses the survivors.
 pub fn filter_to(
     project_dir: &Path,
     tree: &ProjectTree,
@@ -202,7 +163,6 @@ mod tests {
         }
     }
 
-    /// All repos of the tree flattened in pre-order, as their display labels.
     fn member_labels(tree: &ProjectTree) -> Vec<String> {
         iter_repos(tree).map(|r| r.label.clone()).collect()
     }
@@ -210,7 +170,7 @@ mod tests {
     #[test]
     fn builtins_compute_membership_and_counts_from_repo_state() {
         let project = Path::new("/w");
-        let diverged = root("/w/g/diverged", Some("main")); // ahead 2, behind 1
+        let diverged = root("/w/g/diverged", Some("main"));
         let mut dirty = root("/w/g/dirty", Some("main"));
         dirty.status.changes = vec![modified("a.txt"), modified("b.txt")];
         let mut conflicted = root("/w/g/conflicted", Some("main"));
@@ -243,11 +203,6 @@ mod tests {
 
     #[test]
     fn every_group_label_is_the_owner_words_for_the_state_it_stands_for() {
-        // The five labels used to be five literals written out here, byte-identical
-        // to five strings the owner's words map already returns — which is what
-        // the words map's own doc claims to own. This asserts the *string*, not
-        // the presence of the call: re-typing the literal fails, re-pointing the
-        // label passes.
         for group in SmartGroup::BUILTINS {
             assert_eq!(
                 group.label(),
@@ -273,8 +228,6 @@ mod tests {
 
     #[test]
     fn membership_overlaps_when_one_predicate_implies_another() {
-        // A diverged repo (ahead + behind) has unpushed commits too: a repo
-        // may belong to several groups at once.
         let project = Path::new("/w");
         let tree = build_tree(project, &[root("/w/g/one", Some("main"))], &|_| {
             Some((1, 3))
@@ -309,9 +262,9 @@ mod tests {
     #[test]
     fn unpulled_matches_repos_with_incoming_commits() {
         let project = Path::new("/w");
-        let unpulled = root("/w/g/unpulled", Some("main")); // (0, 2)
-        let unpushed = root("/w/g/unpushed", Some("main")); // (1, 0)
-        let diverged = root("/w/g/diverged", Some("main")); // (1, 1)
+        let unpulled = root("/w/g/unpulled", Some("main"));
+        let unpushed = root("/w/g/unpushed", Some("main"));
+        let diverged = root("/w/g/diverged", Some("main"));
         let tree = build_tree(project, &[unpulled, unpushed, diverged], &|id| {
             let p = id.0.as_os_str();
             if p == "/w/g/unpulled" {
@@ -350,16 +303,11 @@ mod tests {
             }
         });
 
-        // The full view: folder `fe` over the two repos, the single-repo
-        // `oss` chain collapsed to its promoted label.
         assert_eq!(member_labels(&tree), ["clean", "dirty", "o/unpushed"]);
 
-        // Narrowing to the unpushed member re-collapses the whole chain
-        // with the same path label.
         let filtered = filter_to_group(project, &tree, Some(SmartGroup::Unpushed));
         assert_eq!(member_labels(&filtered), ["w/o/unpushed"]);
 
-        // Clearing the group (None) returns the tree unchanged.
         assert_eq!(filter_to_group(project, &tree, None), tree);
     }
 
@@ -378,8 +326,6 @@ mod tests {
         assert_eq!(dirty_members.len(), 1);
         assert_eq!(dirty_members[0].0.as_os_str(), "/w/g/dirty");
     }
-
-    // --- User-defined rules (issue #07) ---
 
     fn release_rule() -> SmartGroupRule {
         SmartGroupRule {
@@ -419,11 +365,8 @@ mod tests {
         let tree = build_tree(project, &[release, main, dirty_release], &|_| Some((0, 0)));
 
         let filtered = filter_to(project, &tree, Some(&GroupFilter::Custom(release_rule())));
-        // `w` displays (two surviving members); both single-member chains
-        // beneath it collapse to their promoted labels.
         assert_eq!(member_labels(&filtered), ["f/rel", "o/lib"]);
 
-        // No active filter returns the tree unchanged.
         assert_eq!(filter_to(project, &tree, None), tree);
     }
 

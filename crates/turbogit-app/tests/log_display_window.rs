@@ -1,7 +1,3 @@
-//! The log pane's held display window at the app seam (log-view-scaling 04):
-//! one derived value per change to the loaded window or the UI's inputs, and
-//! the same value across the frames in between.
-
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -10,13 +6,6 @@ use turbogit_app::root_caches::LogScope;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Commit, CommitId, RootId, Signature, SignatureState};
 
-// `two_root_project` stays local rather than `git_seed::two_repos`: it seeds one
-// **empty** commit per repository (`commit --allow-empty -m seed`), where every
-// recipe writes a file, and the commit count is still the fixture's shape.
-
-/// Two one-commit repositories, seeded once for the whole test binary. The
-/// history itself is settled into the caches by hand below — what is under test
-/// is the seam between the caches and the derived window, not git's own log.
 fn two_root_project() -> &'static (PathBuf, Vec<PathBuf>) {
     static PROJECT: OnceLock<(PathBuf, Vec<PathBuf>)> = OnceLock::new();
     PROJECT.get_or_init(|| {
@@ -32,7 +21,6 @@ fn two_root_project() -> &'static (PathBuf, Vec<PathBuf>) {
             git(&repo, &["commit", "-q", "--allow-empty", "-m", "seed"]);
             repos.push(repo);
         }
-        // The temp dir outlives every test in this binary.
         std::mem::forget(dir);
         (project, repos)
     })
@@ -76,10 +64,6 @@ fn ids_at(window: &turbogit_app::log_display::LogDisplay, index: usize) -> Optio
     window.row(index).map(|c| c.id.clone())
 }
 
-/// With nothing changing, consecutive frames read the SAME derived value: the
-/// second frame is handed the very allocation the first was, which is only
-/// possible if it was not rebuilt. No counter, no instrumentation — the handle
-/// is the evidence.
 #[test]
 fn an_idle_frame_reads_the_same_window_the_frame_before_it_built() {
     let (mut state, alpha, _) = state_over_two_roots();
@@ -94,13 +78,10 @@ fn an_idle_frame_reads_the_same_window_the_frame_before_it_built() {
             "an idle frame rebuilt the displayed list and the lane colours"
         );
     }
-    // Nothing was dropped from the caches either — the same answer, twice.
     assert_eq!(first.len(), 1);
     assert_eq!(state.caches.log(&alpha).map(<[Commit]>::len), Some(1));
 }
 
-/// The teeth of the promise above: a batch appended IS a change, and the frame
-/// after it must be handed a different window.
 #[test]
 fn a_batch_appended_rebuilds_the_displayed_list() {
     let (mut state, alpha, _) = state_over_two_roots();
@@ -121,8 +102,6 @@ fn a_batch_appended_rebuilds_the_displayed_list() {
     assert_eq!(ids(&second), ["a1", "a2"], "newest first, the batch added");
 }
 
-/// The roots filter narrowing and widening are two directions of one change:
-/// each rebuilds, and the union follows the filter.
 #[test]
 fn the_roots_filter_narrowing_and_widening_rebuilds() {
     let (mut state, alpha, beta) = state_over_two_roots();
@@ -147,8 +126,6 @@ fn the_roots_filter_narrowing_and_widening_rebuilds() {
     assert_eq!(ids(&widened), ["a1", "b1"], "widened back to the union");
 }
 
-/// A scope change reads a different listing, so it rebuilds — and the scoped
-/// listing replaces the unscoped one rather than joining it.
 #[test]
 fn a_scope_change_rebuilds_from_the_scoped_listing() {
     let (mut state, alpha, _) = state_over_two_roots();
@@ -179,9 +156,6 @@ fn a_scope_change_rebuilds_from_the_scoped_listing() {
     assert_eq!(ids(&back), ["a1"], "leaving the scope restores the listing");
 }
 
-/// The live search term rebuilds, and the pickaxe union it reads comes out of
-/// the search cache — a commit whose content changed the query's count shows
-/// even when its message, hash and author do not match.
 #[test]
 fn a_search_term_rebuilds_and_unions_the_pickaxe_hits() {
     let (mut state, alpha, _) = state_over_two_roots();
@@ -195,8 +169,6 @@ fn a_search_term_rebuilds_and_unions_the_pickaxe_hits() {
     assert!(!Arc::ptr_eq(&before, &filtered), "typing must rebuild");
     assert_eq!(filtered.len(), 0, "nothing matches the term yet");
 
-    // The pickaxe cache answers: the hit is a commit the term does not match
-    // textually, which is the whole point of the union.
     state.caches.settle_scoped_log_batch(
         &alpha,
         &LogScope::Search("needle".to_owned()),
@@ -212,8 +184,6 @@ fn a_search_term_rebuilds_and_unions_the_pickaxe_hits() {
     );
 }
 
-/// The shown count is the whole loaded window's, not a slice of it: the log
-/// pane's "N shown" line reads exactly this number.
 #[test]
 fn the_shown_count_is_the_whole_loaded_window() {
     let (mut state, alpha, _) = state_over_two_roots();
@@ -230,8 +200,6 @@ fn the_shown_count_is_the_whole_loaded_window() {
     assert_eq!(window.len(), 3);
 }
 
-/// Selecting a row changes nothing the window holds, so it must not rebuild
-/// one: the scope's repository is the only place the selection is read from.
 #[test]
 fn selecting_a_row_does_not_rebuild_the_window() {
     let (mut state, alpha, beta) = state_over_two_roots();
@@ -248,7 +216,6 @@ fn selecting_a_row_does_not_rebuild_the_window() {
         "a selection is not a change to the displayed list"
     );
 
-    // Inside a path scope the selection IS what says whose history to read.
     let path = PathBuf::from("f.txt");
     state.caches.settle_scoped_log_batch(
         &beta,

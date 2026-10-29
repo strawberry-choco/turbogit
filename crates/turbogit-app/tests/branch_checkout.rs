@@ -1,25 +1,9 @@
-//! Checking out a remote branch leaves the new local branch tracking it.
-//!
-//! Written to license deleting the app's explicit
-//! `branch --set-upstream-to` after `checkout -b <name> origin/<name>`, on the
-//! theory that git's own DWIM already sets the upstream. That theory holds only
-//! for the CLI adapter: the default `Auto` backend answers `branch_create` from
-//! libgit2, which creates the branch and sets HEAD without ever recording a
-//! tracking ref. The test failed there, so the write stayed and this is what
-//! pins the outcome now.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BranchKind;
 
-// No repository `user.*` here, so every commit this fixture makes is pinned per
-// call through the fixture crate's runner: a headless machine has no global
-// identity to borrow.
-
-/// One repo with a same-content `origin`, plus `feat` pushed there and deleted
-/// locally — the state a remote branch row is clicked from.
 fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -84,8 +68,6 @@ fn checking_out_a_remote_branch_tracks_it() {
     );
 }
 
-/// `git` for the one call whose OUTPUT is the assertion: it trims stdout and makes no
-/// success check of its own, so it is deliberately not the fixture crate's runner.
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)

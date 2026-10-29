@@ -1,24 +1,3 @@
-//! Seam-2 contract tests for the branch tree component (branch-tree-view
-//! execution plan, "Pin the component contract").
-//!
-//! These run the component through the bare-fixture harness made possible by
-//! the generified test-support helpers: a fixture view model, a fixture props
-//! block with a fixed timestamp, and assertions on both what is painted and
-//! which events come back — no git, no temporary repository, no application
-//! state, no worker channel. "The component is dumb" is a verified claim, not
-//! an assumption.
-//!
-//! The fixture applies a minimal caller policy between frames (it flips the
-//! tree-state fields the events name), exactly as a real surface would — so
-//! collapse/selection assertions exercise the whole props-in / paint-and-
-//! events-out round trip.
-//!
-//! Painted assertions stay substring-safe and position-anchored: a branch name
-//! often paints both in a row and in a repo-header chip, so galleys are
-//! filtered by exact text, font family, and vertical position rather than
-//! trusting the first match. The fixed timestamp prop is what makes the
-//! painted staleness text deterministic.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,16 +18,10 @@ use turbogit_ui::ui::branch_tree_view::{
 use turbogit_ui::ui::branches_tree::{BranchView, build_branch_view};
 use turbogit_ui::ui::components::{BRANCH_ROW_H, current_row_fill, row_ink, sync_ink};
 
-// --- fixture model builders (same shape as the pure-builder suite) ------------
-
-/// The fixed "now" every fixture renders against — painted staleness and
-/// freshness hints are therefore deterministic. 2026-06-01T12:00:00Z.
 fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(1_780_315_200, 0).expect("valid now")
 }
 
-/// The same shape as the pure-builder suite's fixture: "has a tracking
-/// relationship at all" is the loose reading, `DivergenceMeaning::AnyDrift`.
 fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
     Branch {
         name: name.to_string(),
@@ -64,7 +37,6 @@ fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
         ahead,
         behind,
         gone: false,
-        // Fresh relative to `now` (5 days old) — nothing dimmed by default.
         last_touched: Some(now() - chrono::Duration::days(5)),
         tip: None,
         remote: None,
@@ -73,7 +45,6 @@ fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
 
 fn stale_local(name: &str) -> Branch {
     let mut b = local(name, false, 0, 0);
-    // ~3 months before `now` — well past the 28-day staleness threshold.
     b.last_touched = Some(now() - chrono::Duration::days(90));
     b
 }
@@ -128,8 +99,6 @@ fn alpha_root() -> Root {
 }
 
 fn beta_root() -> Root {
-    // beta's checked-out branch is `wip` — the emphasis marker needs a current
-    // branch that is unambiguous across the two repos.
     root_with(
         "/beta",
         &[local("main", false, 0, 0), local("wip", false, 2, 1)],
@@ -149,8 +118,6 @@ fn alpha_tags() -> HashMap<RootId, Vec<(String, turbogit_domain::model::RefState
     tags
 }
 
-/// Everything the fixture render closure needs, owned (the harness state must
-/// be `'static`). The component receives borrows into this each frame.
 struct Fixture {
     roots: Vec<Root>,
     tags: HashMap<RootId, Vec<(String, turbogit_domain::model::RefState)>>,
@@ -163,10 +130,7 @@ struct Fixture {
     now: chrono::DateTime<chrono::Utc>,
     allows_rename: bool,
     allows_context_menu: bool,
-    /// Mirrors `TreeProps::collapse_remotes_by_default` (false = Branches-style
-    /// expanded-by-default, true = Log-pane-style collapsed-by-default).
     collapse_remotes_by_default: bool,
-    /// The events returned by the last completed frame.
     events: Vec<TreeEvent>,
 }
 
@@ -197,8 +161,6 @@ impl Fixture {
 
     fn empty_repo() -> Self {
         let mut empty = root_with("/empty", &[], None);
-        // A repo with no branches and no HEAD is the genuinely-empty state;
-        // an unborn current branch does not count as data.
         empty.head = None;
         Self {
             roots: vec![empty],
@@ -207,14 +169,12 @@ impl Fixture {
         }
     }
 
-    /// alpha alone, remote groups open: the per-remote collapse at top level.
     fn alpha_with_remotes() -> Self {
         let mut fx = Self::alpha_only();
         fx.tree.show_remotes = true;
         fx
     }
 
-    /// Two repositories, alpha's remotes revealed from its rollup.
     fn alpha_revealed_in_two_repos() -> Self {
         let mut fx = Self::two_repos();
         fx.tree
@@ -223,7 +183,6 @@ impl Fixture {
         fx
     }
 
-    /// The view model, rebuilt each frame exactly as the surfaces do.
     fn view(&self) -> BranchView {
         build_branch_view(
             &self.roots,
@@ -239,8 +198,6 @@ impl Fixture {
             .any(|r| !r.branches.is_empty() || r.head.is_some())
     }
 
-    /// The minimal caller policy (plan D4): the surface applies the tree's
-    /// events to the state block between painting and any dependent surface.
     fn apply(&mut self, event: &TreeEvent) {
         match event {
             TreeEvent::GroupToggled(TreeGroup::Local) => {
@@ -278,15 +235,11 @@ impl Fixture {
     }
 }
 
-/// A bare-fixture harness (seam 2): renders only the component, no shell.
 fn fixture_harness(fx: Fixture) -> Harness<'static, Fixture> {
     fixture_harness_at(fx, 720.0)
 }
 
-/// The same fixture at an explicit width, for the narrow-list cases.
 fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
-    // Kept local, not `harness::widget_harness`, whose state is `()`: the
-    // props-in / events-out round trip needs the `Fixture` itself as the state.
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, fx| {
@@ -325,8 +278,6 @@ fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
     harness
 }
 
-/// The `Role::Button` node labelled exactly `label`. Picks the topmost match —
-/// two repos each paint a "Local" / "Tags" / "Fetch" button.
 #[track_caller]
 fn button<'t>(harness: &'t Harness<'_, Fixture>, label: &'t str) -> Node<'t> {
     let mut nodes: Vec<Node<'t>> = harness
@@ -345,8 +296,6 @@ fn button<'t>(harness: &'t Harness<'_, Fixture>, label: &'t str) -> Node<'t> {
     })
 }
 
-/// Click a labelled button and return the events the component emitted on
-/// that frame — read before any further `step` can overwrite them.
 #[track_caller]
 fn click_events(harness: &mut Harness<'_, Fixture>, label: &str) -> Vec<TreeEvent> {
     button(harness, label).click();
@@ -354,8 +303,6 @@ fn click_events(harness: &mut Harness<'_, Fixture>, label: &str) -> Vec<TreeEven
     harness.state().events.clone()
 }
 
-/// All text galleys painting exactly `text` (rows vs chips disambiguate by
-/// their vertical position).
 fn galleys_for(harness: &Harness<'_, Fixture>, text: &str) -> Vec<PaintedGalley> {
     painted_galleys(harness)
         .into_iter()
@@ -363,8 +310,6 @@ fn galleys_for(harness: &Harness<'_, Fixture>, text: &str) -> Vec<PaintedGalley>
         .collect()
 }
 
-/// Every path stroked in the accent text ink, as `(bounds, stroke)` — the shape
-/// the current marker's check icon paints.
 fn accent_paths(harness: &Harness<'_, Fixture>) -> Vec<(egui::Rect, egui::Stroke)> {
     harness
         .output()
@@ -384,25 +329,10 @@ fn accent_paths(harness: &Harness<'_, Fixture>) -> Vec<(egui::Rect, egui::Stroke
         .collect()
 }
 
-/// True when some painted galley contains `needle`. Substring, because a painted
-/// string is rarely the needle whole; exact-text callers ask [`galleys_for`].
 fn painted_contains(harness: &Harness<'_, Fixture>, needle: &str) -> bool {
     painted_text(harness).iter().any(|t| t.contains(needle))
 }
 
-// --- rows per repository ------------------------------------------------------
-
-/// Each repository paints its own block, and its band's state reaches the
-/// screen as the coloured summary words alone — no dot leads them, and a
-/// repository with nothing to report says nothing.
-///
-/// **Why the dot left.** The band carried a heading status dot first beside
-/// and then inside its summary (the mark pair's leading dot), and the head-ref
-/// chip and the Fetch already fix what the band is: the summary reads as a
-/// sentence on the band, so the shape was chrome the words never needed. The
-/// state still has exactly one presentation per band — the one map's colour
-/// on the one summary galley — and "one state voice per repo header" holds
-/// with no circle to count.
 #[test]
 fn rows_render_per_repository_with_their_state_in_words_alone() {
     let mut fx = Fixture::two_repos();
@@ -415,11 +345,6 @@ fn rows_render_per_repository_with_their_state_in_words_alone() {
     assert!(texts.iter().any(|t| t.contains("beta")));
     assert!(texts.iter().any(|t| t.contains("wip")));
 
-    // The band is located by its own name. No mark-radius circle sits on
-    // either band's line — the dot's one painter no longer runs on a band —
-    // and beta's diverged state is stated by its summary galley, in the one
-    // map's colour, on the band's own line. alpha is clean: its band carries
-    // no state galley at all.
     for repo in ["alpha", "beta"] {
         let name = galleys_for(&h, repo)
             .into_iter()
@@ -460,20 +385,6 @@ fn rows_render_per_repository_with_their_state_in_words_alone() {
     );
 }
 
-// --- group labels read as structure --------------------------------------------
-
-/// A section header's count is a chip of its own on the band's **trailing**
-/// edge, and the header sits on a band of its own.
-///
-/// **Why the badge moved.** The count used to sit immediately beside the
-/// uppercase label, which is where a reader looks for a word's continuation and
-/// therefore made a *label* and its *count* read as one string. Ticket 16
-/// requires the scope band to carry the count right-aligned rather than
-/// interpolated into the label, and the count to be the shared **count chip**,
-/// not the v1 9px proportional badge. The assertion that moved is the
-/// "belongs to the label, not to the far end of the strip" one: it is now the
-/// opposite claim, stated positively — the count is at the far end, in the
-/// chip's own fill and ink, and the label string still never contains it.
 #[test]
 fn a_section_header_right_aligns_its_count_as_a_chip_on_a_band() {
     use turbogit_ui::ui::components::{RowState, current_row_fill, row_fill};
@@ -483,7 +394,6 @@ fn a_section_header_right_aligns_its_count_as_a_chip_on_a_band() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Five local branches: the label alone, and the count as its own galley.
     let label = galleys_for(&h, "LOCAL");
     assert_eq!(
         label.len(),
@@ -499,8 +409,6 @@ fn a_section_header_right_aligns_its_count_as_a_chip_on_a_band() {
         .into_iter()
         .find(|g| (g.pos.y - label[0].pos.y).abs() < 12.0)
         .expect("the count paints beside the label");
-    // Right-aligned: the count's chip ends one `PAD_LIST` from the band's own
-    // right edge, and it is nowhere near the label.
     let band_right = filled_rects(&h)
         .into_iter()
         .filter(|(rect, fill)| {
@@ -512,8 +420,6 @@ fn a_section_header_right_aligns_its_count_as_a_chip_on_a_band() {
         .map(|(rect, _)| rect.right())
         .next()
         .expect("the section band");
-    // …and it is the shared count chip: the raised fill, the secondary ink, the
-    // compact chip radius, at the chip's own height.
     let chip = filled_rects(&h)
         .into_iter()
         .find(|(rect, fill)| {
@@ -564,8 +470,6 @@ fn a_section_header_right_aligns_its_count_as_a_chip_on_a_band() {
     );
 }
 
-/// A subgroup, a section header and a branch row are distinguishable by painted
-/// geometry — the defect this closes is that all three read as content.
 #[test]
 fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
     use test_support::harness::painted_paths;
@@ -579,7 +483,6 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
     let dir = &galleys_for(&h, "feature/")[0];
     let child = &galleys_for(&h, "a")[0];
 
-    // The subgroup prints its segment as data, with a folder glyph before it.
     assert_eq!(
         dir.family,
         egui::FontFamily::Monospace,
@@ -594,7 +497,6 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
         "the subgroup carries no folder glyph"
     );
 
-    // Only the section header sits on a band.
     let banded = |y: f32| {
         filled_rects(&h).into_iter().any(|(rect, fill)| {
             fill == Palette::SECTION_BG
@@ -609,8 +511,6 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
         "a subgroup is not the same kind of strip"
     );
 
-    // A subgroup hangs at its section's inset and is told apart from it by the
-    // band; a branch row is told apart by hanging further in.
     assert!(
         child.pos.x > dir.pos.x + 1.0,
         "the indent step between a subgroup and its children is not visible: \
@@ -626,10 +526,6 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
     );
 }
 
-/// One nesting level hangs its children exactly one icon's width. Every row in
-/// this tree leads with an icon, so a level costs one icon and the child's icon
-/// lands where its parent's ends; the step is measured off the painted frame so
-/// a change to either metric shows up here rather than in a screenshot review.
 #[test]
 fn a_nested_level_hangs_one_icon_width() {
     use turbogit_ui::ui::components::KIT_ICON;
@@ -639,9 +535,6 @@ fn a_nested_level_hangs_one_icon_width() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Both measured galleys are name chips, so the chip's own inset cancels and
-    // what is left is exactly one level of hang: a plain label (the subgroup's
-    // own text) would carry 6px more and read as a wider step than the tree has.
     let base = galleys_for(&h, "stale-branch")
         .into_iter()
         .next()
@@ -658,7 +551,6 @@ fn a_nested_level_hangs_one_icon_width() {
     );
 }
 
-/// The collapsed rollup sits at `LOCAL`'s level, so it takes the same casing.
 #[test]
 fn the_collapsed_rollup_reads_as_a_section_label() {
     let mut fx = Fixture::alpha_only();
@@ -678,33 +570,22 @@ fn the_collapsed_rollup_reads_as_a_section_label() {
     );
 }
 
-// --- the repo header's summary -------------------------------------------------
-
-/// A header says what state its repository is in: the current branch's counts in
-/// the one badge spelling, then the state in words. A repository with nothing
-/// outstanding is the one that has no sentence: the band paints no words,
-/// because "in sync" is a word for the absence of a fact.
 #[test]
 fn the_repo_header_names_its_status() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
     let texts = painted_text(&h);
 
-    // alpha: nothing to report, so nothing said.
     assert!(
         !texts.iter().any(|t| t == "in sync"),
         "a clean repo's band says nothing: {texts:#?}"
     );
-    // beta: its current branch `wip` is 2 ahead and 1 behind, and the counts
-    // arrive in the same spelling the row's badges use.
     assert!(
         texts.iter().any(|t| t == "↑2 · ↓1 · diverged"),
         "the counts and the state both belong to the header summary: {texts:#?}"
     );
 }
 
-/// A band is the top of a block, so it carries a resting fill that is neither a
-/// row's hover fill nor a current row's band.
 #[test]
 fn the_repo_header_paints_a_resting_band() {
     use turbogit_ui::ui::components::{RowState, current_row_fill, row_fill};
@@ -712,7 +593,6 @@ fn the_repo_header_paints_a_resting_band() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // Located by the repository's own name, the way a reader finds it.
     let band_y = galleys_for(&h, "alpha")[0].pos.y + 6.0;
     let band = filled_rects(&h)
         .into_iter()
@@ -732,8 +612,6 @@ fn the_repo_header_paints_a_resting_band() {
     );
 }
 
-/// The current-branch pill is part of the repo's identity, so it rides the name
-/// rather than trailing the strip.
 #[test]
 fn the_current_branch_pill_sits_with_the_repo_name() {
     let mut h = fixture_harness(Fixture::two_repos());
@@ -756,8 +634,6 @@ fn the_current_branch_pill_sits_with_the_repo_name() {
     );
 }
 
-// --- directory grouping and counts --------------------------------------------
-
 #[test]
 fn directory_grouping_shows_derived_count() {
     let mut h = fixture_harness(Fixture::two_repos());
@@ -765,11 +641,8 @@ fn directory_grouping_shows_derived_count() {
 
     let texts = painted_text(&h);
     assert!(texts.iter().any(|t| t.contains("feature/")), "{texts:#?}");
-    // The count is derived from the two leaves beneath `feature/`.
     assert!(texts.iter().any(|t| t == "2"), "{texts:#?}");
 }
-
-// --- prefix stripping inside a remote group -----------------------------------
 
 #[test]
 fn remote_group_leaf_strips_the_remote_prefix() {
@@ -789,10 +662,6 @@ fn remote_group_leaf_strips_the_remote_prefix() {
     );
 }
 
-// --- the row's zones ----------------------------------------------------------
-
-/// The tracking branch sits in a zone of its own, so it lines up down the list
-/// instead of drifting to wherever each name happens to end.
 #[test]
 fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
     let mut fx = Fixture::two_repos();
@@ -819,8 +688,6 @@ fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
     );
 }
 
-/// Every row leads with an icon so the names line up — local and remote
-/// alike — and the names share one left edge down the list.
 #[test]
 fn every_row_leads_with_an_icon_at_its_name_edge() {
     use test_support::harness::painted_paths;
@@ -829,12 +696,9 @@ fn every_row_leads_with_an_icon_at_its_name_edge() {
     fx.tree.show_remotes = true;
     let mut h = fixture_harness(fx);
     settle(&mut h);
-    // Nothing was ever hovered: `settle` only steps frames.
 
     assert!(row_buttons(&h) > 0, "the fixture paints branch rows");
 
-    // Every row leads with an icon stroked in the slot before its name — local
-    // and remote alike — and rows at the same depth share one name edge.
     for name in ["starred", "remote-only"] {
         let galley = galleys_for(&h, name)
             .into_iter()
@@ -880,9 +744,6 @@ fn every_row_leads_with_an_icon_at_its_name_edge() {
     );
 }
 
-/// The failure mode the column layout exists to remove: at a width where
-/// nothing fits, zones must still not sit on top of each other, and no run of
-/// text may escape the row.
 #[test]
 fn a_narrow_list_keeps_every_zone_inside_the_row() {
     const NARROW: f32 = 300.0;
@@ -938,9 +799,6 @@ fn a_narrow_list_keeps_every_zone_inside_the_row() {
     }
 }
 
-/// How many Buttons are branch rows: a full-width row-height strip that is not a
-/// group or section header (a remote group header is full width too, but rides a
-/// shorter section line).
 fn row_buttons(h: &Harness<'_, Fixture>) -> usize {
     h.get_all_by_role(Role::Button)
         .filter(|n| {
@@ -954,23 +812,12 @@ fn row_buttons(h: &Harness<'_, Fixture>) -> usize {
         .count()
 }
 
-/// How many Buttons carry exactly `label`.
 fn count_label(h: &Harness<'_, Fixture>, label: &str) -> usize {
     h.get_all_by_role(Role::Button)
         .filter(|n| n.accesskit_node().label().as_deref() == Some(label))
         .count()
 }
 
-// --- the active-branch marker -------------------------------------------------
-
-/// One current marker per repository section — the row's answer to "where am I
-/// right now". It is a check icon in the accent ink on no fill, so a current row
-/// carries no second filled shape (see
-/// `the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon`).
-///
-/// (case, fixture, remotes revealed, markers expected). The third is the
-/// load-bearing one — revealing remotes must not add a second marker for the
-/// same one current branch.
 type CurrentMarkerRow = (&'static str, fn() -> Fixture, bool, usize);
 
 const CURRENT_MARKERS: [CurrentMarkerRow; 3] = [
@@ -1006,17 +853,12 @@ fn one_current_marker_per_repo_section() {
     }
 }
 
-/// The current row answers "where am I" with a band across the whole list plus
-/// its marker — not with tinted name ink, which was a third marker for the same
-/// fact.
 #[test]
 fn current_row_bands_the_whole_list_and_keeps_plain_name_ink() {
     const LIST_W: f32 = 720.0;
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // beta's current branch is `wip`; it paints twice — the repo header's chip
-    // above, the row below.
     let row = galleys_for(&h, "wip")
         .into_iter()
         .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
@@ -1041,11 +883,6 @@ fn current_row_bands_the_whole_list_and_keeps_plain_name_ink() {
     );
 }
 
-/// The repository band's head ref is a **neutral ref chip**, and the current
-/// row's marker is a **check icon in the accent text ink** — two different
-/// treatments on purpose. The proof is two: the band chip's fill is the
-/// raised-on-card surface, and the marker paints no chip-sized rect under it
-/// at all.
 #[test]
 fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
     let mut h = fixture_harness(Fixture::two_repos());
@@ -1056,15 +893,10 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
         .next()
         .expect("the current row's marker, stroked in the accent text ink")
         .0;
-    // beta's band chip is the *upper* `wip`: the band sits above its row.
     let chip = galleys_for(&h, "wip")
         .into_iter()
         .min_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
         .expect("the repo band's head ref");
-    // The **innermost** fill under a galley: of the rects containing this text,
-    // the smallest, which is the chip the text is printed in rather than the row
-    // band or the chip beside it. The 2px brand rail is a rail, not a chip, and
-    // reading it as one would answer the wrong question.
     let fill_under = |pos: Pos2| {
         filled_rects(&h)
             .into_iter()
@@ -1077,9 +909,6 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
         Some(Palette::RAISED_ON_CARD),
         "the band's head ref is a neutral ref chip, never a brand fill"
     );
-    // The marker paints no chip under it at all: the only rects at its center
-    // are the row's own band and the rail, so no row carries a second filled
-    // shape.
     let under_marker: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(rect, _)| rect.contains(marker_rect.center()))
@@ -1094,9 +923,6 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
     );
 }
 
-/// A row that is both current and carrying sync state keeps the state it also
-/// carries: the band must not swallow the words. Each badge paints its arrow
-/// and count in the data face and the one state ink, and no dot leads them.
 #[test]
 fn a_current_row_keeps_its_state_marks() {
     use turbogit_ui::ui::components::SyncKind;
@@ -1106,7 +932,6 @@ fn a_current_row_keeps_its_state_marks() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // beta's `wip` is current *and* 2 ahead / 1 behind.
     let row = galleys_for(&h, "wip")
         .into_iter()
         .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
@@ -1145,7 +970,6 @@ fn a_current_row_keeps_its_state_marks() {
         state_dots.is_empty(),
         "no leading dot on a row's state, only its coloured words: {state_dots:#?}"
     );
-    // …and neither state ink is ever a *fill* anywhere in the frame.
     let state_fills: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(_, fill)| {
@@ -1159,10 +983,6 @@ fn a_current_row_keeps_its_state_marks() {
     );
 }
 
-// Revealing remotes must not multiply the marker: third `CURRENT_MARKERS` row.
-
-// --- favourite pinning ----------------------------------------------------------
-
 #[test]
 fn favorite_pins_above_the_current_branch_row() {
     let mut fx = Fixture::alpha_only();
@@ -1171,8 +991,6 @@ fn favorite_pins_above_the_current_branch_row() {
     settle(&mut h);
 
     let starred_y = galleys_for(&h, "starred")[0].pos.y;
-    // "main" paints twice in alpha's section: the header chip first, the row
-    // below. Pinning means some "main" galley sits *below* the favorite.
     let main_ys: Vec<f32> = galleys_for(&h, "main").iter().map(|g| g.pos.y).collect();
     assert!(
         main_ys.iter().any(|y| *y > starred_y),
@@ -1180,14 +998,6 @@ fn favorite_pins_above_the_current_branch_row() {
     );
 }
 
-// --- group toggles: events and collapse ---------------------------------------
-
-/// A group header's click emits the group it names, and applying that event
-/// opens or closes it. Each row names *which way*: Tags opens (collapsed by
-/// default), Local collapses (open).
-///
-/// (case, the header Button's label, the group, its content string, before,
-/// after)
 type GroupToggleRow = (
     &'static str,
     &'static str,
@@ -1247,11 +1057,6 @@ fn a_group_header_click_emits_its_own_group_and_applies_it() {
     }
 }
 
-// --- per-remote collapse --------------------------------------------------------
-
-/// A remote header's click emits `RemoteToggled` for its own `(root, remote)`,
-/// which hides that remote's branches while its header stays.
-/// (case, the fixture that reaches the same header)
 type PerRemoteCollapseRow = (&'static str, fn() -> Fixture);
 
 const PER_REMOTE_COLLAPSE: [PerRemoteCollapseRow; 2] = [
@@ -1267,8 +1072,6 @@ fn remote_header_toggle_emits_event_and_collapses_that_remote() {
     for &(case, fixture) in &PER_REMOTE_COLLAPSE {
         let mut h = fixture_harness(fixture());
         settle(&mut h);
-        // Exact text, not substring: a `galleys_for` lookup cannot be satisfied
-        // by a galley that merely contains the name.
         assert!(
             !galleys_for(&h, "remote-only").is_empty(),
             "{case}: the remote's branches are open before the header is clicked"
@@ -1295,9 +1098,6 @@ fn remote_header_toggle_emits_event_and_collapses_that_remote() {
     }
 }
 
-/// The Log pane's tree starts every remote group collapsed: the header rows
-/// paint, their branches hide until a header click expands them — and a second
-/// click re-collapses.
 #[test]
 fn remote_groups_start_collapsed_when_default_is_collapsed() {
     let mut fx = Fixture::alpha_only();
@@ -1330,7 +1130,6 @@ fn remote_groups_start_collapsed_when_default_is_collapsed() {
     );
 }
 
-/// Revealing one repository's remotes is that repository's own state.
 #[test]
 fn revealing_remotes_leaves_the_other_repository_rolled_up() {
     let mut fx = Fixture::two_repos();
@@ -1338,7 +1137,6 @@ fn revealing_remotes_leaves_the_other_repository_rolled_up() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Both repos start rolled up, and no remote group is revealed.
     assert!(
         painted_text(&h)
             .iter()
@@ -1348,7 +1146,6 @@ fn revealing_remotes_leaves_the_other_repository_rolled_up() {
     );
     assert!(galleys_for(&h, "origin").is_empty());
 
-    // The topmost rollup is alpha's.
     button(&h, "Remote").click();
     settle(&mut h);
 
@@ -1366,8 +1163,6 @@ fn revealing_remotes_leaves_the_other_repository_rolled_up() {
     );
 }
 
-/// The reveal has a way back: one click on the header a revealed repo was given
-/// restores its rollup line.
 #[test]
 fn one_click_returns_a_revealed_repository_to_its_rollup() {
     let mut fx = Fixture::two_repos();
@@ -1379,8 +1174,6 @@ fn one_click_returns_a_revealed_repository_to_its_rollup() {
     settle(&mut h);
     assert!(!galleys_for(&h, "origin").is_empty(), "revealed");
 
-    // The revealed repo is the only one still offering a `Remote` button whose
-    // click means "hide again": its header sits above beta's rollup.
     button(&h, "Remote").click();
     settle(&mut h);
     assert!(
@@ -1400,10 +1193,6 @@ fn one_click_returns_a_revealed_repository_to_its_rollup() {
     );
 }
 
-// Revealing a repository must not disturb the per-remote collapse: second
-// `PER_REMOTE_COLLAPSE` row.
-
-/// A reveal is tree state, so searching and clearing must not lose it.
 #[test]
 fn a_reveal_survives_a_filter_round_trip() {
     let mut fx = Fixture::two_repos();
@@ -1431,14 +1220,11 @@ fn a_reveal_survives_a_filter_round_trip() {
     );
 }
 
-// --- the remotes-visible switch -------------------------------------------------
-
 #[test]
 fn remote_rollup_click_emits_the_visibility_switch() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // Collapsed by default: the rollup states the real hidden counts.
     let texts = painted_text(&h);
     assert!(texts.iter().any(|t| t.contains("REMOTE")), "{texts:#?}");
     assert!(
@@ -1461,8 +1247,6 @@ fn remote_rollup_click_emits_the_visibility_switch() {
     );
 }
 
-// --- search filtering -------------------------------------------------------------
-
 #[test]
 fn search_filters_the_tree_live() {
     let mut fx = Fixture::two_repos();
@@ -1476,13 +1260,6 @@ fn search_filters_the_tree_live() {
     assert!(!texts.iter().any(|t| t.contains("v1.0")));
 }
 
-// --- the dead ends: no match, and nothing at all ---------------------------------
-
-/// A dead end names itself and offers exactly one action: create the name it
-/// named. The name the event carries is per row.
-///
-/// (case, fixture, search text, the sentence painted, the action's label, the name
-/// the event carries)
 type CreateDeadEndRow = (
     &'static str,
     fn() -> Fixture,
@@ -1536,8 +1313,6 @@ fn a_dead_end_names_itself_and_offers_to_create_that_name() {
     }
 }
 
-// --- the reading state -----------------------------------------------------------
-
 #[test]
 fn reading_state_shows_while_a_scan_is_in_flight() {
     let mut fx = Fixture::empty_repo();
@@ -1555,8 +1330,6 @@ fn reading_state_shows_while_a_scan_is_in_flight() {
         "a reading state offers no create action yet"
     );
 }
-
-// --- the disabled rename capability ----------------------------------------------
 
 #[test]
 fn rename_capability_disabled_never_edits_inline() {
@@ -1590,7 +1363,6 @@ fn the_rename_editors_buttons_stay_inside_its_row() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // The list's own right edge, read off a sibling row at full width.
     let row_right = button(&h, "main").rect().right();
     let apply = button(&h, "Apply rename");
     assert!(
@@ -1598,7 +1370,6 @@ fn the_rename_editors_buttons_stay_inside_its_row() {
         "Apply must sit inside the row (its edge {:?} vs the row's {row_right:?})",
         apply.rect()
     );
-    // …and so it answers a click: the button is the mouse path to committing.
     apply.click();
     h.step();
     assert!(
@@ -1627,9 +1398,6 @@ fn rename_editor_commits_the_draft_as_an_event() {
         painted_text(&h).iter().any(|t| t.contains("renamed-wip")),
         "with the capability the draft paints on the row"
     );
-    // Commit via the keyboard path (Enter on the editor), which the row's
-    // Apply button also answers — see
-    // `the_rename_editors_buttons_stay_inside_its_row` for the mouse path.
     h.key_press(egui::Key::Enter);
     h.step();
     h.step();
@@ -1644,14 +1412,11 @@ fn rename_editor_commits_the_draft_as_an_event() {
     );
 }
 
-// --- row activation carries the owning repository --------------------------------
-
 #[test]
 fn row_click_emits_owner_and_branch_not_a_bare_name() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // Two repositories both have a `main`; `wip` exists only in beta. Click it.
     let events = click_events(&mut h, "wip");
     assert!(
         events.contains(&TreeEvent::RowClicked {
@@ -1669,9 +1434,6 @@ fn double_clicking_a_row_emits_activation_with_its_owner() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Two presses 0.1 s of *simulated* time apart. The harness's own step
-    // advances the clock by more than egui's 0.3 s double-click window, so
-    // the input time is stated here rather than left to the frame cadence.
     for i in 0..2 {
         *h.input_mut() = egui::RawInput {
             time: Some(1.0 + 0.1 * i as f64),
@@ -1690,8 +1452,6 @@ fn double_clicking_a_row_emits_activation_with_its_owner() {
     );
 }
 
-/// The row's status badges are its own, permanently: a hover must not blank
-/// them. The context menu is the only place a row's actions live.
 #[test]
 fn a_hovered_row_keeps_painting_its_sync_badges() {
     let mut fx = Fixture::two_repos();
@@ -1722,19 +1482,6 @@ fn a_hovered_row_keeps_painting_its_sync_badges() {
     );
 }
 
-// --- 16: the row's own vocabulary — fill, rail, name chip, state words --------
-//
-// R1/R4/R6 at the render seam. Every claim here is made against **values** and
-// against **geometry**, never against "it looks blue": the row-selected token
-// and the selection token are close in hue, so a hue-shaped assertion passes on
-// both and proves nothing. And every galley is located by its row's rect,
-// because a branch name paints more than once in a frame.
-
-/// The rect painted with `fill` in a row-height band, or `None`.
-///
-/// Row bands are found by their own fill rather than by counting rows: this is
-/// the assertion that says *which* row it is about, so deriving it from the row
-/// order would make the geometry depend on the thing being checked.
 fn row_band(harness: &Harness<'_, Fixture>, fill: egui::Color32, who: &str) -> egui::Rect {
     let hits: Vec<egui::Rect> = filled_rects(harness)
         .into_iter()
@@ -1751,11 +1498,6 @@ fn row_band(harness: &Harness<'_, Fixture>, fill: egui::Color32, who: &str) -> e
     hits.into_iter().next().expect("one row band")
 }
 
-/// The 2px brand rail at `row`'s leading edge, if the row carries one.
-///
-/// Matched on the leading edge **and** the row's own vertical band, because a
-/// marked list has more than one rail in it and a rail that merely shares a
-/// height would answer about a different row.
 fn rail_at(harness: &Harness<'_, Fixture>, row: egui::Rect) -> Option<egui::Rect> {
     filled_rects(harness)
         .into_iter()
@@ -1768,7 +1510,6 @@ fn rail_at(harness: &Harness<'_, Fixture>, row: egui::Rect) -> Option<egui::Rect
         .map(|(rect, _)| rect)
 }
 
-/// The first painted text origin inside `row`, left to right.
 fn first_text_origin(harness: &Harness<'_, Fixture>, row: egui::Rect) -> f32 {
     let mut on_row: Vec<PaintedGalley> = painted_galleys(harness)
         .into_iter()
@@ -1781,12 +1522,6 @@ fn first_text_origin(harness: &Harness<'_, Fixture>, row: egui::Rect) -> f32 {
         .unwrap_or_else(|| panic!("no text painted inside {row:?}"))
 }
 
-/// **The selected and the current row both take a 2px brand rail at the leading
-/// edge** — the one accent rail, from the one painter, and never hand-rolled.
-///
-/// The two are picked apart by their *fills*, which is the point: the selected
-/// row takes the list-row fill, the current row takes the current ref's own
-/// resting band, and each answers with a value rather than a hue.
 #[test]
 fn the_selected_and_current_rows_take_the_row_selected_fill_and_a_brand_rail() {
     use turbogit_ui::ui::components::RowState;
@@ -1796,8 +1531,6 @@ fn the_selected_and_current_rows_take_the_row_selected_fill_and_a_brand_rail() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Select a plain row, so the frame holds a selected row *and* the current
-    // row at once and both claims are about a real paint.
     let events = click_events(&mut h, "starred");
     assert!(
         events
@@ -1831,9 +1564,6 @@ fn the_selected_and_current_rows_take_the_row_selected_fill_and_a_brand_rail() {
     }
 }
 
-/// The rail is **paint, not layout**. A selected row's first text origin is an
-/// unselected row's, origin for origin — which is the assertion a rail reserved
-/// as padding breaks.
 #[test]
 fn selecting_a_row_does_not_move_its_first_text() {
     use turbogit_ui::ui::components::RowState;
@@ -1882,15 +1612,10 @@ fn selecting_a_row_does_not_move_its_first_text() {
     );
 }
 
-/// **No list row in this pane paints a solid selection-token fill** — not at
-/// rest, not hovered, and not when the *current* row is the selected one, which
-/// is the state in which the current-ref band used to be reached.
 #[test]
 fn no_list_row_in_the_tree_paints_the_selection_token() {
     use turbogit_ui::ui::components::RowState;
 
-    // (1) The current row selected: the exact state whose band was the selection
-    // token before this ticket.
     let mut fx = Fixture::alpha_only();
     fx.tree.show_remotes = false;
     let mut h = fixture_harness(fx);
@@ -1918,8 +1643,6 @@ fn no_list_row_in_the_tree_paints_the_selection_token() {
             current_row_fill(RowState::Default)
         );
     }
-    // …and the row that *is* the selected current row takes the list-row fill, so
-    // "the current ref" and "the chosen row" cannot be two different blues.
     let selected = row_band(&h, Palette::ROW_SELECTED, "the selected list row");
     assert!(
         rail_at(&h, selected).is_some(),
@@ -1927,9 +1650,6 @@ fn no_list_row_in_the_tree_paints_the_selection_token() {
     );
 }
 
-/// **No row carries two filled pills.** A row's chips are counted at the shared
-/// chip height, so this is a statement about *shape* first: whatever fills a row
-/// paints, at most one of them is a chip.
 #[test]
 fn no_branch_row_carries_two_filled_pills() {
     let mut fx = Fixture::alpha_only();
@@ -1950,7 +1670,6 @@ fn no_branch_row_carries_two_filled_pills() {
              filled shape",
             chips.len()
         );
-        // And the one it may carry is the ref chip, on the raised-on-card fill.
         for (rect, fill) in chips {
             assert_eq!(
                 fill,
@@ -1962,10 +1681,6 @@ fn no_branch_row_carries_two_filled_pills() {
     }
 }
 
-/// **The ref chip's fill is the raised-on-card surface**, at the shared chip
-/// height, in the data face, inked in the row's own ink — and the pane paints no
-/// brand-filled chip at all, so the one blue object left is the New Branch
-/// button.
 #[test]
 fn a_branch_name_is_painted_on_the_raised_on_card_ref_chip_fill() {
     let mut fx = Fixture::alpha_only();
@@ -2004,7 +1719,6 @@ fn a_branch_name_is_painted_on_the_raised_on_card_ref_chip_fill() {
         "in the data face, because it holds a ref name"
     );
 
-    // The whole pane: no chip anywhere fills the brand token.
     let brand_chips: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(_, fill)| *fill == Palette::BRAND)
@@ -2018,7 +1732,6 @@ fn a_branch_name_is_painted_on_the_raised_on_card_ref_chip_fill() {
     );
 }
 
-/// Every full-width branch row's rect.
 fn row_buttons_rects(harness: &Harness<'_, Fixture>) -> Vec<egui::Rect> {
     harness
         .get_all_by_role(Role::Button)
@@ -2034,20 +1747,6 @@ fn row_buttons_rects(harness: &Harness<'_, Fixture>) -> Vec<egui::Rect> {
         .collect()
 }
 
-// --- the pure builder stays pure ------------------------------------------------
-
-/// **The pure branches tree builder is git-free and styling-free.** The claim
-/// was a doc comment and a convention; a renderer change is exactly the kind of
-/// edit that breaks it by accident, so it is asserted.
-///
-/// Scoped, deliberately, to what the contract actually says: **no egui
-/// reference at all**, **no import of any `theme` item but the one
-/// `RepoState` re-export**, and **no `Palette::*` reference**. The re-export is
-/// allowed because it carries an enum, not a colour: the builder derives a
-/// repository's *state* and hands the renderer a value to look up, which keeps
-/// the git-free property intact while leaving every colour decision in the
-/// renderer. It is the one crate-local reference the module is allowed, so a
-/// second one fails here.
 #[test]
 fn the_pure_branches_tree_builder_holds_no_egui_and_no_styling() {
     let src = std::fs::read_to_string(
@@ -2055,8 +1754,6 @@ fn the_pure_branches_tree_builder_holds_no_egui_and_no_styling() {
     )
     .expect("read the pure builder");
 
-    // (1) No egui. Not `egui::`, not a `Painter`, not a colour type, not a
-    // `Sense`: the builder has no window to draw in and no state to react to.
     for forbidden in ["egui", "Painter", "Color32", "Sense", "Rect", "Painter"] {
         assert!(
             !src.contains(forbidden),
@@ -2065,7 +1762,6 @@ fn the_pure_branches_tree_builder_holds_no_egui_and_no_styling() {
              it a layer it does not belong to"
         );
     }
-    // (2) The only `theme` reference is the one permitted enum re-export.
     let theme_refs: Vec<&str> = src
         .lines()
         .filter(|line| line.contains("theme"))
@@ -2078,14 +1774,11 @@ fn the_pure_branches_tree_builder_holds_no_egui_and_no_styling() {
          enum it re-exports. Anything else it reaches into the theme for is a \
          colour decision made in the wrong layer — found at {theme_refs:?}"
     );
-    // (3) No `Palette::*` at all: the enum carries no colour, and a value that
-    // carries a colour is a rendering decision, not a tree.
     assert!(
         !src.contains("Palette"),
         "the pure builder names no Palette item: the state enum is re-exported \
          so the *renderer* decides what a state looks like"
     );
-    // (4) And it is still git-free: no engine, no `GitExecutor`, no `dispatch`.
     for forbidden in [
         "GitExecutor",
         "dispatch",
@@ -2100,8 +1793,6 @@ fn the_pure_branches_tree_builder_holds_no_egui_and_no_styling() {
     }
 }
 
-// --- the repository header's Fetch request ----------------------------------------
-
 #[test]
 fn repo_header_fetch_emits_a_fetch_request() {
     let mut fx = Fixture::two_repos();
@@ -2109,7 +1800,6 @@ fn repo_header_fetch_emits_a_fetch_request() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Both repos paint a Fetch button; `button` picks alpha's (the topmost).
     button(&h, "Fetch").click();
     h.step();
     let events = h.state().events.clone();
@@ -2120,8 +1810,6 @@ fn repo_header_fetch_emits_a_fetch_request() {
         "{events:#?}"
     );
 }
-
-// --- the repo scope narrows the tree ----------------------------------------------
 
 #[test]
 fn repo_scope_narrows_to_one_section() {
@@ -2143,10 +1831,6 @@ fn repo_scope_narrows_to_one_section() {
     );
 }
 
-// --- right-click asks for the context menu (branch-context-menu ticket 03) ----
-
-/// A right-click on a branch row reports the owning repository and the
-/// branch, exactly like every other row event.
 #[test]
 fn a_right_click_on_a_row_asks_for_the_context_menu() {
     let mut h = fixture_harness(Fixture::two_repos());
@@ -2164,8 +1848,6 @@ fn a_right_click_on_a_row_asks_for_the_context_menu() {
     );
 }
 
-/// The capability is a prop: a surface that does not allow the menu (the Git
-/// Log pane today) emits nothing on a right-click.
 #[test]
 fn a_surface_without_the_capability_emits_nothing_on_right_click() {
     let mut fx = Fixture::two_repos();

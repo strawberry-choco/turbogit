@@ -1,9 +1,3 @@
-//! Issue #8 — push dry-run passthrough through the engine seam.
-//!
-//! Headless integration tests over real git repositories (tempdir + system
-//! `git`): one repo per scenario, a bare remote as upstream, and assertions on
-//! full commit SHAs in log order.
-
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use turbogit_domain::error::TgError;
@@ -11,13 +5,6 @@ use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-// `repo_ahead_of_origin` stays local, not `repo_with_origin`: the remote PATH is
-// asserted (`the report contains("remote.git")`), and the fixture is a superset —
-// `c1` pushed, two more local commits, and a second clone that fast-forwards the
-// bare to `d1` so both sides diverge. `diverged_from_origin` builds on it.
-
-/// Append a line to `file.txt` in `dir`, stage, commit, and return the new
-/// HEAD SHA (`git rev-parse HEAD`).
 fn commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -34,11 +21,6 @@ fn commit(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repo on `main` with local identity configured, a bare remote at
-/// `<tmp>/remote.git`, and `main` pushed to it (commit c1); then two more
-/// local commits c2 and c3 that are ahead of `origin/main`.
-///
-/// Returns `(tempdir guard, repo path, bare remote path, [c1, c2, c3] SHAs)`.
 fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -66,26 +48,16 @@ fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, PathBuf, Vec<String>) 
     (tmp, repo, remote, vec![c1, c2, c3])
 }
 
-/// Diverged history: `repo_ahead_of_origin()` plus a second clone that
-/// fast-forwards the bare remote to its own commit d1, so the original repo
-/// (c2, c3) and the remote (d1) have truly divergent `main` tips.
-///
-/// Returns `(tempdir guard, repo path, bare remote path, d1 SHA)`.
 fn diverged_from_origin() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let (tmp, repo, remote, _shas) = repo_ahead_of_origin();
 
     let other = tmp.path().join("other");
     git(tmp.path(), &["clone", remote.to_str().unwrap(), "other"]);
-    // The bare remote's HEAD may point at an unborn default branch; put the
-    // clone on `main` (tracking origin/main) before committing.
     git(&other, &["checkout", "main"]);
     git(&other, &["config", "user.email", "test@example.com"]);
     git(&other, &["config", "user.name", "Test"]);
     let d1 = commit(&other, "d1");
     git(&other, &["push", "origin", "main"]);
-    // Let the original repo learn about d1 (updates origin/main only), so the
-    // divergence is known on both sides and git reports `(non-fast-forward)`
-    // rather than `(fetch first)`.
     git(&repo, &["fetch", "origin"]);
 
     (tmp, repo, remote, d1)
@@ -103,7 +75,6 @@ fn push_dry_run_reports_updatable_refs_without_mutating_remote() {
         .push_dry_run(&repo, "origin", "main", false)
         .expect("dry-run succeeds on pushable state");
 
-    // Verbatim-enough report: names the remote and the ref update.
     assert!(
         report.contains("remote.git"),
         "report should name the remote path, got: {report:?}"
@@ -114,7 +85,6 @@ fn push_dry_run_reports_updatable_refs_without_mutating_remote() {
     );
     assert!(!report.contains("[rejected]"));
 
-    // Provably non-mutating: remote ref unchanged, still at c1.
     let after = git(&remote_path, &["rev-parse", "main"]).trim().to_string();
     assert_eq!(after, before);
     assert_eq!(after, shas[0], "remote main must still be c1");
@@ -146,7 +116,6 @@ fn push_dry_run_reports_rejection_on_non_fast_forward() {
         other => panic!("expected TgError::Cli, got: {other:?}"),
     }
 
-    // Provably non-mutating even on rejection.
     let remote_main = git(&remote_path, &["rev-parse", "main"]).trim().to_string();
     assert_eq!(remote_main, d1, "remote main must still be d1");
 }

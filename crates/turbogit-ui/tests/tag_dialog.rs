@@ -1,23 +1,3 @@
-//! Issue 31 — tag dialog upgrade (screen 16).
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories, asserting painted labels, public `AppState`
-//! transitions, and the exact `TagSpec` / push sequence handed to the
-//! executor boundary (via [`RecordingExecutor`]).
-//!
-//! Covered behaviors:
-//! - the screen-16 groups paint: TAG NAME, TARGET (defaulting to HEAD),
-//!   TYPE (Lightweight / Annotated), MESSAGE, TAGGER, GPG signing, OPTIONS
-//! - the tag name validates live ("✓ valid" / a clear reason: duplicates,
-//!   illegal characters) and an invalid name disables Create
-//! - the Lightweight type skips the annotated-only fields
-//! - the TARGET picker lists recent commits and tags any of them, not just
-//!   the branch head
-//! - Create dispatches the full `TagSpec` through the executor port and
-//!   closes the dialog
-//! - "Push tag to origin immediately" pushes the new tag to origin after
-//!   creating it and reports the outcome
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -34,11 +14,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, TagSpec, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append a line to `file.txt`, stage, commit; returns the new HEAD SHA.
-///
-/// Not `git_seed::commit`, which *overwrites* the file where this appends.
 fn append_commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
@@ -54,10 +29,6 @@ fn append_commit(dir: &Path, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// A repo with exactly two commits on `main`; returns `(guard, repo, [c1, c2])`.
-///
-/// Kept local: the painted picker asserts the subjects `one` and `two` and that
-/// there are exactly two of them, so no shared recipe fits.
 fn repo_two_commits() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -72,7 +43,6 @@ fn repo_two_commits() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     (tmp, repo, vec![c1, c2])
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -83,15 +53,6 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
     (state, exec)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// Unstyled: the dark tokens and embedded JetBrains Mono would change the
-/// metrics the `filled_rects` divider assertion measures. The worker drain every
-/// frame is kept.
-///
-/// `max_steps` is 1024, not kittest's default of 4: `pump_until`/`wait_until`
-/// drive async tag creation through it and `Harness::run` **panics** past the
-/// budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
@@ -105,13 +66,6 @@ fn open_tag(h: &mut Harness<'_, AppState>, root: &Path) {
     settle(h);
 }
 
-/// Step frames until painted **button geometry** is stable for 3 consecutive
-/// frames.
-///
-/// Kept local, not `settle_quiet`: that fingerprints painted *text*, this
-/// fingerprints `(label, rect)` per `Role::Button`. A click's coordinates go
-/// stale while the text is unchanged, which is the only thing this suite can
-/// flake on.
 fn settle(h: &mut Harness<'_, AppState>) {
     let mut stable = 0;
     let mut prev = String::new();
@@ -140,7 +94,6 @@ fn settle(h: &mut Harness<'_, AppState>) {
     panic!("tag dialog layout did not settle within 300 frames");
 }
 
-/// Type `text` into the dialog field with the given accessible label.
 fn type_into_field(h: &mut Harness<'_, AppState>, label: &str, text: &str) {
     let field = h.get_by_label(label);
     field.focus();
@@ -148,7 +101,6 @@ fn type_into_field(h: &mut Harness<'_, AppState>, label: &str, text: &str) {
     settle(h);
 }
 
-/// Click a dialog button and step frames until the click lands.
 fn click_dialog_button(h: &mut Harness<'_, AppState>, label: &str) {
     h.query_all_by_label(label)
         .next()
@@ -157,8 +109,6 @@ fn click_dialog_button(h: &mut Harness<'_, AppState>, label: &str) {
     settle(h);
 }
 
-/// Step frames until `pred` holds on public state (async op completion,
-/// toasts).
 fn pump_until(h: &mut Harness<'_, AppState>, what: &str, mut pred: impl FnMut(&AppState) -> bool) {
     for _ in 0..600 {
         if pred(h.state()) {
@@ -170,8 +120,6 @@ fn pump_until(h: &mut Harness<'_, AppState>, what: &str, mut pred: impl FnMut(&A
     panic!("timed out waiting for: {what}");
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn dialog_paints_the_screen_16_groups() {
     let (tmp, repo, _shas) = repo_two_commits();
@@ -181,12 +129,10 @@ fn dialog_paints_the_screen_16_groups() {
 
     assert!(h.query_all_by_label("TAG NAME").next().is_some());
     assert!(h.query_all_by_label("TARGET").next().is_some());
-    // The picker row defaults to HEAD on the current branch.
     assert!(h.query_all_by_label("HEAD on main").next().is_some());
     assert!(h.query_all_by_label("TYPE").next().is_some());
     assert!(h.query_all_by_label("Lightweight").next().is_some());
     assert!(h.query_all_by_label("Annotated").next().is_some());
-    // Annotated is the default type, so the annotated-only fields paint.
     assert!(h.query_all_by_label("MESSAGE").next().is_some());
     assert!(h.query_all_by_label("TAGGER").next().is_some());
     assert!(h.query_all_by_label("Sign with GPG key").next().is_some());
@@ -231,7 +177,6 @@ fn name_validation_is_live() {
     let mut h = harness(state);
     open_tag(&mut h, &repo);
 
-    // An empty name is not yet valid.
     assert!(
         h.query_all_by_label("A tag name is required")
             .next()
@@ -242,7 +187,6 @@ fn name_validation_is_live() {
     type_into_field(&mut h, "Tag name", "v0.9.0");
     assert!(h.query_all_by_label("✓ valid").next().is_some());
 
-    // Illegal characters name the violated rule.
     h.state_mut().ui.dlg.tag_name = "has space".into();
     h.run();
     assert!(
@@ -306,14 +250,12 @@ fn the_target_picker_lists_recent_commits_and_tags_one() {
     let mut h = harness(state);
     open_tag(&mut h, &repo);
 
-    // Change… expands the picker; the two commits are listed by sha+subject.
     let row1 = format!("{}  one", &shas[0][..7]);
     let row2 = format!("{}  two", &shas[1][..7]);
     click_dialog_button(&mut h, "Change…");
     assert!(h.query_all_by_label(row1.as_str()).next().is_some());
     assert!(h.query_all_by_label(row2.as_str()).next().is_some());
 
-    // Pick the first commit as the tag point.
     click_dialog_button(&mut h, row1.as_str());
     assert!(
         h.query_all_by_label(row1.as_str()).next().is_some(),
@@ -321,11 +263,6 @@ fn the_target_picker_lists_recent_commits_and_tags_one() {
     );
 }
 
-/// Contract: Create dispatches, the tag lands, and the dialog closes.
-///
-/// Spec *shape* is owned by the two shape tests in this file and the port
-/// pass-through by `turbogit-services/tests/tag_dialog.rs`; what is left here,
-/// and what no other test owns, is the outcome.
 #[test]
 fn create_dispatches_the_spec_and_closes_the_dialog() {
     let (tmp, repo, _shas) = repo_two_commits();
@@ -337,8 +274,6 @@ fn create_dispatches_the_spec_and_closes_the_dialog() {
     type_into_field(&mut h, "Tag message", "Release 0.9.0");
     click_dialog_button(&mut h, "Create tag");
 
-    // Create returns immediately and the create runs on the worker, so settle
-    // before reading the repository.
     assert!(
         wait_until(5_000, || exec
             .recorded()
@@ -347,7 +282,6 @@ fn create_dispatches_the_spec_and_closes_the_dialog() {
         "no TagCreate was dispatched; calls: {:?}",
         exec.recorded()
     );
-    // The tag landed and the dialog closed.
     assert_eq!(git(&repo, &["tag", "-l"]).trim(), "v0.9.0");
     assert!(wait_until(2_000, || h.state().ui.dialog.is_none()));
 }
@@ -388,8 +322,6 @@ fn a_lightweight_tag_skips_message_and_signing_in_the_spec() {
     let mut h = harness(state);
     open_tag(&mut h, &repo);
 
-    // A stale message buffer from a previous visit must not leak into a
-    // lightweight tag.
     h.state_mut().ui.dlg.tag_msg = "leftover".into();
     click_dialog_button(&mut h, "Lightweight");
     type_into_field(&mut h, "Tag name", "plain");
@@ -419,8 +351,6 @@ fn cancelling_creates_no_tag_and_answers_nothing() {
     let mut h = harness(state);
     open_tag(&mut h, &repo);
 
-    // A name good enough to create from, so cancelling is a decision rather
-    // than a blank form nobody wanted anyway.
     type_into_field(&mut h, "Tag name", "v9.9.9");
     click_dialog_button(&mut h, "Cancel");
 
@@ -444,7 +374,6 @@ fn cancelling_creates_no_tag_and_answers_nothing() {
 #[test]
 fn push_immediately_pushes_to_origin_and_reports_it() {
     let (tmp, repo, _shas) = repo_two_commits();
-    // A bare remote named origin already holding main.
     let bare = tmp.path().join("origin.git");
     git(
         tmp.path(),
@@ -477,7 +406,6 @@ fn push_immediately_pushes_to_origin_and_reports_it() {
             )
         }) && matches!(&s.ui.toast, Some(t) if t.kind == turbogit_app::state::ToastKind::Success)
     });
-    // The remote itself holds the tag.
     let remote_tags = git(&bare, &["tag", "-l"]);
     assert_eq!(remote_tags.trim(), "v0.9.0");
 }
@@ -485,8 +413,6 @@ fn push_immediately_pushes_to_origin_and_reports_it() {
 #[test]
 fn a_push_failure_reports_the_outcome_with_the_created_context() {
     let (tmp, repo, _shas) = repo_two_commits();
-    // A remote that is not a repository — the tag exists locally, the push
-    // fails, and the outcome is reported with the created-tag context.
     let not_a_repo = tmp.path().join("nowhere");
     std::fs::create_dir_all(&not_a_repo).unwrap();
     git(

@@ -4,8 +4,8 @@
 //! bar, one announcement per root**, and puts its recovery verbs there: the doc
 //! says you may "click in the status bar" to abort or continue, and the same
 //! verbs stay reachable from a menu once the transient notification has been
-//! dismissed. TurboGit had the lifecycle machinery — `OwnedOperation`,
-//! `OpKind`, the executor's `--abort` / `--continue` — and no presentation of
+//! dismissed. TurboGit had the lifecycle machinery, `OwnedOperation`,
+//! `OpKind`, the executor's `--abort` / `--continue`, and no presentation of
 //! it, so a paused rebase was only visible in the conflict resolver.
 //!
 //! ## This is not the status-hint channel, and the difference is load-bearing
@@ -17,7 +17,7 @@
 //! reading of the repository's own state, painted every frame the bar is painted,
 //! with no channel and no slot to fight over. Routing an in-flight operation
 //! through the hint slot would make the announcement flicker and drop the moment
-//! the pointer moved — and would break the 1-producer/1-consumer invariant that
+//! the pointer moved, and would break the 1-producer/1-consumer invariant that
 //! makes the hint provable. It stays here precisely so that slot keeps exactly
 //! one producer.
 //!
@@ -29,14 +29,14 @@
 //! conflict survives a restart and can be started outside this app, and a flag set
 //! at dispatch would announce nothing in both cases. It is also
 //! **per root by construction**, which is the property a multi-root client is
-//! most likely to get wrong — one global "busy with a rebase" boolean would paint
+//! most likely to get wrong, one global "busy with a rebase" boolean would paint
 //! the right words in the wrong root's announcement.
 //!
 //! The bar asks the app, and the app asks the engine: a bounded `stat`
 //! read of the repository's own git directory, never a git process, which is
 //! what makes asking it per root per frame honest. The same answer is what the
 //! rewrite gate refuses on, so the bar and the menu cannot name different
-//! operations for one repository — and because both go through
+//! operations for one repository, and because both go through
 //! [`AppState::holding_operation`], neither holds its own on-disk read.
 
 use egui::{Color32, CornerRadius, Response, RichText};
@@ -48,23 +48,13 @@ use turbogit_domain::model::{Root, RootId};
 
 use crate::theme::{self, Palette, chrome_font};
 
-/// One root's in-flight announcement: who holds it, and what holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InFlight {
     pub root: RootId,
-    /// The root's name as the announcement says it.
     pub name: String,
     pub owner: OwnedOperation,
 }
 
-/// The roots-only form of the announcement, over an injected owner read — the
-/// same seam `AggregatedStatus::compute` uses for ahead/behind, so the per-root
-/// rule is unit-testable without a working tree.
-///
-/// **Injected, not read here.** The bar passes
-/// [`AppState::holding_operation`], and so does every test that wants the
-/// announcement: one read, one answer, and no on-disk probe anywhere in this
-/// crate's production path.
 pub fn items_via(
     roots: &[Root],
     owner_of: &dyn Fn(&Root) -> Option<OwnedOperation>,
@@ -82,8 +72,6 @@ pub fn items_via(
 }
 
 impl InFlight {
-    /// The line the bar paints: the bundle's `Cherry-picking in {0}`, one per
-    /// root, with the root named because the announcement is per root.
     pub fn announce(&self) -> String {
         let name = &self.name;
         match self.owner {
@@ -100,12 +88,6 @@ impl InFlight {
     }
 }
 
-/// The roots the engine says are held, in registration order.
-///
-/// Asked of the app rather than of git's marker files so that the bar's
-/// announcement, the rewrite gate's refusal and a suite's seeded executor are all
-/// one answer. The read is a `stat` per root, never a git process, which is what
-/// lets the bar ask it every frame.
 fn held_by(state: &AppState) -> Vec<InFlight> {
     items_via(&state.multi.roots, &|root| {
         state.holding_operation(root.id.as_path())
@@ -116,7 +98,7 @@ fn held_by(state: &AppState) -> Vec<InFlight> {
 ///
 /// Two roots can hold operations at once, so the menu route has to name one. The
 /// focused root answers first when it holds a state that offers the verb; a
-/// focused root that cannot honour it does not **veto** it — the search moves on
+/// focused root that cannot honour it does not **veto** it, the search moves on
 /// to the root that can, which is what makes `Skip Commit` do something when the
 /// rebase is in the other repository. Nothing offers it: `None`, and the caller
 /// says so rather than acting on an arbitrary root.
@@ -130,20 +112,10 @@ pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, Owne
         .map(|item| (item.root.clone(), item.owner))
 }
 
-/// Paint every holding root's item and run its verbs.
-///
-/// **Two roots mid-operation at the same time** is the layout the reference
-/// never states: the string is per root, the bar is one 24 px band
-/// ([`super::shell::STATUS_BAR_HEIGHT`]), and stacking a row per root would
-/// resize the shell's frozen chrome. The fallback chosen here is **side-by-side
-/// in registration order**, each item naming its own root, recorded as a
-/// divergence from the reference.
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let mut first = true;
     for item in held_by(state) {
         if !first {
-            // The bar's one quiet separator ink (`INK_2`, the step up the raised
-            // `SURFACE` band forces for every line in it).
             ui.label(
                 RichText::new("·")
                     .font(chrome_font(theme::TYPE_CONTROL))
@@ -156,12 +128,7 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
                 .font(chrome_font(theme::TYPE_CONTROL))
                 .color(Palette::STATE_WARNING),
         );
-        // The verbs, with the destructive one given its own air ahead of the
-        // pair. `item.verbs()` is the state machine: a cherry-pick paints two
-        // controls and a rebase paints three, so the bar models which resolution
-        // exists instead of decorating the state with every word it knows.
         for (idx, verb) in item.verbs().iter().enumerate() {
-            // One gap token, applied once: between the abort and what follows it.
             if idx == 1 {
                 ui.add_space(theme::STATUS_INFLIGHT_ABORT_GAP);
             }
@@ -181,9 +148,9 @@ pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
 /// Not [`super::components::kit_button`]: that kit is 28 px tall
 /// (`KIT_BUTTON_H`) and this band is 24 px, so a kit control here would be
 /// clipped top and bottom by the panel's own rect. The fills and inks below are
-/// the kit's role vocabulary — accent for the forward-going verb, the raised rung
+/// the kit's role vocabulary, accent for the forward-going verb, the raised rung
 /// for the third resolution, the danger tone for the one that throws the
-/// operation away — read from the token layer, at the dense metrics the band
+/// operation away, read from the token layer, at the dense metrics the band
 /// already sets.
 fn verb_button(ui: &mut egui::Ui, verb: LifecycleVerb) -> Response {
     let (fill, ink) = role_colors(verb);
@@ -199,7 +166,6 @@ fn verb_button(ui: &mut egui::Ui, verb: LifecycleVerb) -> Response {
     .on_hover_text(hover(verb))
 }
 
-/// The three verbs' fill-and-ink roles, one place each.
 fn role_colors(verb: LifecycleVerb) -> (Color32, Color32) {
     match verb {
         LifecycleVerb::Abort => (Palette::SURFACE_INFLIGHT_ABORT, Palette::DANGER),
@@ -208,13 +174,6 @@ fn role_colors(verb: LifecycleVerb) -> (Color32, Color32) {
     }
 }
 
-/// What each verb does to the operation, because the bar's one-word labels
-/// cannot say it and the destructive reading of `Abort` is the whole hazard:
-/// `Abort` discards the entire operation, `Continue` retries the commit that
-/// stopped it, `Skip` abandons THAT commit and replays the rest.
-///
-/// A free function rather than a method on [`LifecycleVerb`]: the verb type is
-/// the app's, and an inherent impl on a foreign type is not this crate's to add.
 pub fn hover(verb: LifecycleVerb) -> &'static str {
     match verb {
         LifecycleVerb::Abort => "Abort — give up the whole operation",

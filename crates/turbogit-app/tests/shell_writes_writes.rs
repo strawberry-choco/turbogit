@@ -1,13 +1,3 @@
-//! The dialogs', the stash pane's, the rewrite banner's and the commit
-//! window's writes are named entries, and each one still runs the git the
-//! closure ran.
-//!
-//! Driven through the Headless harness against real temporary repositories, and
-//! asserted as **what the repository becomes** — branch created, tag created
-//! and pushed, stash pushed and popped, rewrite undone, rebase aborted, stash
-//! applied, commit made — plus the label each operation carries, because the
-//! label is what the user reads in the toast.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{commit, git, repo_with_history, repo_with_origin};
@@ -171,8 +161,6 @@ fn commit_window_stash_entries_apply_and_pop_by_index() {
         "an apply leaves both entries in the list"
     );
 
-    // The apply left the edit in the tree, and `stash pop` refuses to overwrite
-    // local changes — clear it so the pop is the only thing under test.
     git(&work, &["checkout", "--", "second.txt"]);
 
     let op = stash_writes::pop_at(&root, "stash@{0}", 0);
@@ -194,9 +182,6 @@ fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
     let mut state = state_for(&work);
     let root = state.selected_root.clone().unwrap();
 
-    // The commit takes no file list: what lands is the index. The new
-    // file has to reach the index first, through the staging entry — which is
-    // the whole contract the two share.
     let op = commit_writes::set_staged(&root, Path::new("new.txt"), true);
     assert_eq!(op.label(), "Stage new.txt");
     state.dispatch(op);
@@ -243,11 +228,6 @@ fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
     );
 }
 
-/// **A commit stages nothing.** The observable fact is *which files
-/// land*: a tracked file the developer deliberately left out of the index must
-/// stay out of the commit, and stay dirty afterwards. The absence of a stage
-/// call is pinned at the services seam, against the recording executor —
-/// from here it would only be visible through this same git answer.
 #[test]
 fn committing_takes_the_index_and_leaves_an_unstaged_file_out() {
     let tmp = tempfile::tempdir().unwrap();

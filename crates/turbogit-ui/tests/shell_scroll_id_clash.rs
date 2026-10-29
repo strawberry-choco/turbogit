@@ -2,14 +2,14 @@
 //!
 //! egui derives a ScrollArea's persistent id from its nesting of anonymous
 //! child uis plus the constant default salt, so two un-salted ScrollAreas at
-//! the same depth share one id — egui then paints the red "🔥 First/Second use
+//! the same depth share one id, egui then paints the red "🔥 First/Second use
 //! of ScrollArea ID" error over both, and the pair silently scrolls together.
 //!
 //! Every ScrollArea in the app carries an explicit `id_salt` naming what it
 //! shows; this suite walks every tool-window page and sub-tab of the real
-//! shell plus the Welcome surfaces — the frames where the always-on shell
+//! shell plus the Welcome surfaces, the frames where the always-on shell
 //! chrome (sidebar, activity rail) coexists with page scrolls, which is where
-//! this class bites — and asserts the debug painter stays quiet (🔥 is egui's
+//! this class bites, and asserts the debug painter stays quiet (🔥 is egui's
 //! own error marker, never app copy), so a future unsalted scroll that lands
 //! on an occupied id fails here rather than painting over the user's pane.
 
@@ -48,8 +48,6 @@ fn no_tool_page_paints_an_id_clash_error() {
         h.run();
         assert_no_clash(&h, tab);
 
-        // The Commit tool window's own sub-tab strip swaps its panes in place;
-        // each pane brings its own list scroll, so each is checked on its own.
         for sub in ["Local Changes", "Shelf", "Stash"] {
             if h.query_by_label(sub).is_none() {
                 continue;

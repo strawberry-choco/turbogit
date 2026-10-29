@@ -1,28 +1,3 @@
-//! `Apply patch`: the window that writes a patch into ONE
-//! repository's working tree, and the surface that states what happened to it.
-//!
-//! Two routes, because the reference has two verbs: `Git | Patch | Apply patch…`
-//! reads a file, and `Apply patch from Clipboard` **skips the file path entirely**.
-//! TurboGit has no main menu bar, so the command palette carries both routes — the
-//! substitution the palette already makes for the lifecycle verbs. The clipboard
-//! route pastes into the window rather than reading the system clipboard
-//! unprompted: the patch text ends up visible in the field it was typed into, which
-//! is the same act with its payload on screen, and it is what makes the route
-//! testable without a clipboard the CI runner does not own.
-//!
-//! `Show Diff` here is a **preflight, not a confirmation** ("to check if your patch
-//! can be applied without conflicts"). It asks git and writes nothing, so it can be
-//! pressed as often as the developer likes; the apply does not require it to have
-//! been pressed, because a verb that only runs after a check the user was forced
-//! through would be a confirmation wearing a preview's name.
-//!
-//! The window's third job is the state it leaves behind. An apply has three
-//! endings, and the two titled ones are what makes the atomicity claim honest:
-//! `Apply patch aborted` says every file the apply changed is back to the content
-//! it held, and `Rollback failed` — a state painted **instead**, never beside it —
-//! names the files that are not, holds what they contained, and offers the one
-//! action that can still put them back.
-
 use egui::{Key, Ui};
 
 use turbogit_app::apply_patch;
@@ -34,15 +9,10 @@ use crate::ui::components::{KitButton, kit_button};
 use crate::ui::patch_chrome;
 use crate::ui::widgets;
 
-/// The verb's name in one place: the palette route, the window's title and its
-/// affirmative button all say the same thing.
 pub const VERB: &str = "Apply patch";
 
 /// Render the window while `state.ui.dialog` is `Dialog::ApplyPatch`.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // Every field the developer has since touched is brought in line before
-    // anything is painted, so a frame never shows a verdict about a patch that is
-    // no longer the one in the field.
     apply_patch::sync(state);
     let ctx = ui.ctx().clone();
     let mut open = true;
@@ -77,8 +47,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     footer(ui, state);
 }
 
-/// Which of the two routes is live, and the payload it reads. The clipboard route
-/// does not paint the path field at all — that absence is the verb.
 fn route(ui: &mut Ui, state: &mut AppState) {
     let source = state.ui.dlg.apply_patch_source;
     widgets::group_title(ui, "PATCH SOURCE");
@@ -97,9 +65,6 @@ fn route(ui: &mut Ui, state: &mut AppState) {
                 label,
             );
             if btn.clicked() {
-                // Which payload the switch drops is the app's rule, not this
-                // frame's: the other route's patch text goes, the working tree's
-                // unfinished rollback stays.
                 apply_patch::set_source(state, variant);
             }
         }
@@ -131,19 +96,12 @@ fn route(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The patch's own provenance, and the fields it fills. A git-format patch carries
-/// the commit's author and subject ahead of its first `diff --git` section, and the
-/// reference reads them rather than discarding them; these two fields are where
-/// that lands.
 fn provenance(ui: &mut Ui, state: &mut AppState) {
     if state.ui.dlg.apply_patch_patch.is_none() {
         return;
     }
     widgets::group_title(ui, "PATCH PROVENANCE");
     if state.ui.dlg.apply_patch_provenance.is_none() {
-        // Stated rather than left as two empty fields: a plain `git diff` patch
-        // carries no author and no subject, and silence here reads as a window
-        // that forgot to look.
         ui.label("This patch carries no commit header, so there is nothing to fill.");
     } else {
         ui.horizontal(|ui| {
@@ -163,16 +121,12 @@ fn provenance(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The patch the window has parsed, listed by the shared painter.
 fn touched(ui: &mut Ui, state: &mut AppState) {
     if let Some(patch) = state.ui.dlg.apply_patch_patch.as_ref() {
         patch_chrome::files_the_patch_names(ui, patch);
     }
 }
 
-/// `Show Diff`'s answer: git's verdict, with the lines that name a patch path
-/// painted in the error ink — the reference's "the corresponding lines will be
-/// highlighted in red", stated as the ink rule it is.
 fn preflight_panel(ui: &mut Ui, state: &mut AppState) {
     let Some(preflight) = state.ui.dlg.apply_patch_preflight.clone() else {
         return;
@@ -214,13 +168,6 @@ fn preflight_panel(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The ending the last apply left, painted as its titled state.
-///
-/// The two titled branches are mutually exclusive **by construction**: the outcome
-/// is one value with three variants, so a tree the rollback could not finish paints
-/// `Rollback failed` and has no way to also paint `Apply patch aborted`. That is what
-/// the reference's separately-named failure state is for, and what an implementation
-/// with one prose string for both would lose.
 fn outcome(ui: &mut Ui, state: &mut AppState) {
     let Some(outcome) = state.ui.dlg.apply_patch_outcome.clone() else {
         preflight_panel(ui, state);
@@ -278,10 +225,6 @@ fn outcome(ui: &mut Ui, state: &mut AppState) {
                     restored.len()
                 ));
             }
-            // The one recovery action the state carries. Not a dismiss: the
-            // recorded content is in hand, the write was refused, and retrying it
-            // is the only thing that can still be true about these files. Whether
-            // it works, the window says which state the tree is in afterwards.
             let busy = state.ui.busy;
             if kit_button(ui, KitButton::Primary, "Restore recorded content").clicked() && !busy {
                 apply_patch::retry_restore(state);
@@ -294,16 +237,11 @@ fn outcome(ui: &mut Ui, state: &mut AppState) {
 fn footer(ui: &mut Ui, state: &mut AppState) {
     let loaded = state.ui.dlg.apply_patch_patch.is_some();
     let inflight = state.ui.busy;
-    // The reference's ⌘D. Checked here rather than on the button's `Response`
-    // because this window is the only surface that reads it, and it is read only
-    // while the window is painted — a global binding would fire under a text
-    // field that is mid-keystroke.
     let command_d = ui.input(|i| i.modifiers.command && i.key_pressed(Key::D));
     widgets::dialog_footer(ui, |ui| {
         if ui.button("Close").clicked() {
             state.ui.dialog = None;
         }
-        // `Show Diff` is a read of git's verdict and nothing else.
         let show_diff = ui.button("Show Diff").clicked() || command_d;
         if show_diff && loaded && !inflight {
             apply_patch::preflight(state);
@@ -311,12 +249,6 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         if command_d {
             ui.label("⌘D");
         }
-        // `Import to shelf` is the deferral, and a deferral offered only in a corner
-        // case is not a deferral: it is enabled on exactly the condition the apply is,
-        // and it is a **different fill** because two buttons that look identical offer
-        // two things the developer has to tell apart before pressing one. It writes no
-        // file into the working tree — the patch goes to the shelf as bytes, which is
-        // the point of parking it *before* applying.
         let import = kit_button(ui, KitButton::Secondary, "Import to shelf");
         if import.clicked() && loaded && !inflight {
             state.import_patch_from_apply_window();

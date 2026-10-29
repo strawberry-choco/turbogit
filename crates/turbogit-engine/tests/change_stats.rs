@@ -1,14 +1,3 @@
-//! Per-file change counts (`GitExecutor::change_stats`, logs-panels redesign
-//! issue 01 + deepen-git-engine issue 06): the changed-files pane's `+N −M`
-//! column, the details pane's churn bar, and the integration preview's
-//! "N files · +X −Y" all read from this one question.
-//!
-//! Both real adapters are pinned against the same fixture repository, so the
-//! libgit2 backend cannot drift from the CLI's `git diff-tree --numstat`, and
-//! the two dash answers cannot drift either. The merge question is pinned
-//! against what git itself reports, because that half's acceptance *is* the
-//! numbers matching git.
-
 use std::path::PathBuf;
 use tempfile::TempDir;
 use test_support::git_seed::{git, pin_eol_lf};
@@ -17,15 +6,6 @@ use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 
-// `seeded_repo` stays local, deliberately NOT a `git_seed` recipe: its second
-// commit has to carry an edit, a deletion, a pure rename AND a non-UTF-8 blob
-// in one go, because the four numstat row shapes are exactly what the
-// assertions below pin. It is built on the `repo_with_one_commit` floor, though:
-// explicit `-b main`, repo-local identity before the first commit, no remote.
-
-/// A repository whose second commit exercises every numstat row shape at once:
-/// an edit (`notes.txt`), a deletion (`gone.txt`), a pure rename
-/// (`keep.txt` → `kept.txt`), and — in the root commit — a binary blob.
 fn seeded_repo() -> (TempDir, CliExecutor, PathBuf, String, String) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("stats");
@@ -39,7 +19,6 @@ fn seeded_repo() -> (TempDir, CliExecutor, PathBuf, String, String) {
     std::fs::write(repo.join("notes.txt"), "a\nb\nc\n").expect("write notes");
     std::fs::write(repo.join("gone.txt"), "temp\n").expect("write gone");
     std::fs::write(repo.join("keep.txt"), "stable\ncontent\n").expect("write keep");
-    // Not valid UTF-8: git classifies this as binary and reports `-` `-`.
     std::fs::write(repo.join("logo.png"), [0x89, b'P', 0x00, 0xFF, 0xFE]).expect("write logo");
     git(&repo, &["add", "--", "."]);
     git(&repo, &["commit", "-q", "-m", "root commit"]);
@@ -58,8 +37,6 @@ fn seeded_repo() -> (TempDir, CliExecutor, PathBuf, String, String) {
     (tmp, engine, repo, root, head)
 }
 
-/// `(path, insertions, deletions)` sorted by path — git orders rename rows by
-/// their old side, which is not the order the pane shows. `None` is git's dash.
 fn sorted(stats: ChangeStats) -> Vec<(String, Option<usize>, Option<usize>)> {
     let mut rows: Vec<_> = stats
         .files
@@ -95,7 +72,6 @@ fn cli_reports_per_file_counts_for_every_row_shape() {
         stats,
         vec![
             ("gone.txt".to_string(), Some(0), Some(1)),
-            // A pure rename changes no lines; its counts are real zeros.
             ("kept.txt".to_string(), Some(0), Some(0)),
             ("notes.txt".to_string(), Some(2), Some(1)),
         ]
@@ -131,8 +107,6 @@ fn cli_reports_a_binary_row_as_having_no_line_counts_rather_than_zero() {
     );
 }
 
-/// The pane joins the counts onto `commit_files` by path — a rename reported
-/// under its old side here would silently lose its numbers.
 #[test]
 fn stats_paths_are_the_paths_commit_files_reports() {
     let (_tmp, engine, repo, _root, head) = seeded_repo();
@@ -174,9 +148,6 @@ fn git2_reports_the_same_counts_as_the_cli() {
     }
 }
 
-/// The other caller's question, kept git-backed because its acceptance is that
-/// the preview's numbers are git's: what merging `feature` into `main` brings
-/// in is the merge base to `feature`, not the whole distance between the tips.
 #[test]
 fn the_merge_question_counts_what_the_merge_would_bring_in() {
     let (_tmp, engine, repo, _root, _head) = seeded_repo();
@@ -202,7 +173,6 @@ fn the_merge_question_counts_what_the_merge_would_bring_in() {
         "only what the merge brings in, not what main did meanwhile"
     );
 
-    // Independent of the adapter: git's own three-dot numstat, unparsed here.
     let git_report = git(&repo, &["diff", "--numstat", "HEAD...feature"]);
     assert_eq!(
         git_report.trim(),

@@ -1,8 +1,3 @@
-//! Issue 00 (deepen-git-engine) — the forwarding wrapper answers
-//! `check_patch` the way the engine it wraps does, instead of inheriting the
-//! port's rejecting default. A CLI engine inside the wrapper can genuinely
-//! check a patch; suites that wrap one must not see "not supported".
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,10 +8,6 @@ use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-/// Fresh repo on `main` with `file.txt` at "one\n". Returns (guard, path).
-///
-/// The builder stays local: the patches below are written against `file.txt` at
-/// `"one\n"`, and the file is the fixture. The runner is the shared `git_seed::git`.
 fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
@@ -34,8 +25,6 @@ fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// A patch against `file.txt` at "one\n": applies when `context` matches the
-/// file, does not when it does not.
 fn patch(context: &str, added: &str) -> turbogit_domain::model::Patch {
     turbogit_engine_api::patch::parse_patch(&format!(
         "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1,2 @@\n {context}\n+{added}\n"

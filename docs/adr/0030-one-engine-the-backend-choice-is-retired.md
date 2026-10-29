@@ -13,7 +13,7 @@ The picker's history is three options, then two, then none:
   (`Libgit2`, `Auto`) constructed a byte-identical object, and collapsed them
   onto the `InProcessReads` spelling.
 - What remained was a genuine choice between the bare CLI adapter and the
-  composed one — a choice that changed observable behavior (git's DWIM on
+  composed one, a choice that changed observable behavior (git's DWIM on
   `branch_create` from a remote start point records an upstream under the CLI
   adapter and under nothing else; `backend_options.rs` pins the pair).
 - The choice was never the app's to offer: the composed adapter is the default
@@ -27,8 +27,8 @@ The picker's history is three options, then two, then none:
 `backend: GitBackend` field is deleted from `VcsSettings`, the `GitBackend`
 enum with it, and the Settings row from the Git page.
 
-A `state.ron` carrying the key — any of the four spellings it ever serialized
-as — still loads: the key is an unknown field the loader ignores, exactly like
+A `state.ron` carrying the key, any of the four spellings it ever serialized
+as, still loads: the key is an unknown field the loader ignores, exactly like
 `staging_area` before it. The guarantee is pinned with the strongest probe
 available: a saved `Cli` spelling must not bring the CLI adapter's DWIM
 behavior back (`retired_settings_keys.rs`).

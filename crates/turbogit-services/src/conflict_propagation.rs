@@ -1,26 +1,3 @@
-//! Cross-repo conflict propagation (issue #23, screen 07 "SAME CONFLICT
-//! ELSEWHERE" panel).
-//!
-//! When the user resolves a conflict in one root, identical conflict hunks
-//! in OTHER registered roots can be resolved the same way with one click.
-//! This module owns the cross-repo side of that workflow:
-//!
-//! - [`find_matches`] — pure-read scan: for every other root, list the
-//!   conflicted files whose conflict hunks (byte-identical `(ours, theirs)`
-//!   pairs in the same order) match the source root's hunks. Returns one
-//!   row per root that has at least one matching file.
-//! - [`apply_to_matches`] — fan-out the resolution: for every matched
-//!   root, write the source's composed resolution into each matched file
-//!   and stage it. Per-root success/failure is reported; the source root is
-//!   never touched, and roots with no matches are never touched.
-//!
-//! The service speaks git only through [`GitExecutor`] and the
-//! [`turbogit_services::conflict`] helpers — no filesystem I/O outside the
-//! engine seam. Refresh of the affected roots' status is the caller's job:
-//! this module writes the resolved content and stages it, returning the
-//! per-root outcomes so the caller can drive `rescan()` on the affected
-//! `RootId`s.
-
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::error::{TgError, TgResult};
@@ -44,7 +21,6 @@ pub type Resolutions = Vec<Option<Choice>>;
 /// order, byte-identical `(ours, theirs)` pairs.
 type HunkSignature = Vec<(String, String)>;
 
-/// One file's signature extracted from its conflict markers.
 fn signature_from(content: &str) -> HunkSignature {
     let (segs, _) = parse_conflict_markers(content);
     segs.into_iter()
@@ -67,7 +43,7 @@ pub struct RootMatch {
 
 /// One root's propagation outcome: which path was rewritten, and whether
 /// the rewrite + stage succeeded. Per-root failures never abort the
-/// fan-out — every matched root gets exactly one outcome row.
+/// fan-out, every matched root gets exactly one outcome row.
 #[derive(Clone, Debug)]
 pub struct PropagateOutcome {
     pub root: RootId,
@@ -77,7 +53,7 @@ pub struct PropagateOutcome {
 
 /// Locate, in every OTHER registered root, the conflicted files whose
 /// conflict hunks are byte-identical to the source root's conflict hunks
-/// for `source_path`. The source root itself is never scanned — the user
+/// for `source_path`. The source root itself is never scanned, the user
 /// has already resolved it.
 ///
 /// `source_resolutions` is read for its length (the expected hunk count);
@@ -93,9 +69,6 @@ pub fn find_matches(
         Ok(sig) => sig,
         Err(_) => return Vec::new(),
     };
-    // Sanity: the source resolution vector must cover every conflict hunk
-    // in the source file. A mismatch means the caller passed stale state
-    // — propagating it would silently drop resolutions, so refuse.
     if source_signature.len() != source_resolutions.len() {
         return Vec::new();
     }
@@ -107,7 +80,7 @@ pub fn find_matches(
         }
         let status = match executor.status(&root.id.0) {
             Ok(s) => s,
-            Err(_) => continue, // a broken root shouldn't abort the scan
+            Err(_) => continue,
         };
         let matched_paths = match collect_matching_paths(&root.id.0, &status, &source_signature) {
             Some(p) => p,
@@ -131,7 +104,7 @@ pub fn find_matches(
 /// failure in one root never prevents the others from being attempted, and
 /// the failure surfaces in the matching [`PropagateOutcome::result`].
 ///
-/// Roots with no matching files are absent from the returned vector —
+/// Roots with no matching files are absent from the returned vector,
 /// they were not touched in any way. Roots that the engine cannot read
 /// DO appear, carrying an error [`PropagateOutcome::result`] for the
 /// source path, so the caller can report per-root failure.
@@ -185,19 +158,12 @@ pub fn apply_to_matches(
     outcomes
 }
 
-/// Read `root/path`'s working-tree content and extract its conflict-hunk
-/// signature. A read failure surfaces as a `TgError` so the caller can
-/// decide whether to skip the root.
 fn read_signature(root: &RootId, path: &Path) -> TgResult<HunkSignature> {
     let content = std::fs::read_to_string(root.0.join(path))
         .map_err(|e| TgError::Other(format!("read {}: {e}", path.display())))?;
     Ok(signature_from(&content))
 }
 
-/// Walk `root`'s conflicted paths and return those whose signature equals
-/// `target_signature`. An empty vector means the root has no matching
-/// files (and will be skipped by `find_matches`); `None` is reserved for
-/// "can't tell" (currently unused — every conflict file is readable).
 fn collect_matching_paths(
     root: &Path,
     status: &RootStatus,
@@ -232,7 +198,7 @@ fn rewrite_and_stage(
 
 /// Compose the resolved file text from `content`'s segments, applying
 /// `resolutions` to each conflict hunk in order. Unresolved hunks
-/// surface as `TgError` — a partial rewrite would leave the file in a
+/// surface as `TgError`, a partial rewrite would leave the file in a
 /// half-resolved state that the resolver UI later has to interpret, and
 /// the propagation contract is "the same resolution everywhere, cleanly".
 fn compose(content: &str, resolutions: &Resolutions) -> TgResult<String> {

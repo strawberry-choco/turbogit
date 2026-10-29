@@ -1,10 +1,3 @@
-//! `--no-verify` on the commit routes, over real git.
-//!
-//! A failing `pre-commit` hook is the fixture: the commit that runs hooks must
-//! fail with git's own complaint, and the same commit asked to skip them must
-//! land. This is the boundary half of the commit card's options toggle — the
-//! UI half runs through `turbogit-ui/tests/commit_window.rs`.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -16,8 +9,6 @@ fn exec() -> std::sync::Arc<dyn GitExecutor> {
     build_executor(&VcsSettings::default())
 }
 
-/// A repo on `main` with one staged change and a `pre-commit` hook that fails.
-/// Returns the temp dir (kept alive by the caller) and the repo path.
 fn hooked_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -50,7 +41,6 @@ fn commit_index_runs_hooks_and_no_verify_skips_them() {
     let (_tmp, repo) = hooked_repo();
     let engine = exec();
 
-    // The hook fails the commit: the staged work stays uncommitted.
     let refused = engine.commit_index(&repo, "refused subject", false, false);
     assert!(
         refused.is_err(),
@@ -62,7 +52,6 @@ fn commit_index_runs_hooks_and_no_verify_skips_them() {
         "the refused commit left HEAD where it was"
     );
 
-    // The same commit asked to skip hooks lands.
     engine
         .commit_index(&repo, "no-verify subject", false, true)
         .expect("the --no-verify commit must land");

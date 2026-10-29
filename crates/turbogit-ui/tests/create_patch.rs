@@ -1,23 +1,3 @@
-//! `Create patch`: the two dialogs, the counting repair pair,
-//! the four `Patch File Settings` fields and the route that opens neither dialog.
-//!
-//! The ticket's own structural demand is what this suite is built around: **three
-//! presses of `Remove Leading Directory` paint `3` and two presses of `Restore
-//! Leading Directory` paint `1`, and the count moves monotonically.** A counter that
-//! reset between frames, or updated only on close, would pass an assert on the final
-//! value and still lose the point of showing it — so every press is asserted in the
-//! frame right after it, and against the file paths the press produced rather than
-//! against the number alone.
-//!
-//! Everything else follows the rule the apply half of this surface states: **the
-//! content check is the real assertion.** So the comment→name route reads the written
-//! file back off disk, the encoding field reads its first three bytes, and the routes
-//! are driven through the palette and the row verbs the product offers rather than
-//! through the dialogs' internals.
-//!
-//! No golden image: `acceptance_matrix.rs` owns the per-page PNGs and this surface is
-//! not one of those pages, so a screenshot here would be an invented baseline.
-
 use std::path::{Path, PathBuf};
 
 use egui::Vec2;
@@ -35,23 +15,14 @@ use turbogit_domain::model::{
 use turbogit_ui::ui::create_patch;
 use turbogit_ui::ui::popups::{Action, run_action};
 
-// ------------------------------------------------------------------ fixtures --
-
 fn root_id(dir: &Path) -> RootId {
     RootId(dir.to_path_buf().into())
 }
 
-/// The deep path the counting pair is for: three directories, so three removals are
-/// reachable and the file's own name always survives them.
 const DEEP: &str = "src/main/java/App.java";
 
-/// A second deep path, so a checked selection is distinguishable from the whole set.
 const UTIL: &str = "src/main/java/Util.java";
 
-/// One repository carrying two committed files under `src/main/java/`, both changed in
-/// the worktree, so `Create Patch from Local Changes` has a patch to make, the counting
-/// pair has three directories to take off **every** path, and a checked selection has an
-/// unchecked sibling to be distinguished from.
 fn dirty_repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(dir.join("src/main/java")).unwrap();
@@ -67,8 +38,6 @@ fn dirty_repo(parent: &Path) -> PathBuf {
     dir
 }
 
-/// The same repository with nothing pending: its history is what the commit and file
-/// revision routes patch.
 fn clean_repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
     std::fs::create_dir_all(dir.join("src/main/java")).unwrap();
@@ -85,8 +54,6 @@ fn head(dir: &Path) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// One cached log row, so the commit and file-revision routes are seeded from the
-/// subject the details pane shows rather than from a string this file invented.
 fn cached(root: &RootId, id: &str, message: &str) -> Commit {
     Commit {
         id: id.to_owned(),
@@ -118,8 +85,6 @@ fn settled(state: AppState) -> Harness<'static, AppState> {
     harness
 }
 
-/// The shell with the create flow opened by the palette's local-changes verb — the
-/// route the developer takes, not a hand-built payload.
 fn local_changes(dir: &Path, parent: &Path) -> Harness<'static, AppState> {
     let mut state = state_over(&[dir.to_path_buf()], parent);
     run_action(&mut state, Action::CreatePatch);
@@ -132,7 +97,6 @@ fn local_changes(dir: &Path, parent: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-/// …and the same flow one `OK` past the comment step, as `Patch File Settings`.
 fn settings(dir: &Path, parent: &Path, comment: &str) -> Harness<'static, AppState> {
     let mut harness = local_changes(dir, parent);
     harness.state_mut().ui.dlg.create_patch_comment = comment.to_owned();
@@ -162,8 +126,6 @@ fn click(harness: &mut Harness<'_, AppState>, label: &str) {
     harness.step();
 }
 
-/// Press the counting button **whatever number it is currently wearing** — its label
-/// carries the count, which is the whole design of the control.
 #[track_caller]
 fn click_counted(harness: &mut Harness<'_, AppState>, prefix: &str) {
     let node = harness
@@ -179,9 +141,6 @@ fn click_counted(harness: &mut Harness<'_, AppState>, prefix: &str) {
     harness.step();
 }
 
-/// The paths **the dialog** paints under `FILES THE PATCH NAMES`, in paint order:
-/// everything after that title. The shell renders its own file list behind the
-/// dialog, so an unscoped assert could be satisfied by a row the patch never names.
 #[track_caller]
 fn patch_paths(harness: &Harness<'_, AppState>) -> String {
     let painted = painted_text(harness);
@@ -200,20 +159,12 @@ fn first_index(harness: &Harness<'_, AppState>, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("`{needle}` was never painted"))
 }
 
-/// The payload as text: the bytes the settings would hand over right now.
 fn payload_text(harness: &Harness<'_, AppState>) -> String {
     let bytes = turbogit_app::create_patch::payload(harness.state())
         .expect("the settings describe a patch");
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-// ------------------------------------------------- the counting repair pair --
-
-/// The ticket's verification item 2, as the ticket states it: three presses paint
-/// `3`, two restores paint `1`, and the count changes monotonically. Asserted in the
-/// frame after each press — a counter that only settled on close would pass one final
-/// assert and still lose the point of showing it — and against the paths each count
-/// produced, because a number that moved no path would be a decoration.
 #[test]
 fn three_presses_paint_three_and_two_restores_paint_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -250,7 +201,6 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
         );
     }
 
-    // Two restores, one step at a time: 3 → 2 → 1.
     click_counted(&mut harness, "Restore Leading Directory");
     settle(&mut harness);
     assert_painted(&harness, "Remove Leading Directory [2]");
@@ -268,7 +218,6 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
         patch_paths(&harness)
     );
 
-    // The bound is real: three is the floor, and six presses cannot reach four.
     click(&mut harness, "Restore All Leading Directories");
     settle(&mut harness);
     assert_painted(&harness, "Remove Leading Directory [0]");
@@ -285,8 +234,6 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
     );
 }
 
-/// `Remove All` and `Restore All` are the two ends of the same counter rather than a
-/// second mechanism, and each lands on the bound the patch itself sets.
 #[test]
 fn the_two_all_buttons_are_the_same_counters_ends() {
     let tmp = tempfile::tempdir().unwrap();
@@ -312,10 +259,6 @@ fn the_two_all_buttons_are_the_same_counters_ends() {
     );
 }
 
-// ---------------------------------------------------- the comment, the name --
-
-/// The comment step's claim is that its words **are** the patch file's name, so the
-/// assertion is the file on disk under that name — not a label in a dialog.
 #[test]
 fn the_comment_becomes_the_name_of_the_file_that_gets_written() {
     let tmp = tempfile::tempdir().unwrap();
@@ -332,8 +275,6 @@ fn the_comment_becomes_the_name_of_the_file_that_gets_written() {
         .create_patch_comment
         .push_str("Fix the login form");
     settle(&mut harness);
-    // Shown before it is used: the name is derived, and a transformation the developer
-    // can only agree to seeing the result of.
     assert_painted(&harness, "Fix_the_login_form.patch");
 
     click(&mut harness, "OK");
@@ -357,11 +298,6 @@ fn the_comment_becomes_the_name_of_the_file_that_gets_written() {
         "the file holds the patch the dialog described: {text}"
     );
     assert!(text.contains("+TWO"), "and the change itself: {text}");
-    // The created file is still named to the developer — but by the `When patch is
-    // created: Ask` follow-up, not by the toast this assertion was written against. The
-    // captured default is `Ask`, so the transient report is exactly what the policy
-    // withholds: nothing is decided about the artifact until the developer says so. The
-    // file name stays painted, and the ask is armed on the state beside it.
     assert_painted(&harness, "Fix_the_login_form.patch");
     assert_painted(&harness, "Import to shelf");
     assert_eq!(
@@ -376,8 +312,6 @@ fn the_comment_becomes_the_name_of_the_file_that_gets_written() {
     );
 }
 
-/// The name is editable **apart** from the comment: renaming the artifact must not
-/// rewrite the words that named it.
 #[test]
 fn renaming_the_file_does_not_rename_the_comment() {
     let tmp = tempfile::tempdir().unwrap();
@@ -407,12 +341,6 @@ fn renaming_the_file_does_not_rename_the_comment() {
     );
 }
 
-// ------------------------------------------------- the four fields, in order --
-
-/// `Patch File Settings` is one dialog whose field **order is the discovery**: the
-/// destination, then the two things that decide what the paths inside say, then the
-/// encoding that decides what the bytes are. Asserted as paint order, because a field
-/// list that is right in the source and wrong on screen is still wrong.
 #[test]
 fn the_four_settings_fields_are_painted_in_the_references_order() {
     let tmp = tempfile::tempdir().unwrap();
@@ -430,21 +358,14 @@ fn the_four_settings_fields_are_painted_in_the_references_order() {
         "location, `To clipboard`, base path, reverse, encoding — painted as \
          {location}, {clipboard}, {base}, {reverse}, {encoding}"
     );
-    // 1. the destination is named, not implied.
     assert_painted(&harness, "Save to…");
     assert_painted(&harness, "Directory");
     assert_painted(&harness, "Name");
-    // 2. the base, with the reference's own default stated.
     assert_painted(&harness, "the project directory");
-    // 4. the encoding, defaulted to git's own bytes.
     assert_painted(&harness, "UTF-8");
-    // The counting pair belongs to the same dialog as the fields that move it.
     assert_painted(&harness, "CHANGE DIRECTORY PATHS");
 }
 
-/// Base path decides **which directory the patch's paths are read from**, and it moves
-/// them on screen: a base above the project writes the project's own name into every
-/// path, a base inside it strips that prefix.
 #[test]
 fn the_base_path_moves_the_paths_the_dialog_paints() {
     let tmp = tempfile::tempdir().unwrap();
@@ -469,7 +390,6 @@ fn the_base_path_moves_the_paths_the_dialog_paints() {
     );
 }
 
-/// `Reverse patch` is git's `-R`, so the artifact changes rather than a flag flipping.
 #[test]
 fn the_reverse_field_changes_the_bytes_the_settings_hand_over() {
     let tmp = tempfile::tempdir().unwrap();
@@ -489,8 +409,6 @@ fn the_reverse_field_changes_the_bytes_the_settings_hand_over() {
     );
 }
 
-/// The encoding field is a statement about **bytes on disk**: the default writes git's
-/// output verbatim, `UTF-8 with BOM` writes the same bytes behind a mark.
 #[test]
 fn the_encoding_field_is_read_back_off_the_written_file() {
     let tmp = tempfile::tempdir().unwrap();
@@ -517,11 +435,6 @@ fn the_encoding_field_is_read_back_off_the_written_file() {
     );
 }
 
-// -------------------------------------------------- the route with no dialog --
-
-/// `Copy as Patch to Clipboard` is defined by the dialog it does not open, so the
-/// assertion is an absence — plus the text that did reach the clipboard, which has to
-/// be the same artifact the file route writes.
 #[test]
 fn the_clipboard_route_opens_no_dialog_at_all() {
     let tmp = tempfile::tempdir().unwrap();
@@ -546,14 +459,10 @@ fn the_clipboard_route_opens_no_dialog_at_all() {
     );
     assert_not_painted(&harness, create_patch::SETTINGS_TITLE);
     assert_not_painted(&harness, create_patch::COMMENT_PROMPT);
-    // The notice needs one more frame than the copy: a window fades in over 0.12 s
-    // (`theme.rs`), so the frame that emitted the command paints nothing yet.
     settle(&mut harness);
     assert_painted(&harness, "Patch copied to the clipboard");
 }
 
-/// Whether `needle` is painted anywhere in the last frame — the same query
-/// `assert_painted` makes, for the sites that carry their own reason.
 fn painted(harness: &Harness<'_, AppState>, needle: &str) -> bool {
     painted_text(harness).iter().any(|t| t.contains(needle))
 }
@@ -585,8 +494,6 @@ fn copied_across_frames(harness: &mut Harness<'_, AppState>, frames: usize) -> O
     None
 }
 
-/// The clipboard is the one place a created patch is decoded, so a patch that is not
-/// text stops that route **with a reason** rather than with a lossy copy of it.
 #[test]
 fn a_patch_that_is_not_text_refuses_the_clipboard_rather_than_losing_bytes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -608,11 +515,6 @@ fn a_patch_that_is_not_text_refuses_the_clipboard_rather_than_losing_bytes() {
     );
 }
 
-// ------------------------------------------------------- the other two routes --
-
-/// A Log commit already has a name — its subject — so its route skips the comment step
-/// and opens the settings on the file that subject names, with the commit's own change
-/// and none of its ancestor's.
 #[test]
 fn a_log_commit_skips_the_comment_and_names_the_file_from_its_subject() {
     let tmp = tempfile::tempdir().unwrap();
@@ -650,8 +552,6 @@ fn a_log_commit_skips_the_comment_and_names_the_file_from_its_subject() {
     );
 }
 
-/// A row of a file history **is** a revision: one file's change in one commit, and the
-/// route names exactly that one file.
 #[test]
 fn a_file_revision_routes_straight_to_the_settings_naming_one_file() {
     let tmp = tempfile::tempdir().unwrap();
@@ -686,10 +586,6 @@ fn a_file_revision_routes_straight_to_the_settings_naming_one_file() {
     );
 }
 
-// ------------------------------------------------------------------ the routes --
-
-/// Every create route is reachable from the palette, and none of them joins the VCS
-/// popup, whose action set is a frozen pin — the rule the two apply verbs keep.
 #[test]
 fn the_create_verbs_are_palette_routes_and_the_popup_stays_frozen() {
     let palette: Vec<&str> = Action::palette_actions()
@@ -712,15 +608,11 @@ fn the_create_verbs_are_palette_routes_and_the_popup_stays_frozen() {
     }
 }
 
-/// The local-changes route is the **checked** files when any are checked — the
-/// reference's "file or changelist" — and the whole set when none is.
 #[test]
 fn a_checked_file_narrows_the_patch_to_that_file_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = dirty_repo(tmp.path());
     let mut state = state_over(std::slice::from_ref(&dir), tmp.path());
-    // Checked by the key the Commit window itself uses, so the fixture cannot be the
-    // thing that makes the assert pass.
     let root = &state.multi.roots[0];
     let key = root
         .status
@@ -749,7 +641,6 @@ fn a_checked_file_narrows_the_patch_to_that_file_alone() {
         !paths.contains("App.java"),
         "and the unchecked change is not: {paths}"
     );
-    // And the same verb with nothing checked is the whole set: one route, two answers.
     let mut nothing_checked = state_over(std::slice::from_ref(&dir), tmp.path());
     turbogit_app::create_patch::open_from_selection(&mut nothing_checked);
     assert_eq!(
@@ -764,9 +655,6 @@ fn a_checked_file_narrows_the_patch_to_that_file_alone() {
     );
 }
 
-/// A created patch is a fact about **one** working tree (the per-root rule this surface
-/// shares with the apply that consumes one), so switching root drops the count that was
-/// measured against the other tree rather than repainting it.
 #[test]
 fn switching_the_create_root_drops_a_count_measured_against_another_tree() {
     let tmp = tempfile::tempdir().unwrap();

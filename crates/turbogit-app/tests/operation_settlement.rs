@@ -1,15 +1,3 @@
-//! What a completed operation settles *as* is decided by the operation's
-//! identity, never by the wording of its label (ADR-0020).
-//!
-//! Every claim here crosses one seam: the Headless harness over the app state —
-//! `for_roots`, `dispatch`, `drain_events` — and asserts observable state after
-//! settlement: which surface opened, what the activity feed gained, which report
-//! text is present.
-//!
-//! The three rebase flavours and the all-roots fetch are the two defects this
-//! design exists to make unrepresentable; each is paired with the flavour that
-//! already settled, so a fixture problem cannot masquerade as the bug.
-
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
@@ -23,34 +11,10 @@ use turbogit_domain::model::{
     MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntry, RootId, Upstream,
 };
 
-// --- git fixture ---------------------------------------------------------------
-
-// The repository recipes configure `user.*`, and the rest of the fixture pins
-// every call on top of it through the fixture crate's runner: a headless machine
-// has no global identity to borrow. The runner this replaced also set
-// `GIT_EDITOR=true`, which no call here needed — every rebase flavour below is
-// dispatched through the app, and the engine's CLI adapter suppresses its own
-// editor; the fixture's own commits go through `commit`, which never opened one.
-
-/// `git rev-parse <rev>` — a full commit id.
 fn rev(dir: &Path, r: &str) -> String {
     git_seed::git(dir, &["rev-parse", r]).trim().to_string()
 }
 
-/// A repository whose history offers a pair of commits touching the same lines
-/// of one file, so replaying one in the other's place conflicts:
-///
-/// ```text
-/// main     A ─── M   ("base" then "main side")
-/// feature   ╲─── F   ("base" then "feature side")
-/// ```
-///
-/// Ends checked out on `feature`.
-///
-/// Kept local, not `git_seed::repo_with_conflict`: that recipe leaves a merge
-/// *in progress* with the conflict staged, and the tests below are about a
-/// *rebase* that stops on conflicts — starting post-merge would make the rebase
-/// a no-op.
 fn conflicting_repo() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = git_seed::repo_with_one_commit(tmp.path(), "alpha");
@@ -66,8 +30,6 @@ fn conflicting_repo() -> (TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Replay `M` then `F`: `M` lands, `F` contradicts it, and the rebase stops with
-/// `README.md` conflicted.
 fn interactive_plan_conflicting(repo: &Path) -> Vec<RebasePlanEntry> {
     let shas = [rev(repo, "main"), rev(repo, "HEAD")];
     shas.into_iter()
@@ -80,7 +42,6 @@ fn interactive_plan_conflicting(repo: &Path) -> Vec<RebasePlanEntry> {
         .collect()
 }
 
-/// The repository left mid-rebase with one conflicted file.
 fn assert_repo_is_conflicted(repo: &Path) {
     let text = git_seed::git(repo, &["status", "--porcelain"]);
     assert!(
@@ -89,11 +50,6 @@ fn assert_repo_is_conflicted(repo: &Path) {
     );
 }
 
-/// A repository with a same-content `origin`, so a fetch is a real operation
-/// that changes nothing and ahead/behind is a known zero. The recipe is
-/// `test_support::git_seed`'s, promoted there so the UI suites rewrite the same
-/// history this one does rather than a lookalike; this wrapper keeps the
-/// suite's own tempdir.
 fn project_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -101,12 +57,10 @@ fn project_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
     (tmp, project, work)
 }
 
-/// One bare `origin` plus one local repo `name` on `main`, pushed to it.
 fn repo_with_origin(project: &Path, name: &str) -> PathBuf {
     test_support::git_seed::repo_with_origin(project, name)
 }
 
-/// A branch that exists only on `origin`, so the next fetch discovers it.
 fn push_branch_to_origin(project: &Path, name: &str, branch: &str) {
     let work = project.join(name);
     git_with_env(&work, &["branch", branch, "HEAD"], &GitEnv::fixture());
@@ -130,13 +84,6 @@ fn registered_root(state: &AppState, path: &Path) -> RootId {
         .clone()
 }
 
-// --- pumping -------------------------------------------------------------------
-
-/// Dispatch an operation and settle it, the way the shell's next frame does.
-///
-/// The headless harness runs git work inline, so the completion is already in
-/// the channel by the time `dispatch` returns, and one drain applies it —
-/// including anything that settlement itself queues.
 fn dispatch_and_settle(state: &mut AppState, op: Operation) {
     state.dispatch(op);
     state.drain_events();
@@ -147,7 +94,6 @@ fn dispatch_and_settle(state: &mut AppState, op: Operation) {
     );
 }
 
-/// The activity entries the feed gained, oldest first.
 fn feed(state: &AppState) -> Vec<String> {
     state
         .ui
@@ -158,10 +104,6 @@ fn feed(state: &AppState) -> Vec<String> {
         .collect()
 }
 
-// --- the rebase conflict hand-off ----------------------------------------------
-
-/// Every rebase flavour that stops on conflicts hands off to the conflict
-/// resolver — including the two whose labels used to miss the settlement test.
 #[test]
 fn every_rebase_flavour_that_stops_on_conflicts_opens_the_resolver() {
     for kind in [
@@ -210,9 +152,6 @@ fn every_rebase_flavour_that_stops_on_conflicts_opens_the_resolver() {
     }
 }
 
-/// A fourth flavour added later cannot miss the hand-off: settlement matched
-/// `Rebase`, not a kind. Asserted by driving the branch-rewriting flavour the
-/// branch tree uses, whose label names both sides.
 #[test]
 fn a_rebase_whose_label_names_both_sides_still_hands_off() {
     let (_tmp, repo) = conflicting_repo();
@@ -233,8 +172,6 @@ fn a_rebase_whose_label_names_both_sides_still_hands_off() {
     );
 }
 
-/// A merge that stops on conflicts hands off too, and its warning-toned report
-/// names the conflict count.
 #[test]
 fn a_merge_that_stops_on_conflicts_opens_the_resolver() {
     let (_tmp, repo) = conflicting_repo();
@@ -270,11 +207,6 @@ fn a_merge_that_stops_on_conflicts_opens_the_resolver() {
     );
 }
 
-// --- the fetch report ----------------------------------------------------------
-
-/// A fetch reports what it brought in whether it covered one root or several —
-/// the multi-root case used to report nothing while the single-root one
-/// reported.
 #[test]
 fn a_fetch_reports_what_it_brought_in_whatever_its_scope() {
     for scope in ["one root", "every root"] {
@@ -310,7 +242,6 @@ fn a_fetch_reports_what_it_brought_in_whatever_its_scope() {
     }
 }
 
-/// A fetch that brought nothing in still says so, rather than going quiet.
 #[test]
 fn a_fetch_that_changed_nothing_says_so() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -326,11 +257,6 @@ fn a_fetch_that_changed_nothing_says_so() {
     );
 }
 
-// --- settlement as a table -----------------------------------------------------
-
-/// One row per named operation: what a *successful* completion leaves in the
-/// feed. The exhaustive settlement match is what lets a row be added here
-/// without adding machinery.
 #[test]
 fn each_operation_kind_settles_to_its_own_report() {
     for row in [
@@ -352,13 +278,9 @@ fn each_operation_kind_settles_to_its_own_report() {
                 clean: settings.clean_tree_method,
                 commits: 0,
             },
-            // Nothing came in, and the branch is level with its upstream.
             expect: "Merge merged-branch · nothing to push",
         },
         Row {
-            // Rebased from a branch that is not `main`: the default settings
-            // protect `main`, and a protected branch refuses before git is
-            // touched, which would settle the row as a failure.
             what: "rebase",
             prepare: |repo| {
                 git_with_env(
@@ -423,9 +345,6 @@ fn each_operation_kind_settles_to_its_own_report() {
         },
     ] {
         let (_tmp, project, alpha) = project_with_origin("alpha");
-        // A branch pointing at HEAD: merging or replaying it changes nothing,
-        // so every row's expected report is a literal rather than a count that
-        // depends on how the fixture happened to land.
         git_with_env(&alpha, &["branch", "merged-branch"], &GitEnv::fixture());
         git_with_env(&alpha, &["branch", "spare"], &GitEnv::fixture());
         (row.prepare)(&alpha);
@@ -458,12 +377,8 @@ fn each_operation_kind_settles_to_its_own_report() {
     }
 }
 
-/// A row of the settlement table.
 struct Row {
     what: &'static str,
-    /// Extra worktree state the operation needs. Only Shelve dirties the tree:
-    /// a staged change there is enough to make a rebase refuse to run at all,
-    /// which would settle the row as a failure rather than a report.
     prepare: fn(&Path),
     op: fn(&RootId, &turbogit_domain::model::VcsSettings) -> Operation,
     expect: &'static str,
@@ -471,9 +386,6 @@ struct Row {
 
 fn nothing_prepared(_: &Path) {}
 
-/// Worktree-mutating operations invalidate the cached list *after* the work
-/// lands, which is the ordering ADR-0019 requires. A completion that never
-/// emits the second event would leave a stale list cached forever.
 #[test]
 fn a_worktree_mutation_invalidates_after_it_lands() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -493,9 +405,6 @@ fn a_worktree_mutation_invalidates_after_it_lands() {
         project.join("wt-ordering").exists(),
         "the worktree was created"
     );
-    // Priming the cache with a pre-mutation list is what an eager per-frame
-    // fill does; invalidating at dispatch time instead of after the work would
-    // leave exactly this stale entry cached forever (ADR-0019).
     state
         .caches
         .store_worktrees(root.clone(), vec![stale_worktree(&alpha, &root)]);
@@ -517,7 +426,6 @@ fn a_worktree_mutation_invalidates_after_it_lands() {
     );
 }
 
-/// A one-row worktree list that no longer describes the repository.
 fn stale_worktree(repo: &Path, root: &RootId) -> turbogit_domain::model::Worktree {
     turbogit_domain::model::Worktree {
         path: repo.join("gone"),
@@ -527,10 +435,6 @@ fn stale_worktree(repo: &Path, root: &RootId) -> turbogit_domain::model::Worktre
     }
 }
 
-// --- the undo arm --------------------------------------------------------------
-
-/// A confirmed local-branch deletion arms the short-window undo with the tip it
-/// captured. The arm used to read `Delete branch ` off the label.
 #[test]
 fn a_deleted_branch_arms_the_undo() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -542,8 +446,6 @@ fn a_deleted_branch_arms_the_undo() {
         root: root.clone(),
         name: "doomed".into(),
         tip_sha: rev(&alpha, "doomed"),
-        // The disclosures the notification carries after the ref is gone are
-        // the pending record's — nothing can re-read a branch that was deleted.
         upstream: Some(Upstream {
             remote: "origin".into(),
             branch: "doomed".into(),
@@ -587,8 +489,6 @@ fn a_deleted_branch_arms_the_undo() {
     );
 }
 
-/// An unrelated operation must not consume the pending deletion without arming
-/// anything — the shape the label test used to get wrong in both directions.
 #[test]
 fn an_unrelated_operation_does_not_arm_the_undo() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -611,13 +511,6 @@ fn an_unrelated_operation_does_not_arm_the_undo() {
     );
 }
 
-// --- the two targeted history rewrites ----------------------------------------------
-
-/// `alpha` plus a `feature` branch three commits deep and checked out — history
-/// a targeted rewrite may act on without tripping the protected-branch guard.
-/// Each commit touches its OWN path: replaying a descendant over a dropped
-/// neighbour must not conflict, or the test measures git's merge machinery
-/// rather than the operation's settlement.
 fn project_with_history(name: &str) -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -629,7 +522,6 @@ fn short(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
 
-/// The subjects a repository's log holds, newest first.
 fn subjects(dir: &Path) -> Vec<String> {
     git_seed::git(dir, &["log", "--format=%s"])
         .lines()
@@ -637,9 +529,6 @@ fn subjects(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// A dropped commit settles as its own kind of work: one feed entry naming the
-/// short reference and the root it moved, and the completion — not the log
-/// surface — dropping the cached history so the next read answers from git.
 #[test]
 fn a_dropped_commit_settles_as_a_history_rewrite_and_refreshes_the_log() {
     let (_tmp, project, alpha) = project_with_history("alpha");
@@ -667,9 +556,6 @@ fn a_dropped_commit_settles_as_a_history_rewrite_and_refreshes_the_log() {
         "the activity entry names the short reference the item showed"
     );
     assert_eq!(entries[0].repo.as_deref(), Some("alpha"));
-    // The cached history the Git Log reads is the refreshed one. Nothing in this
-    // test asks the log surface for anything: completion invalidated the root
-    // and the ordinary rescan refilled it.
     let cached = state
         .caches
         .log(&root)
@@ -689,8 +575,6 @@ fn a_dropped_commit_settles_as_a_history_rewrite_and_refreshes_the_log() {
     );
 }
 
-/// A reworded commit settles the same way, and the feed never carries the new
-/// message — it records the work, not the text.
 #[test]
 fn a_reworded_commit_settles_without_leaking_its_new_message() {
     let (_tmp, project, alpha) = project_with_history("alpha");
@@ -719,18 +603,12 @@ fn a_reworded_commit_settles_without_leaking_its_new_message() {
     assert_eq!(text.trim(), "a corrected subject");
 }
 
-/// A rewrite the settings refuse is reported as a failure, so the log is never
-/// left believing a commit is gone. It is still its own kind failing, and the
-/// error entry names it.
 #[test]
 fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
-    // A second commit, so the target has a first parent and a plan can be built
-    // for it at all: a root commit is refused before any plan exists.
     commit(&alpha, "README.md", "y\n", "second");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     let root = registered_root(&state, &alpha);
-    // `main` is protected by the default settings, and HEAD is on it.
     let target = rev(&alpha, "HEAD");
     let settings = state.settings.clone();
     let history_before = subjects(&alpha);
@@ -755,9 +633,6 @@ fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
         history_before,
         "and the log the developer is reading still describes the repository"
     );
-    // Armed the way the preflight arms it, so the refusal has something to clear:
-    // a rewrite that did not happen must leave nothing waiting to move a
-    // selection, and the commit the developer was looking at still selected.
     let plan = state
         .history_verb_plan(&root, &target, RebaseAction::Drop, None)
         .expect("a plan for the target");
@@ -786,10 +661,6 @@ fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
     );
 }
 
-// --- a failed operation --------------------------------------------------------
-
-/// A failure reports the operation and the git error, and leaves the conflict
-/// resolver alone.
 #[test]
 fn a_failed_operation_names_the_operation_and_the_failure() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -820,17 +691,6 @@ fn a_failed_operation_names_the_operation_and_the_failure() {
     let _ = root;
 }
 
-// --- the `Commit and Push…` chain ------------------------------------------------
-
-/// The chain's dialog opens on the commit's own completion, over the snapshots
-/// that completion already refreshed, and the armed ask is spent by the root that
-/// owed it.
-///
-/// **The outgoing snapshot is the pane's to build.** `ui.dlg.push_outgoing` is
-/// written by the Push dialog's first paint and never by settlement, so what is
-/// pinned here is the pair settlement owns — the dialog that opened and the ask it
-/// consumed. That the snapshot names the commit which just landed is the UI suite's
-/// claim, and only the spawned pump can judge it.
 #[test]
 fn a_landed_commit_that_owed_an_open_opens_the_push_dialog() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -838,8 +698,6 @@ fn a_landed_commit_that_owed_an_open_opens_the_push_dialog() {
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     let root = registered_root(&state, &alpha);
 
-    // The index is built through the shell's own staging entry, so the commit has
-    // something to land: an empty index would settle as a failure, not a chain.
     dispatch_and_settle(
         &mut state,
         commit_writes::set_staged(&root, Path::new("chained.txt"), true),
@@ -870,8 +728,6 @@ fn a_landed_commit_that_owed_an_open_opens_the_push_dialog() {
     );
 }
 
-/// A commit git refuses arms no dialog, so the owed open goes with it: the failure
-/// arm drops exactly what the success arm would have answered.
 #[test]
 fn a_commit_that_fails_opens_nothing_and_drops_the_ask() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -879,10 +735,6 @@ fn a_commit_that_fails_opens_nothing_and_drops_the_ask() {
     let root = registered_root(&state, &alpha);
     let history_before = subjects(&alpha);
 
-    // The fixture's worktree is clean and level with `origin/main`, so the index
-    // is empty and `git commit -m` exits 1 on "nothing to commit". The failure is
-    // git's own, with no preflight or synthetic error between the dispatch and the
-    // completion.
     state.dispatch_commit(&root, "nothing is staged", false, false, true);
     state.drain_events();
 
@@ -909,11 +761,6 @@ fn a_commit_that_fails_opens_nothing_and_drops_the_ask() {
     );
 }
 
-/// The owed open answers only a commit: a completion of another kind on the *same*
-/// root neither opens the dialog nor loses the ask. This is the whole reason
-/// `OpKind::Commit` is its own identity — commit used to share the `Custom` tail
-/// with staging, and a shared tail cannot be gated on which verb ran without
-/// reading the label's prose (ADR-0020).
 #[test]
 fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
     for kind in ["a stage", "a fetch"] {
@@ -921,12 +768,8 @@ fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
         std::fs::write(alpha.join("other.txt"), "other\n").unwrap();
         let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
         let root = registered_root(&state, &alpha);
-        // Armed by hand: the state a chain leaves while its commit is still on a
-        // worker thread and the developer is clicking something else.
         state.ui.commit_push_dialog_pending = Some(root.clone());
 
-        // Both are `Affected::Root` on this very root, so the root half of the
-        // gate passes and only the operation's kind can hold the open shut.
         let op = match kind {
             "a stage" => commit_writes::set_staged(&root, Path::new("other.txt"), true),
             _ => Operation::Fetch {
@@ -950,12 +793,6 @@ fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
     }
 }
 
-/// **A plain commit clears an owed ask** instead of stranding a consent dialog on
-/// the next chain: the pending is assigned at dispatch, never set conditionally.
-///
-/// Under the inline pump an owed open always settles before a second click could
-/// arrive, so this assignment rule is pinned at the state level rather than
-/// through the surface.
 #[test]
 fn a_plain_commit_clears_an_owed_open_instead_of_stranding_it() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
@@ -966,7 +803,6 @@ fn a_plain_commit_clears_an_owed_open_instead_of_stranding_it() {
         &mut state,
         commit_writes::set_staged(&root, Path::new("plain.txt"), true),
     );
-    // The ask the developer abandoned by clicking plain Commit.
     state.ui.commit_push_dialog_pending = Some(root.clone());
 
     state.dispatch_commit(&root, "a plain subject", false, false, false);

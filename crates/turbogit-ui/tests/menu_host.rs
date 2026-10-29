@@ -1,12 +1,3 @@
-//! Contract tests for the shared context-menu host (`ui::widgets::menu_host`).
-//!
-//! One seam: the host itself, driven by a fixture surface that owns nothing but
-//! "which row's menu is open". The open/close lifecycle is the whole contract —
-//! where a menu appears and every way it can go away — so it is asserted here
-//! once, for any menu in the app. That one host serving three surfaces is what
-//! makes the branches suite passing untouched the evidence that the extraction
-//! preserved behaviour rather than moved it.
-
 use egui::Ui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -17,14 +8,10 @@ use turbogit_ui::ui::icons::Icon;
 
 use turbogit_ui::ui::widgets::{self, MenuId, menu_host};
 
-/// The two rows of the fixture surface, and the item its menu paints.
 const ROW_A: &str = "alpha";
 const ROW_B: &str = "beta";
 const HOSTED_ITEM: &str = "Hosted item";
 
-/// A surface with two right-clickable rows, an open state, and nothing else.
-/// It owns which menu is open and what its item chose; the host is only ever
-/// told the first of those.
 #[derive(Default)]
 struct Fixture {
     open: Option<&'static str>,
@@ -51,9 +38,6 @@ fn show_menu(ui: &Ui, row: &'static str, dismiss: &mut bool) -> Option<&'static 
     .flatten()
 }
 
-/// **Not** `harness::widget_harness`, whose kittest-default 0.25s frame step is
-/// too coarse: a secondary click's press and release must land inside the window
-/// egui treats as a double click.
 fn fixture_harness() -> Harness<'static, Fixture> {
     let mut fonts_installed = false;
     let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
@@ -89,8 +73,6 @@ fn fixture_harness() -> Harness<'static, Fixture> {
     harness
 }
 
-/// A right-click stashes the pointer as the menu's anchor, and the host floats
-/// its contents there on the frame the row was clicked.
 #[test]
 fn a_right_click_opens_the_menu_at_the_pointer() {
     let mut harness = fixture_harness();
@@ -103,8 +85,6 @@ fn a_right_click_opens_the_menu_at_the_pointer() {
     assert_painted(&harness, HOSTED_ITEM);
 }
 
-/// A click anywhere outside the menu closes it, and the next frame shows
-/// nothing.
 #[test]
 fn a_click_outside_closes_the_menu() {
     let mut harness = fixture_harness();
@@ -118,7 +98,6 @@ fn a_click_outside_closes_the_menu() {
     assert_not_painted(&harness, HOSTED_ITEM);
 }
 
-/// Press and release at a point the open menu does not cover.
 fn click_away_from_the_menu(harness: &mut Harness<'_, Fixture>) {
     let outside = egui::pos2(300.0, 360.0);
     harness.hover_at(outside);
@@ -129,8 +108,6 @@ fn click_away_from_the_menu(harness: &mut Harness<'_, Fixture>) {
     harness.step();
 }
 
-/// Escape closes the open menu and nothing else: the surface's own state is the
-/// only thing that changes.
 #[test]
 fn escape_closes_the_menu() {
     let mut harness = fixture_harness();
@@ -145,14 +122,11 @@ fn escape_closes_the_menu() {
     assert_not_painted(&harness, HOSTED_ITEM);
 }
 
-/// A menu with no anchor cannot be painted, so it goes rather than parking with
-/// no home: the surface is told to clear its own open state.
 #[test]
 fn a_menu_with_no_anchor_closes_instead_of_parking() {
     let mut harness = fixture_harness();
     right_click_row(&mut harness, ROW_A);
 
-    // The surface claims ROW_B's menu is open; nothing ever anchored it.
     harness.state_mut().open = Some(ROW_B);
     harness.step();
 
@@ -160,8 +134,6 @@ fn a_menu_with_no_anchor_closes_instead_of_parking() {
     assert_not_painted(&harness, HOSTED_ITEM);
 }
 
-/// A click inside the menu is not a click outside it: the host keeps the menu
-/// up and hands the surface what the contents answered with.
 #[test]
 fn clicking_an_item_reaches_the_surface_that_owns_the_action() {
     let mut harness = fixture_harness();
@@ -182,9 +154,6 @@ fn clicking_an_item_reaches_the_surface_that_owns_the_action() {
     );
 }
 
-/// Right-clicking a second row while a menu is open moves the menu to the new
-/// target rather than dismissing it: the new target has no previous frame, so
-/// the click that opened it cannot be the click that closes it.
 #[test]
 fn a_second_right_click_retargets_the_open_menu() {
     let mut harness = fixture_harness();
@@ -197,13 +166,6 @@ fn a_second_right_click_retargets_the_open_menu() {
     assert_painted(&harness, HOSTED_ITEM);
 }
 
-// --- the extraction's own guard: one lifecycle, one home -------------------------
-
-/// The lifecycle is one component's, so the shapes it is built from appear there
-/// and nowhere else: a pointer anchor read out of egui memory, and the
-/// previous-frame tag that decides whether a click outside may dismiss. A second
-/// copy one file over is the failure ADR-0023 names, and it is what the log's
-/// two menus would reintroduce.
 #[test]
 fn no_other_module_restates_the_menu_lifecycle() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

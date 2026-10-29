@@ -6,19 +6,19 @@
 
 ## Sources
 
-- https://www.jetbrains.com/help/idea/edit-project-history.html — verified 200, 5355 chars → `docs-text/edit-project-history.md`
+- https://www.jetbrains.com/help/idea/edit-project-history.html, verified 200, 5355 chars → `docs-text/edit-project-history.md`
 - `actions-labeled.tsv`, `keymap-bindings.txt`
-- `strings/GitBundle.properties` — the `rebase.log.*`, `rebase.entry.*`, `rebase.interactive.*`, `rebase.option.*`, `rebase.dialog.*` families
+- `strings/GitBundle.properties`, the `rebase.log.*`, `rebase.entry.*`, `rebase.interactive.*`, `rebase.option.*`, `rebase.dialog.*` families
 - Cross-read: `docs-text/apply-changes-from-one-branch-to-another.md` (the interactive-rebase walkthrough lives there, not in `edit-project-history.md`)
-- Recovered 2026-10-05: `docs-text/undo-changes.md` (found via `undo-the-last-commit` → 404 → topic search). Supplies the four-mode Reset enumeration (Soft / Mixed / Hard / **Keep**), the `Select Target Changelist` dialog behind Undo Commit, the multi-commit-revert N-commits note, and the drop-of-pushed-work recovery tip — see spec §7.1a
+- Recovered 2026-10-05: `docs-text/undo-changes.md` (found via `undo-the-last-commit` → 404 → topic search). Supplies the four-mode Reset enumeration (Soft / Mixed / Hard / **Keep**), the `Select Target Changelist` dialog behind Undo Commit, the multi-commit-revert N-commits note, and the drop-of-pushed-work recovery tip, see spec §7.1a
 
 Docs resolve 1/1. This is the highest-density surface per byte of documentation:
 `edit-project-history.md` is the shortest page in the set, and the bundle's
-`rebase.log.*` family (≈45 keys) supplies nearly all of the UX — including **a
+`rebase.log.*` family (≈45 keys) supplies nearly all of the UX, including **a
 complete undo lifecycle for three separate verbs**, which no other surface
 documents this precisely.
 
-## UI — what exists
+## UI, what exists
 
 ### Action inventory (bundle)
 
@@ -41,7 +41,7 @@ Two more in `actions-labeled.tsv` that belong to this surface's grammar:
 `Git.InMemory.Extract.Selected.Changes` = "Extract Selected Changes to Separate
 Commit…" and `Git.Drop.Selected.Changes` = "Drop Selected Changes" (the
 *file-level* counterpart to `Git.Drop.Commits`, reachable from the Changed Files
-pane — log-tab.md:413).
+pane, log-tab.md:413).
 
 Descriptions from the bundle state the destructive classification:
 
@@ -56,7 +56,7 @@ Descriptions from the bundle state the destructive classification:
 
 **Fixup and Squash-Into are the pair that folds *staged local work* into an
 *earlier* commit; Squash-Commits is the pair that combines *selected* commits.**
-Conflating them loses half the surface — and the descriptions make the distinction
+Conflating them loses half the surface, and the descriptions make the distinction
 explicit.
 
 ### Topology: two surfaces plus per-verb dialogs
@@ -65,7 +65,7 @@ explicit.
 **`Rebasing Commits`** (`rebase.interactive.dialog.title`; the doc calls it "the
 Rebasing Commits dialog", apply-changes:157). Regions:
 
-1. **Plan table** with **three named columns** — `Action`
+1. **Plan table** with **three named columns**`Action`
    (`rebase.interactive.dialog.git.commands.column.action`), `Hash` (`…column.hash`),
    `Subject` (`…column.subject`).
 2. **Seven plan verbs**, from `rebase.entry.action.name.*` (GitBundle:212-219):
@@ -82,30 +82,30 @@ Rebasing Commits dialog", apply-changes:157). Regions:
    | `Unknown` | `rebase.entry.action.name.unknown` |
 
    **Seven verbs, not five.** TurboGit's plan editor has five chips
-   (`pick`, `reword`, `squash`, `fixup`, `drop` —
+   (`pick`, `reword`, `squash`, `fixup`, `drop`,
    `crates/turbogit-ui/src/ui/interactive_rebase.rs`) and is **missing `Edit` and
    `Update Ref`**, even though `RebaseAction::Edit` exists in the domain enum and is
    parsed from `REBASE-TODO`. A concrete, evidence-backed gap. `Unknown` is the
    parser's fallback for an unrecognised todo verb, so the plan editor must render
    a state it did not create.
 
-3. **Reorder controls** — "use the ↑ and ↓ buttons to move commits up and down the
+3. **Reorder controls**, "use the ↑ and ↓ buttons to move commits up and down the
    list" (apply-changes:136).
-4. **`Reset` link** — "click Reset to discard all actions you've applied to the
+4. **`Reset` link**, "click Reset to discard all actions you've applied to the
    commits" (line 156); bundle `rebase.interactive.dialog.reset.link.text=Reset`
    (GitBundle:229). **The whole plan is undoable in one click, before running it.**
-5. **`View Git Commands` toggle** — `rebase.interactive.dialog.view.git.commands.text`
+5. **`View Git Commands` toggle**`rebase.interactive.dialog.view.git.commands.text`
    (GitBundle:234), group `Git Commands` (GitBundle:228), reword hint
    `Press {0} to apply changes` (GitBundle:230). The editor can show the **raw git
-   todo it will run** — the plan is inspectable in git's own syntax.
-6. **Footer** — `Start Rebasing` (`rebase.interactive.dialog.start.rebase`,
+   todo it will run**, the plan is inspectable in git's own syntax.
+6. **Footer**, `Start Rebasing` (`rebase.interactive.dialog.start.rebase`,
    GitBundle:231), `Cancel Rebase` (GitBundle:221).
-7. **Graph preview** — "the Rebasing Commits dialog shows a **graph** illustrating
+7. **Graph preview**, "the Rebasing Commits dialog shows a **graph** illustrating
    all actions you've applied to commits in your branch so that you can review them
    before starting the rebase" (apply-changes:157-158). The plan has a *visual*
    preview, not just rows.
 
-**B. Per-verb dialogs** — one per verb, same shape:
+**B. Per-verb dialogs**, one per verb, same shape:
 
 | Verb | Dialog | Bundle |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ Rebasing Commits dialog", apply-changes:157). Regions:
 | Initial commit | extra confirm | title `Editing Initial Commit`, body "Are you sure you want to edit the initial commit?" (GitBundle:248-249) |
 
 **C. The rebase options dialog** (`Git | Rebase…`, title `Rebase`,
-`rebase.dialog.title`, GitBundle:195). Fields, from the bundle key names — which are
+`rebase.dialog.title`, GitBundle:195). Fields, from the bundle key names, which are
 unusually self-documenting:
 
 | Bundle key | Meaning |
@@ -138,14 +138,14 @@ Per-field validation, which is the useful detail:
 - `rebase.dialog.error.branch.not.selected=Select a branch to switch to`
 - `rebase.dialog.error.branch.invalid=Branch ''{0}'' does not exist`
 - `rebase.dialog.error.rebase.in.progress=Interactive rebase is already in progress for this Git root`
-- `rebase.dialog.root.invalid.label.text=(invalid)` — a per-root invalid marker
+- `rebase.dialog.root.invalid.label.text=(invalid)`, a per-root invalid marker
 - `rebase.dialog.progress.loading.tags=Loading tags…`
 
 ### State matrix
 
 | State | Which region | What it shows | Source |
 | --- | --- | --- | --- |
-| default | plan row | `Pick` — "this is the default state for all commits" (apply-changes:138) | apply-changes:138 |
+| default | plan row | `Pick`, "this is the default state for all commits" (apply-changes:138) | apply-changes:138 |
 | default | plan row | clicking `Pick` on a modified row **undoes that row**: "If you need to undo an action you've already taken on a commit, click Pick so that this commit is applied as is" (line 138) | apply-changes:138 |
 | hover | plan row | `View Git Commands` shows the equivalent git todo line (GitBundle:234) | GitBundle:234 |
 | pressed | `Stop to Edit` | marks the row to stop at; `rebase.interactive.dialog.stop.to.edit.text=Stop to Edit` (GitBundle:232) | GitBundle:232 |
@@ -154,28 +154,28 @@ Per-field validation, which is the useful detail:
 | disabled | any rewrite verb | `Selected {N commits} {is\|are} from different repositories` / `from external repository` (GitBundle:251-252) | GitBundle:251-252 |
 | focus | reword mini-editor | `rebase.interactive.dialog.reword.hint.text=Press {0} to apply changes` (GitBundle:230); its OK is `Continue Rebasing` (GitBundle:237) | GitBundle:230, 237 |
 | focus | reword mini-editor | cancelling warns first: title `Cancel Reword`, body "Entered commit message will be lost", choices `Cancel Reword` / `Keep Editing` (GitBundle:238-241) | GitBundle:238-241 |
-| selected | commit row | enables the verb set; `Commit Details` is the verification surface — "Use the information in the Commit Details area to make sure these are the changes you want" (apply-changes:242) | apply-changes:242 |
+| selected | commit row | enables the verb set; `Commit Details` is the verification surface. "Use the information in the Commit Details area to make sure these are the changes you want" (apply-changes:242) | apply-changes:242 |
 | progress | plan editor | `Searching for branches containing the selected commit…` (GitBundle:253), `Checking if it is allowed to edit selected commits…` (272), `Loading {N commit\|N commits} details…` (284) | GitBundle:253, 272, 284 |
 | progress | drop | `Dropping {N commit\|N commits}…` (GitBundle:266) | GitBundle:266 |
 | progress | squash | `Squashing…` (GitBundle:288) | GitBundle:288 |
 | error | reword load | `Could not load changes of {N commit\|N commits}` (GitBundle:279) | GitBundle:279 |
-| error | failure titles | `Could not Drop Commits` (265), `Could not Edit Commit Message` (278), `Could not Squash Commits` (285), `Cannot Create Fixup Commit` (275), `Cannot Create Squash Commit` (276), `Cannot Start Rebase` (277) — **one per verb, all distinct** | GitBundle:275-278, 285 |
+| error | failure titles | `Could not Drop Commits` (265), `Could not Edit Commit Message` (278), `Could not Squash Commits` (285), `Cannot Create Fixup Commit` (275), `Cannot Create Squash Commit` (276), `Cannot Start Rebase` (277), **one per verb, all distinct** | GitBundle:275-278, 285 |
 | error | head lookup | `Could not find HEAD branch in repository which contains selected {N commits}` (GitBundle:271) | GitBundle:271 |
 
 **The plural discipline is the surface's strongest signal.** Every count-bearing
-string is ICU-pluralised — `{0,choice,1#commit|2#commits}`,
+string is ICU-pluralised`{0,choice,1#commit|2#commits}`,
 `{0,choice,1#is|2#are}`, `{0,choice,1#file|2#files}`. A port that writes
 "Dropping 1 commit…" from one format string is visibly wrong. One string is
 pluralised *twice in a single sentence* (GitBundle:252: `Selected
 {0,choice,1#commit|2#commits} {0,choice,1#is|2#are} from different repositories`).
 
-## UX — how it behaves
+## UX, how it behaves
 
 ### How is it reached, and what hides behind a secondary affordance?
 
 Every verb is on the Log commit row's context menu (apply-changes:18, 46, 57, 67,
 122; edit:18, 46, 57, 67). `Edit Commit Message` also has `F2` / `⇧F6`
-(`actions-labeled.tsv`) — the only verb here with a keystroke.
+(`actions-labeled.tsv`), the only verb here with a keystroke.
 
 Hidden behind secondary affordances:
 
@@ -191,12 +191,12 @@ Hidden behind secondary affordances:
 - **All of `--onto` / `--rebase-merges` / `--keep-empty` / `--root` /
   `--update-refs` / `--autosquash`** hide behind `Modify options`
   (apply-changes:76, 84, 171, 179). The default rebase path shows one field.
-- **Fixup/Squash-Into require staged changes first** — the flow is *stage in the
+- **Fixup/Squash-Into require staged changes first**, the flow is *stage in the
   Commit tool window, then choose the verb in the Log* (edit:44-46). A cross-surface
   dependency, stated from both sides.
 - **The disabled reason hides behind a hover**: "To identify the reason, hover over
   the action in the context menu and look for the message in the status bar"
-  (apply-changes:131-132) — and even the status bar must be enabled: "right-click in
+  (apply-changes:131-132), and even the status bar must be enabled: "right-click in
   the lower-right corner of the navigation bar to open the context menu and make
   sure that the **Status Text widget** is enabled" (line 132).
 
@@ -210,9 +210,9 @@ Hidden behind secondary affordances:
 | Drop / rewrite the initial commit | **Yes, an extra confirm.** `Editing Initial Commit` / "Are you sure you want to edit the initial commit?" (GitBundle:248-249) | GitBundle:248-249 |
 | Undo Commit | no confirm documented; it *is* the recovery | `Git.Uncommit` |
 | Reword (Edit Commit Message) | the mini-editor is the confirmation | edit:20 |
-| Reword via the plan editor | no extra confirm — the plan + graph + `Reset` is the preflight | apply-changes:157-159 |
+| Reword via the plan editor | no extra confirm, the plan + graph + `Reset` is the preflight | apply-changes:157-159 |
 | Squash Commits | the message dialog is the confirmation; "by default, it contains the messages from both commits" (edit:59) | edit:59 |
-| Fixup / Squash Into | no dialog documented — `Commit and Rebase…` from the Commit button's arrow (edit:51) | edit:51 |
+| Fixup / Squash Into | no dialog documented, `Commit and Rebase…` from the Commit button's arrow (edit:51) | edit:51 |
 | Extract Selected Changes | "In the dialog that opens, enter the new commit message if necessary" (edit:77) | edit:77 |
 | Revert Commit | no confirm documented | log-tab.md:288 |
 | Reset Current Branch to Here | the Reset dialog asks for the mode: "In the Git Reset dialog that opens, select the mode in which the working tree will be updated" (log-tab.md:286) | log-tab.md:286 |
@@ -240,7 +240,7 @@ todo.
 This is where the bundle is most valuable. **Three verbs have a full, explicit undo
 lifecycle, each with its own success, in-progress, impossible and failed state.**
 
-**Drop Commits — six states:**
+**Drop Commits, six states:**
 
 | State | String | Key |
 | --- | --- | --- |
@@ -251,7 +251,7 @@ lifecycle, each with its own success, in-progress, impossible and failed state.*
 | undo failed | `Undo drop failed` | GitBundle:268 |
 | failure | `Could not Drop Commits` | GitBundle:265 |
 
-**Reword — four states, including a *repository-changed* guard:**
+**Reword, four states, including a *repository-changed* guard:**
 
 | State | String | Key |
 | --- | --- | --- |
@@ -262,7 +262,7 @@ lifecycle, each with its own success, in-progress, impossible and failed state.*
 
 **The "Repository has already been changed" guard is the important one.** Reword
 is a history rewrite, so a concurrent edit invalidates the undo. The undo is
-offered *unless* the repository moved — i.e. **the undo's validity is checked at
+offered *unless* the repository moved, i.e. **the undo's validity is checked at
 undo time, not at reword time.** Stronger than TurboGit's current model.
 
 **Squash:**
@@ -274,7 +274,7 @@ undo time, not at reword time.** Stronger than TurboGit's current model.
 | failure | `Could not Squash Commits` | GitBundle:285 |
 
 **Coverage is asymmetric**: drop and reword are undoable by name, squash is not.
-That asymmetry is itself a finding — a client should not assume "rewrite ⇒ undo".
+That asymmetry is itself a finding, a client should not assume "rewrite ⇒ undo".
 
 **Hard boundaries:**
 
@@ -287,11 +287,11 @@ That asymmetry is itself a finding — a client should not assume "rewrite ⇒ u
   `git push --force` is not allowed" (edit:11). A GitHub-protected branch is
   auto-detected as protected on checkout (edit:11).
 - **Contributors**: "Avoid modifying the history for a remote branch with multiple
-  contributors unless absolutely necessary" (edit:9) — advice, not a gate.
+  contributors unless absolutely necessary" (edit:9), advice, not a gate.
 - **Pushing a rewritten history is rejected**: "Pushing modifications that rewrite a
   branch history to the remote repository will be rejected … so you will have to use
   force push" (edit:10).
-- **Not undoable**: `Edit` (stop-to-edit) — once the rebase stops, the plan is
+- **Not undoable**: `Edit` (stop-to-edit), once the rebase stops, the plan is
   history; the escape is `Abort Rebase`, which "restore[s] the original branch and
   stop[s] rebasing" (GitBundle:383/1329).
 - **Reset is scoped**: "You cannot perform actions that modify a branch history for
@@ -304,14 +304,14 @@ That asymmetry is itself a finding — a client should not assume "rewrite ⇒ u
 | Plan verb | `Pick` for every commit | apply-changes:138 |
 | `--onto` | off; the basic rebase shows one target field | apply-changes:76 |
 | `Select another branch to rebase` | off | `rebase.option.switch.to.branch` |
-| `--rebase-merges` | off — and it carries a warning: "any resolved merge conflicts or manual amendments in these merge commits will have to be resolved or reapplied manually" (apply-changes:87) | apply-changes:87 |
+| `--rebase-merges` | off, and it carries a warning: "any resolved merge conflicts or manual amendments in these merge commits will have to be resolved or reapplied manually" (apply-changes:87) | apply-changes:87 |
 | `--keep-empty` | off; label `Do not remove empty commits during rebase` (GitBundle:206) | GitBundle:206 |
 | `--root` | off; label `Rebase all commits in the branch` (GitBundle:207) | GitBundle:207 |
 | `--autosquash` | off; label `Auto-squash commits marked for fixup or squash` (GitBundle:208) | GitBundle:208 |
 | `--update-refs` | off; **also a per-commit plan verb** `Update Ref` (GitBundle:215) | GitBundle:205, 215 |
-| Squash message | **pre-filled with both messages** — "by default, it contains the messages from both commits" (edit:59) | edit:59 |
-| Fixup message | **discarded** — "the commit message of the fixup commit will be discarded, so this change will be invisible in the branch history" (apply-changes:149) | apply-changes:149 |
-| Ask for confirmation to drop commits | present as a setting — `settings.show.rebase.log.drop.confirmation=Ask for confirmation to drop commits` | settings tree |
+| Squash message | **pre-filled with both messages**, "by default, it contains the messages from both commits" (edit:59) | edit:59 |
+| Fixup message | **discarded**, "the commit message of the fixup commit will be discarded, so this change will be invisible in the branch history" (apply-changes:149) | apply-changes:149 |
+| Ask for confirmation to drop commits | present as a setting, `settings.show.rebase.log.drop.confirmation=Ask for confirmation to drop commits` | settings tree |
 | Add `cherry-picked from <hash>` suffix when picking commits pushed to protected branches | present as a setting | `settings.add.suffix` |
 | Load branch protection rules from GitHub | present as a setting | `settings.synchronize.branch.protection.rules` |
 | Use Safe Force Push | present as a setting | `advanced.setting.git.use.push.force.with.lease` |
@@ -355,7 +355,7 @@ Rebase-in-progress feedback:
   rebase` to resume it" (line 143). The recovery is a **menu item, always
   present**, not a notification-only affordance.
 - `rebase.interactive.edit.commit.message.ok.action.title=Continue Rebasing`
-  (GitBundle:237) — the reword editor's OK *is* "continue the rebase", so the two
+  (GitBundle:237), the reword editor's OK *is* "continue the rebase", so the two
   dialogs are one flow.
 
 **Optimistic paint: no.** Every verb reports after completion with a distinct title.
@@ -368,24 +368,24 @@ Focus after the action:
 - `Discard changes and cancel rebase?` → `Continue Rebasing` returns focus to the
   plan editor (GitBundle:222).
 - After a successful drop or squash the list repaints and focus presumably moves to
-  a neighbour — **UNVERIFIED**, no source states it. Re-tested against
+  a neighbour. **UNVERIFIED**, no source states it. Re-tested against
   undo-changes/edit-project-history/apply-changes-from-one-branch-to-another
   2026-10-06: all three describe the notification and the repaint, none names a
   focus target → needs runtime capture (R3).
 
-## Flow — how tasks chain
+## Flow, how tasks chain
 
 ### Entry points
 
-1. Log commit row context menu — the origin of every verb (apply-changes:18, 46,
+1. Log commit row context menu, the origin of every verb (apply-changes:18, 46,
    57, 67, 122; log-tab.md:264-338).
-2. `F2` / `⇧F6` — `Edit Commit Message` only.
-3. The success notification after a commit — `Edit Commit Message` (tutorial:67).
-4. Commit tool window gutter toolbar — `Amend`, and the arrow to `Commit and
+2. `F2` / `⇧F6`, `Edit Commit Message` only.
+3. The success notification after a commit, `Edit Commit Message` (tutorial:67).
+4. Commit tool window gutter toolbar, `Amend`, and the arrow to `Commit and
    Rebase…` (edit:51; commit-and-push-changes.md:124).
 5. `Git | Rebase…` for the options dialog; `Git | Continue rebase` / `Abort rebase`
    for an in-flight rebase (apply-changes:143).
-6. Changed Files pane context menu — `Drop Selected Changes`,
+6. Changed Files pane context menu`Drop Selected Changes`,
    `Extract Selected Changes to Separate Commit` (log-tab.md:410-415).
 
 ### Internal sequence, with dialog chaining
@@ -422,7 +422,7 @@ Log → oldest commit of the series → Interactively Rebase from Here…
 
 (apply-chances:118-159, 194-221.)
 
-**Fixup / Squash-Into — the cross-surface chain:**
+**Fixup / Squash-Into, the cross-surface chain:**
 
 ```
 Commit tool window: select the files whose changes should be appended
@@ -468,7 +468,7 @@ Log → select the local branch, then the commit to split
 
 (edit:73-78.)
 
-**Push a rewritten history — the tail of every flow here:**
+**Push a rewritten history, the tail of every flow here:**
 
 ```
 … rewrite …
@@ -488,7 +488,7 @@ Log → select the local branch, then the commit to split
 - **Reword**: the commit's hash changes; notification with a conditional undo
   (GitBundle:280-283).
 - **Squash**: N commits become 1; notification (GitBundle:289). Then "Push ⌃⇧K the
-  changes to the remote branch" (edit:61) — **the flow does not stop at the
+  changes to the remote branch" (edit:61), **the flow does not stop at the
   rewrite; it names the push as the next step.**
 - **Interactive rebase**: the plan editor closes; if a row was `Stop to Edit`, the
   rebase pauses and waits (apply-changes:141).
@@ -500,22 +500,22 @@ Log → select the local branch, then the commit to split
 | --- | --- | --- |
 | Commit not in current branch | `Commit {0} is not in the current branch` (GitBundle:273); disabled with a status-bar reason (apply-changes:128) | pick a commit in the current branch |
 | Commit is a merge | `Commit {0} has {1} parents` (GitBundle:274) / `Selected commit has {0} parents` (250) | disabled; no recovery |
-| Pushed to a protected branch | `The commit is already pushed to protected branch ''{0}''` (GitBundle:247); undo notification GitBundle:259 | **unrecoverable in-app** — the doc's answer is force push, which the protection forbids (edit:11) |
+| Pushed to a protected branch | `The commit is already pushed to protected branch ''{0}''` (GitBundle:247); undo notification GitBundle:259 | **unrecoverable in-app**, the doc's answer is force push, which the protection forbids (edit:11) |
 | Selection spans repositories | `Selected {N commits} {is\|are} from different repositories` (GitBundle:252) | narrow the selection |
 | Selection is external | `…from external repository` (GitBundle:251) | narrow the selection |
 | A rebase is already running | `Interactive rebase is already in progress for this Git root` (GitBundle:190) | finish or abort the running rebase |
 | During cherry-pick / merge / rebase / revert | `Cannot {0} during {…}` (GitBundle:254-257) | finish or abort that operation first |
-| No HEAD branch in the repo | `Could not find HEAD branch in repository which contains selected {N commits}` (GitBundle:271) | **UNVERIFIED** — re-tested against undo-changes/edit-project-history 2026-10-06: both silent on this failure → needs runtime capture (R3) |
-| Could not load commit message | `Could not load changes of {N commits}` (GitBundle:279) | **UNVERIFIED** — re-tested against undo-changes/edit-project-history 2026-10-06: silent → needs runtime capture (R3) |
-| Verb failed | six distinct titles, GitBundle:275-278, 285 | **UNVERIFIED** — no bundled per-verb recovery action; re-tested against undo-changes/edit-project-history 2026-10-06: the pages give recovery only for the push-rejected tail, not per-verb failure → needs runtime capture (R3) |
+| No HEAD branch in the repo | `Could not find HEAD branch in repository which contains selected {N commits}` (GitBundle:271) | **UNVERIFIED**, re-tested against undo-changes/edit-project-history 2026-10-06: both silent on this failure → needs runtime capture (R3) |
+| Could not load commit message | `Could not load changes of {N commits}` (GitBundle:279) | **UNVERIFIED**, re-tested against undo-changes/edit-project-history 2026-10-06: silent → needs runtime capture (R3) |
+| Verb failed | six distinct titles, GitBundle:275-278, 285 | **UNVERIFIED**, no bundled per-verb recovery action; re-tested against undo-changes/edit-project-history 2026-10-06: the pages give recovery only for the push-rejected tail, not per-verb failure → needs runtime capture (R3) |
 | Undo no longer valid | `Repository has already been changed` (GitBundle:282); `Cannot undo drop` (269) | the undo is withheld; **UNVERIFIED** whether anything else is offered. Re-tested against undo-changes 2026-10-06: the page documents recovery for a dropped *pushed* change (force push, or update first then push the merge commit) but says nothing about what the withheld-undo notification offers → needs runtime capture (R3) |
 | Push of a rewritten history rejected | edit:10 | force push, unavailable on protected branches |
 | Discard plan on cancel | "Discard changes and cancel rebase?" (GitBundle:224) | `Continue Rebasing` / `Cancel Rebase` (GitBundle:221-222) |
 
 ### Escape / dismiss semantics
 
-- The plan editor's cancel is a **three-way** choice — `Discard` / `Continue
-  Rebasing` / `Cancel Rebase` (GitBundle:221-223) — separating "abandon my plan
+- The plan editor's cancel is a **three-way** choice. `Discard` / `Continue
+  Rebasing` / `Cancel Rebase` (GitBundle:221-223), separating "abandon my plan
   edits" from "leave the dialog".
 - The reword mini-editor refuses a bare cancel: `Cancel Reword` warns that "Entered
   commit message will be lost" and offers `Keep Editing` (GitBundle:238-241).
@@ -528,14 +528,14 @@ Log → select the local branch, then the commit to split
 
 | Dimension | Rebased behaviour | TurboGit behaviour | Why |
 | --- | --- | --- | --- |
-| UI | Seven plan verbs: Pick, Edit, Reword, Squash, Fixup, Drop, **Update Ref**, plus an `Unknown` fallback (GitBundle:212-219) | Five chips: `pick`, `reword`, `squash`, `fixup`, `drop` (`crates/turbogit-ui/src/ui/interactive_rebase.rs`) | **Open gap, not a settled divergence.** `RebaseAction::Edit` already exists in the domain enum and is parsed from `REBASE-TODO` — it simply has no chip and no shortcut. `Update Ref` maps to the existing `--update-refs` dialog flag, so surfacing it per-commit is a rendering change. See ticket 08. |
+| UI | Seven plan verbs: Pick, Edit, Reword, Squash, Fixup, Drop, **Update Ref**, plus an `Unknown` fallback (GitBundle:212-219) | Five chips: `pick`, `reword`, `squash`, `fixup`, `drop` (`crates/turbogit-ui/src/ui/interactive_rebase.rs`) | **Open gap, not a settled divergence.** `RebaseAction::Edit` already exists in the domain enum and is parsed from `REBASE-TODO`, it simply has no chip and no shortcut. `Update Ref` maps to the existing `--update-refs` dialog flag, so surfacing it per-commit is a rendering change. See ticket 08. |
 | UX | `Pick` on a modified row **resets that row** (apply-chances:138) | Row verbs are chips; reordering has `⇧↑`/`⇧↓`; no per-row reset binding (`interactive_rebase.rs:281-295`) | Small, cheap, and it removes a foot-gun: a user who has half-edited a plan currently has no one-click per-row way back, only the global `Reset`. **Open gap.** |
 | UX | `Update Ref` available as a **per-commit plan verb** (GitBundle:215) | `--update-refs` is a dialog-level checkbox only | Per-commit is strictly more expressive, and the plan is already the right place for it. **Open gap.** |
-| UI | Plan editor shows a **graph** of the resulting history plus a `View Git Commands` raw-todo view (apply-chances:157; GitBundle:234) | `RebaseEditorTab::{Plan, Preview, Log}` — Preview and Log already provide both (`state.rs:358-368`) | No divergence. Recorded because it confirms TurboGit's three-tab shape is the right match. |
-| UX | Drop/reword/squash each get a success notification with an **undo action**, and each undo has named impossible/failed states (GitBundle:265-289) | `Operation::DropCommit` / `RewordCommit` with `RewritePreflight` before, and a backup ref (`refs/turbogit/preflight-backup`); **no post-hoc undo notification** | TurboGit's model is *pre*-flight (disclose before) where Rebased's is *post*-flight (undo after). Both defensible; Rebased's covers the case TurboGit's cannot — a mistake discovered after the fact. The mechanism already exists. **Open gap**; see ticket 09. |
+| UI | Plan editor shows a **graph** of the resulting history plus a `View Git Commands` raw-todo view (apply-chances:157; GitBundle:234) | `RebaseEditorTab::{Plan, Preview, Log}`. Preview and Log already provide both (`state.rs:358-368`) | No divergence. Recorded because it confirms TurboGit's three-tab shape is the right match. |
+| UX | Drop/reword/squash each get a success notification with an **undo action**, and each undo has named impossible/failed states (GitBundle:265-289) | `Operation::DropCommit` / `RewordCommit` with `RewritePreflight` before, and a backup ref (`refs/turbogit/preflight-backup`); **no post-hoc undo notification** | TurboGit's model is *pre*-flight (disclose before) where Rebased's is *post*-flight (undo after). Both defensible; Rebased's covers the case TurboGit's cannot, a mistake discovered after the fact. The mechanism already exists. **Open gap**; see ticket 09. |
 | UX | Reword's undo is **invalidated if the repository changed** ("Repository has already been changed", GitBundle:282) | No such check | Reword is a history rewrite, so a concurrent edit genuinely invalidates the undo. Validating at undo time beats assuming. **Open gap**, cheap to add. |
-| UX | `--onto` is two ordered fields — new base, then old base (GitBundle:196-197; apply-changes:177-178) | `RebaseKind::Standard { onto }` — a single target, no `--onto` (`operation.rs`) | `--onto` is the "move only this sequence of commits" tool, genuinely useful for stack surgery. **Open gap**; the field pair and both validation strings are specified. |
-| UX | A rebase already in flight blocks another: `Interactive rebase is already in progress for this Git root` (GitBundle:190) | Not established | **Open gap** — and the *per-root* qualifier is the interesting part, since TurboGit is multi-root. |
+| UX | `--onto` is two ordered fields, new base, then old base (GitBundle:196-197; apply-changes:177-178) | `RebaseKind::Standard { onto }`, a single target, no `--onto` (`operation.rs`) | `--onto` is the "move only this sequence of commits" tool, genuinely useful for stack surgery. **Open gap**; the field pair and both validation strings are specified. |
+| UX | A rebase already in flight blocks another: `Interactive rebase is already in progress for this Git root` (GitBundle:190) | Not established | **Open gap**, and the *per-root* qualifier is the interesting part, since TurboGit is multi-root. |
 | UX | State-machine gating: `Cannot {0} during cherry-pick / merge / rebase / revert` (GitBundle:254-257) | Protected-branch guard exists in `Operation::Rebase`; no in-flight-operation state machine | **Open gap.** The four-reason enumeration is fully specified and testable. |
 | UX | Squash is not undoable while drop and reword are (asymmetric coverage in the bundle) | Uniform preflight for both Drop and Reword (`Dialog::RewritePreflight` takes a `HistoryVerb`) | TurboGit's uniformity is *better* here. Deliberate: `HistoryVerb` parameterises one preflight rather than forking per verb (`state.rs:513-528`). Uniformity costs nothing the user can observe. |
 | UI | Every count-bearing string is ICU-pluralised, one twice in a sentence (GitBundle:252) | Rust `format!` with hand-written conditionals | Pluralisation must be one shared helper, not per-call-site conditionals, or the same sentence drifts. Recorded as an implementation constraint. |
@@ -543,22 +543,22 @@ Log → select the local branch, then the commit to split
 
 ## Needs runtime capture
 
-1. **The plan editor's visual layout** — column widths, whether the graph sits
+1. **The plan editor's visual layout**, column widths, whether the graph sits
    above or beside the table, and whether `View Git Commands` replaces the table
    or opens a second view (GitBundle:228, 234).
-2. **Default state of `Ask for confirmation to drop commits`** — the setting exists
+2. **Default state of `Ask for confirmation to drop commits`**, the setting exists
    (`settings.show.rebase.log.drop.confirmation`) but the drop confirmation
    (GitBundle:261) is unconditional in the bundle, so whether the setting suppresses
    it is unclear.
-3. **Focus target after a successful drop or squash** — which row takes focus when
+3. **Focus target after a successful drop or squash**, which row takes focus when
    the selected commit ceases to exist.
 4. **Whether `Update Ref` appears per-row always, or only when `--update-refs` is
-   enabled** — the two are separate strings and their interaction is undocumented.
-5. **The `Stop to Edit` pause UX** — what the stopped state looks like, and which
+   enabled**, the two are separate strings and their interaction is undocumented.
+5. **The `Stop to Edit` pause UX**, what the stopped state looks like, and which
    actions the paused commit accepts ("You can modify this commit using the context
    actions (such as Revert, Undo, Amend, and so on) before continuing",
    apply-changes:142).
 6. **Whether the reword mini-editor's OK reads `Continue Rebasing` in the
-   `Edit Commit Message…` path too**, or only inside the interactive dialog — the
+   `Edit Commit Message…` path too**, or only inside the interactive dialog, the
    key is `rebase.interactive.edit.commit.message.ok.action.title`, so its scope is
    implied but not stated.

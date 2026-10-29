@@ -1,30 +1,9 @@
-//! `When patch is created:` — the persisted three-way policy behind the create
-//! routes.
-//!
-//! The captured default across the programme is **Ask**, and the product today has
-//! no ask at all: a created patch always reports the same way, whatever the
-//! developer wants. This suite is therefore built around the one claim that makes
-//! the setting real — **a persisted choice changes what a create route does** — so
-//! each arm is asserted through the same route with nothing varied but the policy.
-//!
-//! `Ask` is the interesting arm: it is the only one that leaves the decision with
-//! the developer, so it is asserted as an *armed* follow-up and a file that exists
-//! on disk, never as a window nobody closed. The two non-asking arms have to be
-//! told apart from each other and from `Ask`, which is why `Do nothing` asserts the
-//! absence of both the ask and the surface `Show in files` opens.
-//!
-//! The file-creation half is not the policy's job, but the policy can only be read
-//! through it, so the payload is set the way the settings dialog leaves it: bytes in
-//! hand, a directory and a name typed, no clipboard.
-
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git};
 use turbogit_app::state::{AppState, Dialog, PatchSource};
 use turbogit_domain::model::{PatchCreatedPolicy, PatchEncoding, PatchOrigin, VcsSettings};
 
-/// A patch with two named files, so `Show in files` has something to list and the
-/// write is never mistaken for an empty payload refused on the way.
 const TWO_FILE_PATCH: &str = "diff --git a/src/App.java b/src/App.java\n\
                               --- a/src/App.java\n\
                               +++ b/src/App.java\n\
@@ -48,10 +27,7 @@ fn repo_at(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// One workspace whose project directory is its own repository, plus a directory
-/// the created patch may be written into.
 struct Fixture {
-    /// Held so the project directory outlives the state built on it.
     #[allow(dead_code)]
     project: TempDir,
     out: TempDir,
@@ -91,7 +67,6 @@ fn fixture(policy: PatchCreatedPolicy) -> Fixture {
     }
 }
 
-/// The file the route wrote, or nothing when it wrote none.
 fn written(fx: &Fixture) -> Option<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(fx.out.path())
         .unwrap()
@@ -101,13 +76,10 @@ fn written(fx: &Fixture) -> Option<PathBuf> {
     files.into_iter().next()
 }
 
-/// What the ask, if any, is pointing at.
 fn armed_ask(fx: &Fixture) -> Option<PathBuf> {
     fx.state.ui.patch_created.as_ref().map(|a| a.path.clone())
 }
 
-/// `Ask` — the captured default — leaves the created patch **waiting**: the file is
-/// on disk, no window took it away, and the follow-up is armed rather than guessed.
 #[test]
 fn asking_leaves_the_created_patch_waiting_for_an_answer() {
     let mut fx = fixture(PatchCreatedPolicy::Ask);
@@ -129,8 +101,6 @@ fn asking_leaves_the_created_patch_waiting_for_an_answer() {
             .contains("src/App.java"),
         "the patch on disk is the payload the dialog held"
     );
-    // The ask belongs to the root the patch was generated FROM, so importing it to
-    // a shelf later cannot park it under a different tree.
     let expected = fx.state.multi.roots[0].id.clone();
     assert!(
         fx.state
@@ -142,8 +112,6 @@ fn asking_leaves_the_created_patch_waiting_for_an_answer() {
     );
 }
 
-/// `Show in files` — no ask, the created artifact is taken to the surface that
-/// reads patch files.
 #[test]
 fn showing_in_files_hands_the_file_to_the_surface_that_reads_patches() {
     let mut fx = fixture(PatchCreatedPolicy::ShowInFiles);
@@ -163,8 +131,6 @@ fn showing_in_files_hands_the_file_to_the_surface_that_reads_patches() {
     assert_eq!(fx.state.ui.dlg.apply_patch_source, PatchSource::File);
 }
 
-/// `Do nothing` — no ask, no window, no toast. Silence here is the behaviour the
-/// developer asked for, which is why the *feed* still carries the fact.
 #[test]
 fn doing_nothing_arms_no_ask_and_opens_no_window() {
     let mut fx = fixture(PatchCreatedPolicy::DoNothing);
@@ -179,8 +145,6 @@ fn doing_nothing_arms_no_ask_and_opens_no_window() {
     );
 }
 
-/// Whichever arm ran, the durable feed remembers the created file.
-/// The transient report is exactly what a policy is allowed to withhold.
 #[test]
 fn every_arm_records_the_created_patch_in_the_durable_feed() {
     for policy in [
@@ -213,8 +177,6 @@ fn every_arm_records_the_created_patch_in_the_durable_feed() {
     }
 }
 
-/// The `To clipboard` route creates **no file**, so the policy has nothing to speak
-/// about: it must neither arm an ask nor open a window on either arm.
 #[test]
 fn the_clipboard_route_creates_no_file_and_so_asks_nothing() {
     for policy in [PatchCreatedPolicy::Ask, PatchCreatedPolicy::DoNothing] {
@@ -238,8 +200,6 @@ fn the_clipboard_route_creates_no_file_and_so_asks_nothing() {
     }
 }
 
-/// The choice is **persisted**, not session-scoped: a restart reads the same arm
-/// back, and that is what makes it a setting rather than a checkbox.
 #[test]
 fn the_policy_survives_a_restart() {
     let project = TempDir::new().unwrap();
@@ -262,9 +222,6 @@ fn the_policy_survives_a_restart() {
     );
 }
 
-/// What an **older build** wrote has no `when_patch_is_created` key at all. Such a
-/// `state.ron` must still load — and load as **Ask**, the captured default — rather
-/// than fail and leave the settings writer with nothing to preserve.
 #[test]
 fn a_state_file_written_before_the_policy_existed_still_loads_and_asks() {
     #[derive(serde::Serialize)]
@@ -293,7 +250,6 @@ fn a_state_file_written_before_the_policy_existed_still_loads_and_asks() {
 
     let project = TempDir::new().unwrap();
     std::fs::create_dir_all(project.path().join(".turbogit")).unwrap();
-    // Serialise the OLD field list, so the artefact genuinely lacks the new key.
     let old = LegacySettings {
         git_executable: String::new(),
         staging_area: false,
@@ -337,8 +293,6 @@ fn a_state_file_written_before_the_policy_existed_still_loads_and_asks() {
     );
 }
 
-/// A current-shape file round-trips too: the default is what an **absent** key
-/// means, never a rewrite that drops the arm a developer chose.
 #[test]
 fn a_state_file_in_the_current_shape_round_trips_the_chosen_arm() {
     let project = TempDir::new().unwrap();

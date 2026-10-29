@@ -1,19 +1,3 @@
-//! Issue 33 — Manage remotes dialog (screen 13 "Manage remotes…").
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories, asserting painted labels, public `AppState`
-//! transitions, and the exact engine calls handed to the executor boundary
-//! (via [`RecordingExecutor`]).
-//!
-//! Covered behaviors:
-//! - the branches popup footer opens the manager; the focused repo's remotes
-//!   list with their fetch and push URLs
-//! - add a remote dispatches through the engine seam and refreshes the list
-//! - rename / edit-URL / remove row actions dispatch and refresh
-//! - set upstream per branch dispatches through the engine seam
-//! - in multi-root scope the pending change applies across the checked
-//!   selection with per-repo outcomes reported
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -29,9 +13,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Write `body` to `<repo>/file.txt` as a WHOLE file, stage, commit.
 fn commit(dir: &Path, msg: &str) {
     let file = dir.join("file.txt");
     let mut body = std::fs::read_to_string(&file).unwrap_or_default();
@@ -40,11 +21,6 @@ fn commit(dir: &Path, msg: &str) {
     test_support::git_seed::commit(dir, "file.txt", &body, msg);
 }
 
-/// A repo on `main` with local identity and one committed file; returns the
-/// repo path.
-///
-/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
-/// `file.txt` = "seed\n" and the tests build on that file's presence.
 fn fresh_repo(tmp: &Path, name: &str) -> PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).expect("repo dir");
@@ -55,8 +31,6 @@ fn fresh_repo(tmp: &Path, name: &str) -> PathBuf {
     repo
 }
 
-/// Add `origin` with distinct fetch and push URLs (the divergent-URL case the
-/// manager must render).
 fn add_divergent_origin(repo: &Path) {
     git(
         repo,
@@ -74,7 +48,6 @@ fn add_divergent_origin(repo: &Path) {
     );
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -85,23 +58,10 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
     (state, exec)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// Unstyled, and that is load-bearing: the footer geometry assertions are
-/// measured against egui's default face, not the production token set. The
-/// `max_steps` argument is likewise required — kittest defaults to 4 and
-/// `Harness::run()` panics past the budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Step frames until painted button geometry is stable for 3 consecutive
-/// frames.
-///
-/// Kept local, and NOT `harness::settle_quiet`, which fingerprints the frame's
-/// *painted text*: this suite's assertions are about where buttons are, and
-/// painted-text stability says nothing about a button that has not moved. This
-/// fingerprints each Button node's `(label, rect)`.
 fn settle(h: &mut Harness<'_, AppState>) {
     let mut stable = 0;
     let mut prev = String::new();
@@ -130,13 +90,11 @@ fn settle(h: &mut Harness<'_, AppState>) {
     panic!("layout did not settle within 300 frames");
 }
 
-/// Open the branches popup on the focused root and settle.
 fn open_popup(h: &mut Harness<'_, AppState>) {
     h.state_mut().ui.branches_popup = true;
     settle(h);
 }
 
-/// Open the Manage Remotes dialog from the branches popup footer.
 fn open_manager(h: &mut Harness<'_, AppState>) {
     open_popup(h);
     h.query_all_by_label("Manage remotes…")
@@ -151,7 +109,6 @@ fn open_manager(h: &mut Harness<'_, AppState>) {
     );
 }
 
-/// Type `text` into the field with the given accessible label.
 fn type_into_field(h: &mut Harness<'_, AppState>, label: &str, text: &str) {
     let field = h.get_by_label(label);
     field.focus();
@@ -159,7 +116,6 @@ fn type_into_field(h: &mut Harness<'_, AppState>, label: &str, text: &str) {
     settle(h);
 }
 
-/// Click a button by label and settle.
 fn click_button(h: &mut Harness<'_, AppState>, label: &str) {
     h.query_all_by_label(label)
         .next()
@@ -168,7 +124,6 @@ fn click_button(h: &mut Harness<'_, AppState>, label: &str) {
     settle(h);
 }
 
-/// Step frames until `pred` holds on public state (async op completion).
 fn pump_until(h: &mut Harness<'_, AppState>, what: &str, mut pred: impl FnMut(&AppState) -> bool) {
     for _ in 0..600 {
         if pred(h.state()) {
@@ -204,8 +159,6 @@ fn manager_footer_uses_shared_divider_and_minimum_action_target() {
     );
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn footer_opens_the_manager_listing_fetch_and_push_urls() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -217,7 +170,6 @@ fn footer_opens_the_manager_listing_fetch_and_push_urls() {
 
     open_manager(&mut h);
 
-    // The remote row paints its name and both URLs.
     assert!(h.query_all_by_label("origin").next().is_some());
     assert!(
         h.query_all_by_label("fetch: https://fetch.git/repo.git")
@@ -255,7 +207,6 @@ fn add_remote_dispatches_and_refreshes_the_list() {
     });
     assert!(dispatched, "expected AddRemote, got {:?}", exec.recorded());
 
-    // The completion refresh re-snapshots the root: the list paints it.
     pump_until(&mut h, "add refresh", |s| {
         s.selected_root
             .as_ref()
@@ -283,8 +234,6 @@ fn rename_remote_dispatches_and_refreshes() {
     open_manager(&mut h);
 
     click_button(&mut h, "Rename");
-    // The new-name field is pre-seeded with the old name (in-place editing);
-    // clear it so typing replaces, not appends.
     h.state_mut().ui.dlg.remotes_rename_new.clear();
     settle(&mut h);
     type_into_field(&mut h, "New remote name", "upstream");
@@ -326,7 +275,6 @@ fn edit_url_dispatches_and_refreshes() {
     open_manager(&mut h);
 
     click_button(&mut h, "Edit URL");
-    // Pre-seeded with the current URL; clear so typing replaces it.
     h.state_mut().ui.dlg.remotes_edit_fetch.clear();
     settle(&mut h);
     type_into_field(&mut h, "Edit fetch URL", "https://new.git/repo.git");
@@ -432,7 +380,6 @@ fn set_upstream_per_branch_dispatches_through_the_engine_seam() {
         "expected SetBranchUpstream, got {:?}",
         exec.recorded()
     );
-    // The tracking config landed for real.
     assert_eq!(
         git(&repo, &["config", "--get", "branch.main.remote"]).trim(),
         "origin"
@@ -451,7 +398,6 @@ fn apply_add_across_selection_reports_per_repo_outcomes() {
 
     type_into_field(&mut h, "Remote name", "origin");
     type_into_field(&mut h, "Remote fetch URL", "https://fetch.git/repo.git");
-    // The focused root is checked by default; tick beta into the scope.
     click_button(&mut h, "beta");
     click_button(&mut h, "Apply add");
 
@@ -465,7 +411,6 @@ fn apply_add_across_selection_reports_per_repo_outcomes() {
     });
     assert!(dispatched, "expected AddRemote, got {:?}", exec.recorded());
 
-    // Both roots take the change; the per-repo outcomes render inline.
     pump_until(&mut h, "apply outcomes", |s| {
         s.multi
             .roots
@@ -490,7 +435,6 @@ fn apply_add_reports_a_failing_repo_without_blocking_the_others() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let alpha = fresh_repo(tmp.path(), "alpha");
     let beta = fresh_repo(tmp.path(), "beta");
-    // alpha already has origin, so its add must fail.
     git(
         &alpha,
         &["remote", "add", "origin", "https://old.git/repo.git"],
@@ -511,7 +455,6 @@ fn apply_add_reports_a_failing_repo_without_blocking_the_others() {
             .map(|t| t.message.contains("failed: alpha"))
             .unwrap_or(false)
     });
-    // beta still succeeded and its outcome row paints.
     assert!(
         h.state()
             .multi

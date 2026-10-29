@@ -6,16 +6,16 @@
 
 ## Sources
 
-- https://www.jetbrains.com/help/idea/using-patches.html — verified 200, 5909 chars → `docs-text/using-patches.md`
+- https://www.jetbrains.com/help/idea/using-patches.html, verified 200, 5909 chars → `docs-text/using-patches.md`
 - `actions-labeled.tsv`
-- `strings/GitBundle.properties` — the `create.patch.*`, `patch.apply.*`, `show.patch.*` families (GitBundle:132-135, 174-175, 182, 352-374)
+- `strings/GitBundle.properties`, the `create.patch.*`, `patch.apply.*`, `show.patch.*` families (GitBundle:132-135, 174-175, 182, 352-374)
 
 Docs resolve 1/1. This is the thinnest documentation page in the set (5909 chars)
 and the smallest action set (6), but the bundle compensates: the
 `patch.apply.*` family specifies the **apply-conflict and rollback model** in
 detail, which the docs barely touch.
 
-## UI — what exists
+## UI, what exists
 
 ### Action inventory (bundle)
 
@@ -44,56 +44,56 @@ vocabulary:
 | file field | `Patch file name:` (`patch.apply.file.name.field`, GitBundle:352) |
 | settings dialog | `Patch File Settings` (`create.patch.settings.dialog.title`, GitBundle:356) |
 
-**Create has two destinations and Apply has two sources — four routes, two
+**Create has two destinations and Apply has two sources, four routes, two
 dialogs.** `…ToClipboard` and `…FromClipboard` are the clipboard pair, and
 `Vcs.ApplySelectedChanges` is the *internal* apply (used by the diff viewer's
 `Apply` chevrons, see `11-diff-viewer`), not a user-facing patch verb.
 
 ### Topology
 
-**A. The Patch File Settings dialog** (using-patches:16-24) — the same four fields
+**A. The Patch File Settings dialog** (using-patches:16-24), the same four fields
 regardless of whether the patch comes from uncommitted changes, a commit, or a
 file revision:
 
-1. **Patch file location** — "choose the default location **or select the `To
+1. **Patch file location**, "choose the default location **or select the `To
    clipboard` option** if you do not want to save the patch to a file" (line 18)
-2. **Base path** — "specify the path relative to which paths inside the patch file
+2. **Base path**, "specify the path relative to which paths inside the patch file
    will be written. Normally, this is your project directory, but you may want to
    use a relative path, for example, if the modified files are stored inside a Git
    repository" (line 20)
-3. **Reverse patch** — "select this option if you want to create a patch that
+3. **Reverse patch**, "select this option if you want to create a patch that
    **reverts the changes you have made**" (line 22)
-4. **Encoding** — "select the encoding for the patch file from the drop-down list"
+4. **Encoding**, "select the encoding for the patch file from the drop-down list"
    (line 24)
 
-**B. The Apply Patch dialog** (using-patches:58-83) — field order as documented:
+**B. The Apply Patch dialog** (using-patches:58-83), field order as documented:
 
 1. **Path to the .patch file** (line 58)
-2. **`Show Diff` (`⌘D`)** — a *check*, not a view: "To check if your patch can be
+2. **`Show Diff` (`⌘D`)**, a *check*, not a view: "To check if your patch can be
    applied without conflicts, click Show Diff `⌘D`. **If there are conflicts, the
    corresponding lines will be highlighted in red**" (line 61)
-3. **`Change Directory Paths`** — a sub-dialog with **five** buttons (lines 63-73):
-   - `Map Base Directory` — "specify a directory relative to which file names in
+3. **`Change Directory Paths`**, a sub-dialog with **five** buttons (lines 63-73):
+   - `Map Base Directory`, "specify a directory relative to which file names in
      the patch file will be interpreted. You can map the base directory to a
      single file, directory, or selection" (line 65)
-   - `Remove Leading Directory` — "removes one slash in the path to the target
+   - `Remove Leading Directory`, "removes one slash in the path to the target
      file. Click the button as many times as many leading directories you need to
      remove. **The number of removed slashes is indicated in square brackets**"
      (line 67)
    - `Remove All Leading Directories` (line 69)
-   - `Restore Leading Directory` — "revert the last Remove Leading Directory
+   - `Restore Leading Directory`, "revert the last Remove Leading Directory
      action" (line 71)
    - `Restore All Leading Directories` (line 73)
-4. **Changelist destination** — "Select the changelist to which you want to apply
+4. **Changelist destination**, "Select the changelist to which you want to apply
    the patch **or specify the name of a new changelist** in the Name field, and
    enter a comment to this changelist (optionally)" (line 75)
 5. **Set active** checkbox (line 77)
 6. **Track context** checkbox (line 79)
-7. **Analyze and apply patch from clipboard on the fly** — clipboard-only:
+7. **Analyze and apply patch from clipboard on the fly**, clipboard-only:
    "you can select the `Analyze and apply patch from clipboard on the fly` option for
    IntelliJ IDEA to **automatically detect patches in clipboard contents and
    suggest applying them**" (line 81)
-8. **`Import to shelf`** — "If you want to move the patch to a temporary storage
+8. **`Import to shelf`**, "If you want to move the patch to a temporary storage
    (shelf) before applying it, click Import to shelf" (line 83)
 9. Footer: OK
 
@@ -109,7 +109,7 @@ repeated action.
 | State | Which region | What it shows | Source |
 | --- | --- | --- | --- |
 | default | Patch File Settings | the default save location; base path = the project directory | using-patches:18, 20 |
-| default | Apply Patch `Show Diff` | conflict lines **highlighted in red** — a preflight, not a navigation | using-patches:61 |
+| default | Apply Patch `Show Diff` | conflict lines **highlighted in red**, a preflight, not a navigation | using-patches:61 |
 | default | `Change Directory Paths` | removed-slash count in **square brackets** | using-patches:67 |
 | hover | patch row in Shelf | `{0} created on {1} at {2}` (VcsBundle:1292) | VcsBundle:1292 |
 | disabled | `Analyze and apply patch from clipboard…` | clipboard-only; absent for a file-based apply | using-patches:81 |
@@ -117,7 +117,7 @@ repeated action.
 | focus | patch file field | `Patch file name:` (GitBundle:352) | GitBundle:352 |
 | selected | a patch in the Shelf | drives the diff preview; `Select stash or shelf to view files` when none (VcsBundle:1289) | VcsBundle:1289 |
 | progress | create | `Creating Patch…` (GitBundle:354); `Loading Patch Base Revision` (182) | GitBundle:182, 354 |
-| progress | apply | `Before patch` / `After patch` (GitBundle:370-371) — **two labelled phases** | GitBundle:370-371 |
+| progress | apply | `Before patch` / `After patch` (GitBundle:370-371), **two labelled phases** | GitBundle:370-371 |
 | error | create | `Error creating patch: {0}` (GitBundle:355) | GitBundle:355 |
 | **error: apply conflict** | conflict view, titled per file | `Patch Conflict for {0}` (GitBundle:362) / `Patch Conflict` (363), with **four named panes**: `Local version` (364), `Merge result` (365), `Patched version` (366), `Result` (367), plus `Patch` (368) | GitBundle:362-368 |
 | **rollback: clean** | notification | `Apply patch aborted` + "**All files changed during 'Apply Patch' action were rolled back**" (GitBundle:372-373) | GitBundle:372-373 |
@@ -127,16 +127,16 @@ repeated action.
 
 **The four conflict pane names are the specification of this surface's hardest
 case**, and they are not obvious: `Local version` (what you have), `Merge result`
-(what you'd get), `Patched version` (what the patch wants), and `Result` — a fourth
+(what you'd get), `Patched version` (what the patch wants), and `Result`, a fourth
 pane that appears only in the `patch.apply.conflict.patched.somehow.version` case
 (GitBundle:367), i.e. when the patch was applied in a way that needed adjusting.
 **Four panes for a patch conflict, where the merge conflict has three.**
 
-## UX — how it behaves
+## UX, how it behaves
 
 ### How is it reached, and what hides behind a secondary affordance?
 
-**Create — three sources, one dialog:**
+**Create, three sources, one dialog:**
 
 | Source | Route | Doc |
 | --- | --- | --- |
@@ -145,22 +145,22 @@ pane that appears only in the `patch.apply.conflict.patched.somehow.version` cas
 | A file revision | file → `Show History` → right-click a revision → `Create Patch` | using-patches:41-47 |
 
 Plus the clipboard shortcut: "right-click the necessary file(s) in the Commit tool
-window and choose `Copy as Patch to Clipboard`" (using-patches:25) — **which skips
+window and choose `Copy as Patch to Clipboard`" (using-patches:25), **which skips
 the Patch File Settings dialog entirely** (line 25 describes it as the alternative
 to the dialog's `To clipboard` option).
 
-**Apply — two sources:**
+**Apply, two sources:**
 
 | Source | Route | Doc |
 | --- | --- | --- |
 | A saved file | `Git | Patch | Apply patch` | using-patches:53 |
-| The clipboard | `Git | Patch | Apply patch from Clipboard` — "convenient when you receive a patch by email and **do not want to save it**" | using-patches:55 |
+| The clipboard | `Git | Patch | Apply patch from Clipboard`, "convenient when you receive a patch by email and **do not want to save it**" | using-patches:55 |
 | Automatically | `Analyze and apply patch from clipboard on the fly` | using-patches:81 |
 | Drag-and-drop | "You can **drag a file or an email attachment to any place in the editor**" | using-patches:59 |
 
 Plus the **shelf route**: "In the Shelf view, choose `Import Patches from the
 context menu` … The selected patch appears in the Shelf tab as a shelf" (lines
-214-216) — bundle `action.ImportIntoShelfAction.text=Import Patches…`,
+214-216), bundle `action.ImportIntoShelfAction.text=Import Patches…`,
 description "Copies a patch file to the shelf".
 
 And `Apply Patch` from within the Apply dialog: `Import to shelf` "If you want to
@@ -175,8 +175,8 @@ Hidden behind secondary affordances:
 - **`Change Directory Paths` is a sub-dialog** behind one button (lines 63-73).
 - **`Analyze and apply … on the fly`** is a checkbox, and it is the only route with
   no user gesture at all (line 81).
-- **The `Before patch` content is fetched lazily** — `Loading Patch Base Revision`
-  (GitBundle:182) — so the apply dialog has an async load with no visible
+- **The `Before patch` content is fetched lazily**`Loading Patch Base Revision`
+  (GitBundle:182), so the apply dialog has an async load with no visible
   placeholder specified.
 - **`Show Diff` is a preflight check**, hidden in a button rather than run
   automatically (line 61).
@@ -186,17 +186,17 @@ Hidden behind secondary affordances:
 | Verb | Destructive | Confirmation | Evidence |
 | --- | --- | --- | --- |
 | Create Patch | no | none | — |
-| Create Patch (clipboard) | no | **none, and no dialog** — it is the deliberate fast path | using-patches:25 |
-| **Apply Patch** | **yes** — writes files | **Preflight, not confirmation**: `Show Diff` with conflicts highlighted in red (line 61). The user inspects, then commits | using-patches:61 |
-| Apply Patch (on the fly) | **yes** | **A suggestion, not a confirmation** — "automatically detect patches in clipboard contents and **suggest** applying them" (line 81) | line 81 |
-| **`Import to shelf`** | no — it *avoids* touching files | none; it is the cautious route | line 83 |
+| Create Patch (clipboard) | no | **none, and no dialog**, it is the deliberate fast path | using-patches:25 |
+| **Apply Patch** | **yes**, writes files | **Preflight, not confirmation**: `Show Diff` with conflicts highlighted in red (line 61). The user inspects, then commits | using-patches:61 |
+| Apply Patch (on the fly) | **yes** | **A suggestion, not a confirmation**, "automatically detect patches in clipboard contents and **suggest** applying them" (line 81) | line 81 |
+| **`Import to shelf`** | no, it *avoids* touching files | none; it is the cautious route | line 83 |
 | Path rewriting (`Remove/Restore Leading Directory`) | no | none; a repair control | lines 67-73 |
-| Reverse patch creation | no — but it inverts the patch's meaning | the checkbox is the disclosure (line 22) | line 22 |
+| Reverse patch creation | no, but it inverts the patch's meaning | the checkbox is the disclosure (line 22) | line 22 |
 
 **The design pattern is a preflight instead of a confirmation, and it is
 consistent.** `Show Diff` before applying is the same idea as the Push dialog's
 `Preview dry-run` or the Rewrite Preflight: *show what will happen, then let the
-user commit*. The patch case is the purest instance — the preflight is literally a
+user commit*. The patch case is the purest instance, the preflight is literally a
 diff, and the conflict signal is colour ("the corresponding lines will be
 highlighted in red", line 61).
 
@@ -215,19 +215,19 @@ surface.**
 | Situation | Undo | Evidence |
 | --- | --- | --- |
 | **Apply patch fails or is aborted** | **Full automatic rollback**: "All files changed during 'Apply Patch' action were rolled back" | `patch.apply.aborted.message` (GitBundle:373) |
-| Rollback itself fails | **`Rollback failed`** — an explicit, named terminal state | GitBundle:374 |
-| Applied patch (success) | **Not undoable as a patch.** The changes land as *local uncommitted changes* — "Select the changelist to which you want to apply the patch" (line 75) — so the patch's recovery is the **Commit tool window's** Revert, not a patch-level undo | using-patches:75 |
+| Rollback itself fails | **`Rollback failed`**, an explicit, named terminal state | GitBundle:374 |
+| Applied patch (success) | **Not undoable as a patch.** The changes land as *local uncommitted changes*, "Select the changelist to which you want to apply the patch" (line 75), so the patch's recovery is the **Commit tool window's** Revert, not a patch-level undo | using-patches:75 |
 | Applied to a shelf first | the shelf copy remains; the patch can be re-applied "as many times as you need" | shelving:33 |
 | Create Patch | nothing to undo — it only reads | — |
 
 **The rollback is atomic and total, and that is the point.** GitBundle:373 says
-*all* files changed during the action were rolled back — so a failed apply leaves
+*all* files changed during the action were rolled back, so a failed apply leaves
 the working tree exactly as it was. The existence of a separate `Rollback failed`
 string proves the authors considered the case where the guarantee does not hold,
 and named it rather than leaving it undefined. **A client must have both strings.**
 
 And note the pairing with the *stash* warning: `stash.unstash.unresolved.conflict.warning.notification.message`
-says "Resolve conflicts and **drop the stash**" (GitBundle:447) — because stashing
+says "Resolve conflicts and **drop the stash**" (GitBundle:447), because stashing
 into a conflicted index loses the safe copy. **Patch apply has no such warning,
 because it has a real rollback.** The two mechanisms differ precisely in whether
 the original is recoverable.
@@ -243,12 +243,12 @@ the original is recoverable.
 | Changelist destination | the current/active one; a new name may be typed instead | using-patches:75 |
 | Set active | off (using-patches:77) | using-patches:77 |
 | Track context | off (using-patches:79) | using-patches:79 |
-| Analyze clipboard on the fly | **off** — it is a checkbox you select (line 81) | using-patches:81 |
+| Analyze clipboard on the fly | **off**, it is a checkbox you select (line 81) | using-patches:81 |
 | `Change Directory Paths` | untouched; no slashes removed | using-patches:67 |
-| `When patch is created` | `Ask` / `Show in {0}` / `Do nothing` — a three-way policy, with **`Ask` as the first-named value** (GitBundle:132-135) | GitBundle:132-135 |
+| `When patch is created` | `Ask` / `Show in {0}` / `Do nothing`, a three-way policy, with **`Ask` as the first-named value** (GitBundle:132-135) | GitBundle:132-135 |
 
 **`show.patch.in.explorer.after.creation` is a three-way policy with the
-safe/asking option first** — the same "ask / do it silently / do nothing" shape as
+safe/asking option first**, the same "ask / do it silently / do nothing" shape as
 changelist removal and file deletion (see `01-commit-tool-window`). **This is a
 product-wide convention, not a one-off.** Worth adopting as a standard.
 
@@ -267,8 +267,8 @@ Remembered between uses:
 Progress:
 
 - `Creating Patch…` (GitBundle:354)
-- `Loading Patch Base Revision` (GitBundle:182) — the lazy "before" fetch
-- `Before patch` / `After patch` (GitBundle:370-371) — **two labelled phases**,
+- `Loading Patch Base Revision` (GitBundle:182), the lazy "before" fetch
+- `Before patch` / `After patch` (GitBundle:370-371), **two labelled phases**,
   matching the two-sided nature of the operation
 
 Success / error:
@@ -280,7 +280,7 @@ Success / error:
 - `Apply patch aborted` + the rollback statement (GitBundle:372-373)
 - `Rollback failed` (GitBundle:374)
 - `Could not add remote`-style composition is absent here; instead the create
-  error is `Error creating patch: {0}` — a single-cause template, because patch
+  error is `Error creating patch: {0}`, a single-cause template, because patch
   creation is single-root by nature
 
 **Optimistic paint: no**, and specifically the opposite: on failure the app *rolls
@@ -294,15 +294,15 @@ Focus after the action:
   Re-tested against using-patches 2026-10-06: the page names no feedback for the
   copy → needs runtime capture (R3).
 - After a successful file apply, the changes are in the Commit tool window, so
-  focus would move there — **UNVERIFIED**, but it follows from the destination being
+  focus would move there. **UNVERIFIED**, but it follows from the destination being
   a changelist (line 75). Re-tested against using-patches/managing-changelists
   2026-10-06: both name the destination changelist, neither names a focus target →
   needs runtime capture (R3).
 - After `Import Patches…`, the new shelf appears in the Shelf tab (line 216) and
-  the user must then `Unshelve Changes` from it (line 218) — **two steps, and the
+  the user must then `Unshelve Changes` from it (line 218), **two steps, and the
   second is not automatic.**
 
-## Flow — how tasks chain
+## Flow, how tasks chain
 
 ### Entry points
 
@@ -319,7 +319,7 @@ Focus after the action:
 1. `Git | Patch | Apply patch…` (line 53) → `ChangesView.ApplyPatch`.
 2. `Git | Patch | Apply patch from Clipboard` (line 55) →
    `ChangesView.ApplyPatchFromClipboard`.
-3. `Analyze and apply patch from clipboard on the fly` (line 81) — no menu.
+3. `Analyze and apply patch from clipboard on the fly` (line 81), no menu.
 4. Drag a file or **an email attachment** into the editor (line 59).
 5. Shelf view → `Import Patches…` (line 214) → then `Unshelve Changes` (line 218).
 
@@ -343,7 +343,7 @@ Commit tool window → select a file or changelist → Create Patch from Local C
   → Creating Patch…  →  "When patch is created: Ask | Show in {0} | Do nothing"
 ```
 
-**The commit comment becomes the filename** — that is the one piece of field-order
+**The commit comment becomes the filename**, that is the one piece of field-order
 information the docs give for the first dialog, and it is load-bearing: the user
 names the patch by typing a comment.
 
@@ -372,7 +372,7 @@ Git | Patch | Apply patch…
       → (ok) the changes land in the named changelist, ready to commit
 ```
 
-**Apply from the clipboard — the email path:**
+**Apply from the clipboard, the email path:**
 
 ```
 receive a patch by email
@@ -390,7 +390,7 @@ entirely, and **a git-format patch's metadata pre-fills the destination
 changelist**. The patch carries an author and a message, and they are honoured
 rather than discarded.
 
-**Clipboard detection — the zero-gesture route:**
+**Clipboard detection, the zero-gesture route:**
 
 ```
 copy a patch to the clipboard
@@ -417,7 +417,7 @@ shelf, and the changelist.
 ### What happens next on success
 
 - **Create**: the patch file is written (or the clipboard filled), and the
-  `When patch is created` policy fires — `Ask` / `Show in {0}` / `Do nothing`
+  `When patch is created` policy fires`Ask` / `Show in {0}` / `Do nothing`
   (GitBundle:132-135).
 - **Apply**: the changes are **uncommitted local changes in a changelist**
   (using-patches:75). Nothing is committed. The next step is the user's.
@@ -431,61 +431,61 @@ shelf, and the changelist.
 | Failure | Evidence | Recovery |
 | --- | --- | --- |
 | **Apply failed / aborted** | `Apply patch aborted` + "**All files changed during 'Apply Patch' action were rolled back**" (GitBundle:372-373) | the working tree is already restored; retry or abandon |
-| **Rollback failed** | `Rollback failed` (GitBundle:374) | **UNVERIFIED** — no bundled next step. This is the one genuinely dangerous state on the surface and it has no documented recovery. Re-tested against using-patches 2026-10-06: the page does not describe the rollback at all (it is bundle-only) → needs runtime capture (R3) |
-| **Patch conflict** | `Patch Conflict for {0}` with the four panes (GitBundle:362-368) | resolve in the conflict view. **Closed 2026-10-06** (docs: resolve-conflicts): patch conflicts are funnelled through the standard Conflicts dialog — "conflicts may arise when you attempt to perform one of the following operations: pull, merge, rebase, cherry-pick, unstash changes or apply a patch. If there are conflicts, these operations will fail, and you will be prompted to accept the upstream version, prefer your version, or merge the changes" — i.e. per-file first, then per-conflict-chunk in the manual tool (accept/ignore per side, `Apply Changes` / `Save and Close` per file). The four-pane `Patch Conflict` pane naming remains bundle-only and is not named in the page |
-| **Create failed** | `Error creating patch: {0}` (GitBundle:355) | **UNVERIFIED** — no bundled recovery. Re-tested against using-patches 2026-10-06: the page documents no create-failure state → needs runtime capture (R3) |
+| **Rollback failed** | `Rollback failed` (GitBundle:374) | **UNVERIFIED**, no bundled next step. This is the one genuinely dangerous state on the surface and it has no documented recovery. Re-tested against using-patches 2026-10-06: the page does not describe the rollback at all (it is bundle-only) → needs runtime capture (R3) |
+| **Patch conflict** | `Patch Conflict for {0}` with the four panes (GitBundle:362-368) | resolve in the conflict view. **Closed 2026-10-06** (docs: resolve-conflicts): patch conflicts are funnelled through the standard Conflicts dialog, "conflicts may arise when you attempt to perform one of the following operations: pull, merge, rebase, cherry-pick, unstash changes or apply a patch. If there are conflicts, these operations will fail, and you will be prompted to accept the upstream version, prefer your version, or merge the changes", i.e. per-file first, then per-conflict-chunk in the manual tool (accept/ignore per side, `Apply Changes` / `Save and Close` per file). The four-pane `Patch Conflict` pane naming remains bundle-only and is not named in the page |
+| **Create failed** | `Error creating patch: {0}` (GitBundle:355) | **UNVERIFIED**, no bundled recovery. Re-tested against using-patches 2026-10-06: the page documents no create-failure state → needs runtime capture (R3) |
 | **Paths do not match** | `Show Diff` highlights conflicting lines in red (using-patches:61) | `Change Directory Paths` → `Remove Leading Directory` ×N (the bracket count shows the state) |
-| Patch file found outside the content root | `File to patch found outside content root: {0}` (GitBundle:378) | **UNVERIFIED** — re-tested against using-patches 2026-10-06: the page covers path repair only via `Change Directory Paths`, not this failure → needs runtime capture (R3) |
+| Patch file found outside the content root | `File to patch found outside content root: {0}` (GitBundle:378) | **UNVERIFIED**, re-tested against using-patches 2026-10-06: the page covers path repair only via `Change Directory Paths`, not this failure → needs runtime capture (R3) |
 | Patch clipboard is not a patch | — | **UNVERIFIED** — no empty/invalid-clipboard state is specified for the on-the-fly detector, which is a real gap given it runs unprompted. Re-tested against using-patches 2026-10-06: the page states only the detect-and-suggest behaviour (line 81) → needs runtime capture (R3) |
 | Detected a Git-format patch | author + message auto-filled (using-patches:56) | nothing to recover |
 
 ### Escape / dismiss semantics
 
 - **`Import to shelf` is the non-destructive exit** from the Apply dialog (line 83)
-  — the operation becomes a shelf you can apply later or not at all.
+  the operation becomes a shelf you can apply later or not at all.
 - **`Restore Leading Directory` reverses one step at a time** (line 71), and
-  `Restore All Leading Directories` reverses them all (line 73) — so path repair is
+  `Restore All Leading Directories` reverses them all (line 73), so path repair is
   fully reversible *within the dialog*, which is what makes experimenting safe.
-- **Abort rolls back silently and completely** (GitBundle:373) — there is no
+- **Abort rolls back silently and completely** (GitBundle:373), there is no
   "partially applied" state to clean up by hand, which is the strongest escape
   semantics in the harvest.
 - **`Show Diff` is optional** (line 61), so the user *can* apply blind. That is a
   deliberate omission of a gate, and the rollback is what makes it safe.
 - `Copy as Patch to Clipboard` has no dialog and therefore no escape at all
-  (line 25) — harmless, since it only reads.
+  (line 25), harmless, since it only reads.
 
 ## Divergences (intentional)
 
 | Dimension | Rebased behaviour | TurboGit behaviour | Why |
 | --- | --- | --- | --- |
-| UI | **Four patch homes** — file, clipboard, shelf, and a lazy clipboard detector (using-patches:18, 25, 55, 81, 214) | `ChangesView.CreatePatch*` / `ApplyPatch*` action ids exist in `actions-labeled.tsv` but **no TurboGit patch surface was found** in `crates/turbogit-ui/src/ui/` | **The largest single gap in the whole parity set.** Not one patch verb is evidenced as implemented. The full spec is above and the scope is modest. See ticket 18. |
-| UX | Apply has an **atomic total rollback** — "All files changed during 'Apply Patch' action were rolled back" (GitBundle:373) — plus a named `Rollback failed` terminal state (374) | Not established | **Open gap, and it is the highest-value item in this surface.** A patch apply touches many files; a partial failure that leaves the tree half-patched is the worst outcome in the product. `git apply` is atomic for a whole patch, so the mechanism is cheap — but the *named* rollback-failure state is what makes the guarantee honest. |
-| UX | **Preflight instead of confirmation** — `Show Diff` with conflicting lines in red, then commit (using-patches:61) | Not established (no surface) | Copy the pattern: a diff-based preflight, not a yes/no dialog. It matches TurboGit's existing Push dry-run and Rewrite Preflight idiom, so this is a consistency win as well as a safety one. |
-| UX | `Import to shelf` — **deferral as a first-class option** in the apply dialog (using-patches:83), plus `Import Patches…` in the Shelf view (line 214) | Not established | **Open gap.** "I'm not sure yet" needs a destination, and the shelf already exists in TurboGit's model (`CommitSubTab::Shelf`). Cheap to add once patches exist. |
-| UX | Path repair is a **counting pair** — `Remove Leading Directory` ×N with the count in square brackets, plus per-step `Restore` (using-patches:67-73) | Not established | **Open gap, small but distinctive.** A patch that nearly applies is the common case, and counting segments is a better interaction than typing a corrected prefix. The bracket count is what makes a repeated action legible. |
-| UX | A git-format patch's **author and message auto-fill the destination changelist** (using-patches:56) | Not established | **Open gap, small and correct.** The patch already carries the metadata; discarding it loses provenance. Pairs with the `cherry-picked from <hash>` suffix setting (GitBundle:793) — same intent. |
-| UX | `When patch is created:` is a three-way policy — `Ask` / `Show in {0}` / `Do nothing` (GitBundle:132-135) | Not established | **Open gap, and it reveals a product convention**: the ask/silent/nothing triple appears for changelist removal, file deletion, and patch creation. TurboGit's `PendingConfirm` enum is the right shape for it; adopting the triple consistently is a small, high-value change. |
-| UX | `Analyze and apply patch from clipboard on the fly` — an **unprompted detector** that suggests rather than acts (using-patches:81) | Not established | **Deliberately cautious, and worth flagging as risky to copy.** A clipboard watcher that acts without a gesture is a privacy-adjacent surprise, and no invalid-clipboard state is specified. If TurboGit implements it, it must be suggestion-only with a clear dismissal — the doc's word is "suggest", and that word is load-bearing. |
-| UI | Patch is a **registered filetype** — `filetype.patch.description=Patch` (GitBundle:360-361) | Not applicable in the same way | egui has no filetype registry, but it does mean patch files can be *viewed and diffed* as a first-class type. Recorded so the capability is not lost. |
+| UI | **Four patch homes**, file, clipboard, shelf, and a lazy clipboard detector (using-patches:18, 25, 55, 81, 214) | `ChangesView.CreatePatch*` / `ApplyPatch*` action ids exist in `actions-labeled.tsv` but **no TurboGit patch surface was found** in `crates/turbogit-ui/src/ui/` | **The largest single gap in the whole parity set.** Not one patch verb is evidenced as implemented. The full spec is above and the scope is modest. See ticket 18. |
+| UX | Apply has an **atomic total rollback**, "All files changed during 'Apply Patch' action were rolled back" (GitBundle:373), plus a named `Rollback failed` terminal state (374) | Not established | **Open gap, and it is the highest-value item in this surface.** A patch apply touches many files; a partial failure that leaves the tree half-patched is the worst outcome in the product. `git apply` is atomic for a whole patch, so the mechanism is cheap, but the *named* rollback-failure state is what makes the guarantee honest. |
+| UX | **Preflight instead of confirmation**, `Show Diff` with conflicting lines in red, then commit (using-patches:61) | Not established (no surface) | Copy the pattern: a diff-based preflight, not a yes/no dialog. It matches TurboGit's existing Push dry-run and Rewrite Preflight idiom, so this is a consistency win as well as a safety one. |
+| UX | `Import to shelf`, **deferral as a first-class option** in the apply dialog (using-patches:83), plus `Import Patches…` in the Shelf view (line 214) | Not established | **Open gap.** "I'm not sure yet" needs a destination, and the shelf already exists in TurboGit's model (`CommitSubTab::Shelf`). Cheap to add once patches exist. |
+| UX | Path repair is a **counting pair**. `Remove Leading Directory` ×N with the count in square brackets, plus per-step `Restore` (using-patches:67-73) | Not established | **Open gap, small but distinctive.** A patch that nearly applies is the common case, and counting segments is a better interaction than typing a corrected prefix. The bracket count is what makes a repeated action legible. |
+| UX | A git-format patch's **author and message auto-fill the destination changelist** (using-patches:56) | Not established | **Open gap, small and correct.** The patch already carries the metadata; discarding it loses provenance. Pairs with the `cherry-picked from <hash>` suffix setting (GitBundle:793), same intent. |
+| UX | `When patch is created:` is a three-way policy, `Ask` / `Show in {0}` / `Do nothing` (GitBundle:132-135) | Not established | **Open gap, and it reveals a product convention**: the ask/silent/nothing triple appears for changelist removal, file deletion, and patch creation. TurboGit's `PendingConfirm` enum is the right shape for it; adopting the triple consistently is a small, high-value change. |
+| UX | `Analyze and apply patch from clipboard on the fly`, an **unprompted detector** that suggests rather than acts (using-patches:81) | Not established | **Deliberately cautious, and worth flagging as risky to copy.** A clipboard watcher that acts without a gesture is a privacy-adjacent surprise, and no invalid-clipboard state is specified. If TurboGit implements it, it must be suggestion-only with a clear dismissal, the doc's word is "suggest", and that word is load-bearing. |
+| UI | Patch is a **registered filetype**. `filetype.patch.description=Patch` (GitBundle:360-361) | Not applicable in the same way | egui has no filetype registry, but it does mean patch files can be *viewed and diffed* as a first-class type. Recorded so the capability is not lost. |
 | UX | Reverse patch inverts a patch's meaning via one checkbox (using-patches:22) | Not established | **Open gap, trivial.** One checkbox, and it is the cheapest way to produce a revert-as-patch. |
 | UX | Drag-and-drop of a file **or an email attachment** into the editor (using-patches:59) | No drag-and-drop target | **Intentionally absent.** egui file drops are possible, but "drop an email attachment" is an IDE-integration behaviour with no TurboGit equivalent and no clear home. Recorded as a deliberate omission, not an oversight. |
 
 ## Needs runtime capture
 
-1. **The first dialog's field list** — the doc only says "make sure that all the
+1. **The first dialog's field list**, the doc only says "make sure that all the
    changes you want to include in the patch are selected, enter a commit comment"
    (line 14). Whether it has more fields is unknown.
 2. **Default encoding** in the Patch File Settings dialog (using-patches:24).
-3. **The `Patch Conflict` view's interaction model** — resolution granularity is
+3. **The `Patch Conflict` view's interaction model**, resolution granularity is
    now answered by the docs (per-file three-option prompt, then
    per-conflict-chunk manual resolution, docs: resolve-conflicts), but the bundle
    names four panes (GitBundle:364-367) where the standard tool has three, and
    what the fourth `Result` pane means is still unclear.
-4. **Recovery for `Rollback failed` (GitBundle:374)** — the most dangerous state on
+4. **Recovery for `Rollback failed` (GitBundle:374)**, the most dangerous state on
    the surface has no documented route. **Highest-value capture in this surface.**
 5. **What the on-the-fly clipboard detector does with non-patch clipboard content**
-   — it runs unprompted, and no empty/invalid state is specified.
+   it runs unprompted, and no empty/invalid state is specified.
 6. **Whether `Show Diff` is available before the patch file is chosen** or only
-   after — the field order suggests after, but a pre-check would be more useful.
-7. **The `When patch is created` default** — `Ask` is listed first among the three
+   after, the field order suggests after, but a pre-check would be more useful.
+7. **The `When patch is created` default**, `Ask` is listed first among the three
    values, which is suggestive but not proof.

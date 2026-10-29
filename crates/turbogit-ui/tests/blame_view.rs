@@ -1,14 +1,3 @@
-//! Issue 18 — Blame view: reachable from the changed-files pane footer
-//! ("Open diff · Blame · Full path history", screen 09) and from the
-//! changed-file context menu; per-line commit/author/age attribution with
-//! the blamed-at commit's lines highlighted; clicking a line's commit
-//! navigates to it in the log. The view paints in a floating window; the
-//! commit graph stays underneath it.
-//!
-//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] over
-//! the seeded single-focus project from `git_log.rs`'s fixture shape, with
-//! the worker-event channel drained every frame (production parity).
-
 use std::path::{Path, PathBuf};
 
 use egui::{Id, Pos2, Rect, Shape};
@@ -29,17 +18,11 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{configure_style, install_fonts};
 
-// --- fixture -------------------------------------------------------------------
-
 struct Seed {
     _tmp: TempDir,
     project: PathBuf,
-    /// HEAD — docs-only, so its subject paints in the commit graph and
-    /// nowhere near file.txt's blame.
     c3: String,
-    /// HEAD~1 — rewrote `file.txt` to one line ("alpha: second commit").
     c2: String,
-    /// HEAD~2 — created `file.txt` ("alpha: initial commit").
     c1: String,
 }
 
@@ -48,13 +31,6 @@ fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"]).trim().to_owned()
 }
 
-/// One root `alpha`: c1 creates file.txt (one line), c2 rewrites it to two
-/// lines, c3 is docs-only. Blame at c2 attributes line 1 → c1, line 2 → c2.
-///
-/// **Not a `git_seed` recipe, and the reason is the shape:** the middle commit
-/// must *rewrite a file the first one created* so blame has a line to attribute
-/// to each, and `repo_with_history`'s commits are on disjoint paths — which can
-/// never conflict.
 fn seeded_project() -> Seed {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
@@ -118,7 +94,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
                 install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            state.drain_events(); // production parity with app.rs
+            state.drain_events();
             turbogit_ui::ui::render(ui, state);
         },
         state,
@@ -135,9 +111,6 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// The floating blame window's own rect, read from egui's area memory — the
-/// authoritative answer to "where is the window", so the tests below scope
-/// labels, rules and rows to it instead of guessing from x offsets.
 fn blame_window(harness: &Harness<'_, AppState>) -> Rect {
     // A title-derived egui window id wraps the title in `Some` (egui 0.36's
     // `Atoms::text()` is an `Option<&str>`), so the id is NOT `Id::new("Blame")`.
@@ -149,7 +122,7 @@ fn blame_window(harness: &Harness<'_, AppState>) -> Rect {
 
 /// The shapes the blame window's own layer painted. The window floats above
 /// the log, so its rect also covers the table's galleys painted underneath
-/// it, and a rect-containment test alone cannot tell the two apart — every
+/// it, and a rect-containment test alone cannot tell the two apart, every
 /// layer clips its shapes to itself, so a clip rect inside the window names
 /// a shape the window painted, whatever it overlaps.
 fn window_shapes<'h>(
@@ -164,8 +137,6 @@ fn window_shapes<'h>(
         .collect()
 }
 
-/// The blame window's own text galleys, as [`test_support::harness`]'s
-/// painted-galley view but scoped to the window's layer.
 fn window_galleys(
     harness: &Harness<'_, AppState>,
     window: Rect,
@@ -194,7 +165,6 @@ fn window_galleys(
         .collect()
 }
 
-/// The rects the blame window's own layer filled with `color`.
 fn window_fills(harness: &Harness<'_, AppState>, window: Rect, color: egui::Color32) -> Vec<Rect> {
     window_shapes(harness, window)
         .into_iter()
@@ -205,8 +175,6 @@ fn window_fills(harness: &Harness<'_, AppState>, window: Rect, color: egui::Colo
         .collect()
 }
 
-/// The blame window's copy of a row the commit graph also paints: same
-/// accesskit label, so the one inside the window rect is the one returned.
 fn blame_row_in_window(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let window = blame_window(harness);
     harness
@@ -216,8 +184,6 @@ fn blame_row_in_window(harness: &Harness<'_, AppState>, label: &str) -> Rect {
         .unwrap_or_else(|| panic!("`{label}` must paint inside the blame window"))
 }
 
-/// Select the commit row, then its changed-file entry, landing on the
-/// changed-files pane with the footer links enabled.
 fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     let row_label = format!("{} alpha: second commit", short(&seed.c2));
     harness.get_by_label(&row_label).click();
@@ -270,8 +236,6 @@ fn blame_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
             result: Err(TgError::Other("blame read failed".into())),
         })
         .expect("send blame failure");
-    // Settle, not one step: the verdict is already in the cache, so the only
-    // thing the frames owe the window is egui's zero-opacity first frame.
     settle_reads(&mut harness);
     assert_painted(&harness, "blame read failed");
 }
@@ -298,7 +262,6 @@ fn blame_renders_a_page_owned_empty_message_for_an_empty_read() {
             result: Ok(Vec::new()),
         })
         .expect("send empty blame result");
-    // Settle for the same reason as the failure test above.
     settle_reads(&mut harness);
 
     assert_painted(&harness, "No blame lines for this revision.");
@@ -307,8 +270,6 @@ fn blame_renders_a_page_owned_empty_message_for_an_empty_read() {
     assert_not_painted(&harness, "(no differences)");
 }
 
-// --- Cycle 3: footer entry + per-line attribution ------------------------------
-
 #[test]
 fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
     let seed = seeded_project();
@@ -316,8 +277,6 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
 
     select_commit_and_file(&mut harness, &seed);
 
-    // Footer links (screen 09) sit under the changed-files pane, acting on
-    // the selected file.
     assert_painted(&harness, "Open diff");
     assert_painted(&harness, "Blame");
     assert_painted(&harness, "Full path history");
@@ -325,16 +284,11 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
-    // The blame window opens over the workspace and records its target; the
-    // commit graph keeps painting under it, so the docs commit (which
-    // file.txt's blame never lists) is also on screen.
     assert!(harness.state().ui.blame.is_some(), "blame target recorded");
     assert_painted(&harness, "LINE");
     assert_painted(&harness, "file.txt");
     assert_painted(&harness, "alpha: docs commit");
 
-    // Per-line attribution: both introducing commits' hashes, the author,
-    // a relative age, and every line's content.
     assert_painted(&harness, &short(&seed.c1));
     assert_painted(&harness, &short(&seed.c2));
     assert_painted(&harness, "Test");
@@ -346,8 +300,6 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
     assert_painted(&harness, "alpha: initial commit");
     assert_painted(&harness, "alpha: second commit");
 
-    // Closing the window drops the target. `LINE` is the window's own column
-    // label, which the commit table (HASH/AUTHOR/MESSAGE/DATE) does not paint.
     harness.get_by_label("Close").click();
     settle_reads(&mut harness);
     assert_eq!(harness.state().ui.blame, None, "close drops the target");
@@ -355,17 +307,6 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
     assert_painted(&harness, "alpha: docs commit");
 }
 
-// --- Cycle 4: current commit's lines highlighted -------------------------------
-
-/// The card the commit table renders into — the **widest** tall `CONTENT_BG`
-/// rect in the log body.
-///
-/// Widest rather than named, because that is what makes it the middle column: the
-/// branches card is a fixed 210pt and the right column a fixed 344pt, so the
-/// leftover column is always the one that takes the space. This is the fixture's
-/// single-root shape, so there is no ambiguity to resolve. The floating blame
-/// window does not compete for the title: its chrome is egui's own `SURFACE`
-/// window fill, not `CONTENT_BG`.
 fn centre_card(harness: &Harness<'_, AppState>) -> Rect {
     filled_rects(harness)
         .into_iter()
@@ -377,17 +318,6 @@ fn centre_card(harness: &Harness<'_, AppState>) -> Rect {
         .expect("the log body's centre column paints a card")
 }
 
-/// **Blame paints its rows in the floating window, not in the commit table's
-/// card — and the card keeps painting the table underneath it.**
-///
-/// The log's three columns are separated by ten points of app background and
-/// the commit table is a card like the other two, so the centre column is a
-/// *region with edges*. Two claims: the card still paints the commit table
-/// while blame is open (the docs commit's row, which file.txt's blame never
-/// lists, can only be the table's), and every blame row paints outside that
-/// card, inside the window rect. The blamed commits' `hash subject` labels
-/// exist once per surface, so they are read with `get_all_by_label` and
-/// sorted by which surface holds them.
 #[test]
 fn blame_floats_above_the_still_painted_commit_table() {
     let seed = seeded_project();
@@ -398,7 +328,6 @@ fn blame_floats_above_the_still_painted_commit_table() {
 
     let card = centre_card(&harness);
 
-    // The card under the window still paints the commit table.
     let docs_row = harness
         .get_by_label(&format!("{} alpha: docs commit", short(&seed.c3)))
         .rect();
@@ -408,8 +337,6 @@ fn blame_floats_above_the_still_painted_commit_table() {
          window is open: row {docs_row:?}, card {card:?}"
     );
 
-    // Each blamed commit's row exists in both surfaces; the blame copy must
-    // be the window's, not the card's.
     let window = blame_window(&harness);
     for (id, content) in [
         (&seed.c1, "alpha: initial commit"),
@@ -447,12 +374,6 @@ fn lines_from_the_blamed_commit_are_highlighted() {
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
-    // Line 2 was introduced by the blamed commit (c2): it carries the
-    // translucent selection tint; line 1 (c1's) does not. Scoped to the
-    // window's own galleys, because the selected commit's row in the table
-    // underneath wears the same tint for its own copy of the subject — and
-    // the window's tinted band overlaps the table's rows geometrically, so
-    // only the clip scoping tells the layers apart.
     let window = blame_window(&harness);
     let tint = turbogit_ui::theme::Palette::selection_bg();
     let in_tint = |harness: &Harness<'_, AppState>, text: &str| {
@@ -479,22 +400,15 @@ fn lines_from_the_blamed_commit_are_highlighted() {
     );
 }
 
-// --- Cycle 5: clicking a line's commit navigates to the log --------------------
-
 #[test]
 fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
 
-    // A row click selects the file without opening the diff, so the footer
-    // is already reachable; blame acts on the selected file.
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
-    // Click line 1 (introduced by c1) → the log selects c1 and the blame
-    // window closes. The label names a commit-table row too, so the click
-    // targets the window's copy.
     let row_label = blame_row_label(&seed.c1, "alpha: initial commit");
     let window = blame_window(&harness);
     let blame_copy = harness
@@ -513,14 +427,11 @@ fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     assert_painted(&harness, "HASH");
 }
 
-// --- Cycle 6: context-menu entry + path-scope respect --------------------------
-
 #[test]
 fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
-    // Scope the log to file.txt via its changed-file menu, on the shared host.
     let c2_label = format!("{} alpha: second commit", short(&seed.c2));
     harness.get_by_label(&c2_label).click();
     settle_reads(&mut harness);
@@ -530,7 +441,6 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     assert!(harness.state().ui.log_path_scope.is_some());
     assert_not_painted(&harness, "alpha: docs commit");
 
-    // Open blame on the scoped file from the footer, on a scoped commit.
     harness.get_by_label(&c2_label).click();
     settle_reads(&mut harness);
     harness.get_by_label("file.txt").click();
@@ -540,15 +450,12 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     assert!(harness.state().ui.blame.is_some());
     assert_painted(&harness, "alpha: second commit");
 
-    // Back to the log: the scope is untouched — the graph still lists only
-    // commits touching file.txt.
     harness.get_by_label("Close").click();
     settle_reads(&mut harness);
     assert!(harness.state().ui.log_path_scope.is_some());
     assert_painted(&harness, "alpha: initial commit");
     assert_not_painted(&harness, "alpha: docs commit");
 
-    // The context menu offers blame directly on a changed file.
     harness.get_by_label(&c2_label).click();
     settle_reads(&mut harness);
     harness.get_by_label("file.txt").click_secondary();
@@ -561,13 +468,6 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     );
 }
 
-// --- The blame surface's column chrome ------------------------------------------
-
-/// **The blame window labels its columns with the shared column chrome.**
-///
-/// Four labels in the one tracked type in the muted ink, over one structural
-/// hairline. The window's own title bar names the view, so the column
-/// header's hairline is the one rule inside the window above the rows.
 #[test]
 fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
     let seed = seeded_project();
@@ -576,9 +476,6 @@ fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
-    // The commit table underneath paints HASH and AUTHOR of its own, and the
-    // window floats over it, so every galley this test reads is scoped to the
-    // window's own layer by clip rect.
     let window = blame_window(&harness);
     let galleys = window_galleys(&harness, window);
     for label in BLAME_LABELS {
@@ -602,7 +499,6 @@ fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
         );
     }
 
-    // One structural hairline under the labels, above the first row.
     let top = galleys
         .iter()
         .find(|g| g.text == BLAME_LABELS[0])
@@ -630,48 +526,18 @@ fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
     );
 }
 
-/// The blame surface's column labels, in reading order.
-///
-/// `HASH` and `AUTHOR` are spelled the commit table spells them, because they
-/// mean the same things; the wide column holds a source line and the trailing one
-/// a relative age, so those two say what they hold.
 const BLAME_LABELS: [&str; 4] = ["HASH", "AUTHOR", "LINE", "AGE"];
 
-/// The one row label the blame surface publishes for a blamed line.
 fn blame_row_label(id: &str, content: &str) -> String {
     format!("{} {content}", short(id))
 }
 
-/// **The blame view's row height and cell offsets are the commit table's, read
-/// from its own published constants — not this module's literals.**
-///
-/// The window shares the table's ROW LANGUAGE, not its slot: the height and
-/// the cell offsets are the commit table's, and no slot-alignment rule is
-/// claimed here.
-///
-/// The **height** is asserted against `theme::FILE_ROW_HEIGHT`, which *is* the
-/// commit table's row-height constant (a commit row allocates exactly that), and
-/// deliberately not against the number 20.0: restating the number would let a
-/// hard-coded blame height pass as long as somebody updated two places, and the
-/// whole claim is that there is only one place.
-///
-/// The **source** seam is what actually forbids the hard-coding: `blame_view.rs`
-/// must name `CommitTable::ROW_HEIGHT` (and `CommitTable::HASH` / `AUTHOR` /
-/// `MESSAGE` / `DATE_RIGHT_PAD`), must not define a cell offset of its own, and
-/// must paint its rows through the commit table's own `paint_log_row`, so the
-/// band and the rail are the same decision in both surfaces.
-///
-/// The **offsets** are read inside the window, where the user reads them: the
-/// three leading cells of both rows line up with each other (one table, one set
-/// of offsets, whatever width the window is dragged to), and the trailing age
-/// cell ends at the same inset from every row's right edge.
 #[test]
 fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
 
-    // ---- the source seam: no private geometry ----------------------------
     let blame_src = srcscan::code_only(include_str!("../src/ui/blame_view.rs"));
     for constant in [
         "CommitTable::ROW_HEIGHT",
@@ -707,7 +573,6 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
          and the rail are the same decision in both surfaces"
     );
 
-    // ---- the row height, against the shared constant ----------------------
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
     let rows = [
@@ -728,13 +593,8 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
         );
     }
 
-    // ---- the offsets, row against row inside the window -------------------
     let window = blame_window(&harness);
     let galleys = window_galleys(&harness, window);
-    // Each row's leading cells: the hash galley, the author galley ("Test"),
-    // and the line's content galley. Matched by a y-band around the row rather
-    // than rect containment, because a row's galleys are centred on the row and
-    // their galley tops can sit a point above the row's own top edge.
     let in_row = |row: &Rect, pos: Pos2| row.top() - 4.0 <= pos.y && pos.y < row.bottom();
     let cell_x = |row: &Rect, text: &str| -> f32 {
         galleys
@@ -744,7 +604,6 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
             .pos
             .x
     };
-    // Each row's trailing cell: the rightmost galley in the row (the age).
     let trailing_right = |row: &Rect| -> f32 {
         galleys
             .iter()
@@ -796,28 +655,12 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
     );
 }
 
-/// **The blame view's rows paint the same fills and the same rail as the commit
-/// table's rows.**
-///
-/// Blame used to paint a bare `selection_bg()` tint and a hand-picked
-/// `SURFACE_2` hover — a second answer to "what does a chosen row look like", in
-/// the region the commit table had already answered. Both now go through the
-/// commit table's own `paint_log_row`, so the assertion is that a blamed-at line
-/// takes the selected band *and* the one 2px accent rail at its leading edge, at
-/// its full height, in the accent — and that a line from a different commit takes
-/// neither.
-///
-/// The comparison is against the **commit table's** chosen row in the same
-/// harness, not against the token names, so "the same fills" is arithmetic: the
-/// same band colour at the row's own rect, the same rail width, the same leading
-/// edge, the same span.
 #[test]
 fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
 
-    // The control, first: what a chosen commit row looks like in this frame.
     let commit_row = harness
         .get_by_label(&format!("{} alpha: second commit", short(&seed.c2)))
         .rect();
@@ -842,16 +685,12 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
-    // The blamed-at line is the "chosen" row of this view: c2 introduced the
-    // second line of the file. Read through the window-scoped helper, because
-    // the table underneath paints a row with the same label.
     let chosen = blame_row_in_window(&harness, &blame_row_label(&seed.c2, "alpha: second commit"));
     let plain = blame_row_in_window(
         &harness,
         &blame_row_label(&seed.c1, "alpha: initial commit"),
     );
 
-    // The band: the same colour, at the row's own rect.
     let bands: Vec<Rect> = filled_rects(&harness)
         .into_iter()
         .filter(|(rect, color)| {
@@ -872,14 +711,6 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
         "…and a row is the same height"
     );
 
-    // The rail: the one painter's output — token width, at the leading edge, for
-    // the row's full height, in the accent. And exactly one of them, for the one
-    // line that is "chosen".
-    //
-    // Scoped to the blame surface's own rows rather than to the frame: the
-    // branches pane and the changed-files pane keep their own chosen-row rails in
-    // the same frame, and a frame-wide count would be counting the window's
-    // selections rather than this view's.
     let rails: Vec<Rect> = filled_rects(&harness)
         .into_iter()
         .filter(|(rect, color)| {
@@ -913,7 +744,6 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
          for itself is a second answer to what a chosen row wears."
     );
 
-    // …and the line from a different commit takes neither the band nor the rail.
     assert!(
         !plain.contains_rect(rail),
         "a line from a different commit must not carry the rail: {plain:?} vs {rail:?}"
@@ -925,8 +755,6 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
         "…nor the band"
     );
 
-    // The cell inks, from the commit table's own two ink functions: the blamed
-    // line is a row of this table, so its text wears the table's inks.
     let galleys = test_support::harness::painted_galleys(&harness);
     let hash = galleys
         .iter()

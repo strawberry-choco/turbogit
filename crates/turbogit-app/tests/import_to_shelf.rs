@@ -1,18 +1,3 @@
-//! `Import to shelf` seen from the app: what parking a patch does to the shelf
-//! index, to its payload file, and to the tree the row is allowed to touch.
-//!
-//! The two claims this suite exists to hold are the two the store's history says are
-//! load-bearing. First, **a row is per root**: an unshelve puts work back in exactly one
-//! working tree, so a shelf imported into repository A must not list under B, and after a
-//! restart it must still name A rather than whichever directory the launch happened to
-//! bind. Second, **the index write is the commit point**: a verb that painted a row before
-//! the store accepted it would leave a name no launch can read back, and the work parked
-//! beside it becomes unreachable — the bug this programme paid two agents to remove, which
-//! a third way to create a record must not quietly reintroduce.
-//!
-//! The patch is real git content in a real repository, because the point of the deferral is
-//! that the *apply* is what happens later: an import must leave the tree byte-identical.
-
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git, pin_eol_lf};
@@ -21,7 +6,6 @@ use turbogit_app::state::PatchSource;
 use turbogit_domain::model::{PatchCreatedPolicy, ShelfSource, VcsSettings};
 use turbogit_services::shelve_stash::{self, patch_payload_dir, patch_payload_path, shelf_path};
 
-/// A patch that applies cleanly to `repo_at`'s committed `note.txt`.
 const PATCH: &str = "diff --git a/note.txt b/note.txt\n\
                      --- a/note.txt\n\
                      +++ b/note.txt\n\
@@ -39,8 +23,6 @@ fn repo_at(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// A workspace of two repositories under a plain project directory — the multi-root shape,
-/// in which a row that loses its root is not merely misfiled but applied to the wrong tree.
 fn two_roots(project: &Path) -> (PathBuf, PathBuf) {
     (
         repo_at(&project.join("lib")),
@@ -71,8 +53,6 @@ fn payload_files(project: &Path) -> Vec<String> {
     v
 }
 
-/// Parking a patch is a deferral, not an apply: the row appears, its bytes sit beside the
-/// index, and the working tree it belongs to is **byte-identical** to before.
 #[test]
 fn importing_a_patch_parks_it_without_touching_the_working_tree() {
     let project = TempDir::new().unwrap();
@@ -100,7 +80,6 @@ fn importing_a_patch_parks_it_without_touching_the_working_tree() {
         std::fs::read_to_string(patch_payload_path(project.path(), file)).unwrap(),
         PATCH
     );
-    // The durable feed gets the act (#6).
     assert!(
         state
             .ui
@@ -119,9 +98,6 @@ fn importing_a_patch_parks_it_without_touching_the_working_tree() {
     );
 }
 
-/// A shelf row is **one root's**. Two imports into two repositories of one workspace list
-/// under their own root and never under the other's, and that separation survives a
-/// restart — because an unshelve that ran in the wrong root moves work in the wrong tree.
 #[test]
 fn an_imported_row_lists_only_under_the_root_it_was_parked_in() {
     let project = TempDir::new().unwrap();
@@ -157,10 +133,6 @@ fn an_imported_row_lists_only_under_the_root_it_was_parked_in() {
     );
 }
 
-/// The store's refusal is the verb's refusal, and it is **total**: no row in memory, no row
-/// on disk, and no payload file left naming nothing. This is the case that used to strand
-/// parked work — a row painted over a store nobody could read back disappears at the next
-/// launch, and the bytes it addressed are then unreachable through the product.
 #[test]
 fn a_refused_index_write_adds_no_row_and_leaves_no_payload_behind() {
     let project = TempDir::new().unwrap();
@@ -191,8 +163,6 @@ fn a_refused_index_write_adds_no_row_and_leaves_no_payload_behind() {
     );
 }
 
-/// An import whose bytes name no files is refused **before anything is written**: no row,
-/// no payload, no index. A shelf row that lists nothing is a row nobody would keep.
 #[test]
 fn a_file_that_is_not_a_patch_imports_nothing() {
     let project = TempDir::new().unwrap();
@@ -208,9 +178,6 @@ fn a_file_that_is_not_a_patch_imports_nothing() {
     assert!(payload_files(project.path()).is_empty());
 }
 
-/// What the deferral is FOR: `Unshelve` puts the parked bytes into **its own** tree through
-/// the apply engine, and the captured default keeps the row. The other root's file is not
-/// touched — the same row, unshelved after a restart, still cannot mean the wrong tree.
 #[test]
 fn unshelving_an_imported_row_applies_it_into_its_own_root_and_keeps_the_row() {
     let project = TempDir::new().unwrap();
@@ -243,9 +210,6 @@ fn unshelving_an_imported_row_applies_it_into_its_own_root_and_keeps_the_row() {
     assert_eq!(payload_files(project.path()), files);
 }
 
-/// The destructive half of the pair reclaims everything the row owns: the record and the
-/// payload file, and **only for that root**. A row whose apply failed keeps both, which is
-/// what makes a retry possible at all.
 #[test]
 fn unshelve_and_remove_takes_the_imported_payload_with_it() {
     let project = TempDir::new().unwrap();
@@ -262,8 +226,6 @@ fn unshelve_and_remove_takes_the_imported_payload_with_it() {
     assert_eq!(payload_files(project.path()).len(), 2);
 
     state.unshelve(lib_id.clone(), "remove me", true);
-    // `for_roots` runs the production threaded pump: the completion has to be drained
-    // before settlement has happened, or this asserts the state of a verb still running.
     state.drain_events();
 
     assert_eq!(
@@ -273,9 +235,6 @@ fn unshelve_and_remove_takes_the_imported_payload_with_it() {
     );
 }
 
-/// A patch that cannot land leaves the tree exactly as it was and **keeps the row**: an
-/// unshelve is the same apply engine with the same all-or-nothing guarantee, so failing to
-/// apply cannot be the act that silently discards what was parked.
 #[test]
 fn an_imported_row_that_fails_to_apply_keeps_its_row_and_its_bytes() {
     let project = TempDir::new().unwrap();
@@ -285,7 +244,6 @@ fn an_imported_row_that_fails_to_apply_keeps_its_row_and_its_bytes() {
     state
         .import_patch_to_shelf(&id, "conflicts", PATCH)
         .unwrap();
-    // The tree the patch expects is no longer there, so git refuses the section.
     std::fs::write(lib.join("note.txt"), "utterly different\n").unwrap();
 
     state.unshelve(id.clone(), "conflicts", true);
@@ -304,9 +262,6 @@ fn an_imported_row_that_fails_to_apply_keeps_its_row_and_its_bytes() {
     assert_eq!(payload_files(project.path()).len(), 1);
 }
 
-/// The apply window's footer verb parks **the patch the window holds** under the root the
-/// window points at — the same mechanism from the apply flow, so the deferral is reachable
-/// wherever an apply is, and it stays as per-root as the window itself.
 #[test]
 fn the_apply_window_can_park_the_patch_it_holds_instead_of_applying_it() {
     let project = TempDir::new().unwrap();
@@ -345,9 +300,6 @@ fn the_apply_window_can_park_the_patch_it_holds_instead_of_applying_it() {
     );
 }
 
-/// The `When patch is created: Ask` follow-up's first verb reaches the same shelf, under the
-/// root the patch was generated from — the create route and the deferral are one story, and
-/// the ask must not be a dead end that only knows how to apply.
 #[test]
 fn the_created_patch_ask_can_park_the_file_it_just_named() {
     let project = TempDir::new().unwrap();
@@ -381,8 +333,6 @@ fn the_created_patch_ask_can_park_the_file_it_just_named() {
     );
 }
 
-/// `Delete Shelf` on an imported row reclaims its payload too — the only reclaim an
-/// imported shelf has — while leaving the other root's rows and bytes untouched.
 #[test]
 fn deleting_an_imported_row_reclaims_its_payload() {
     let project = TempDir::new().unwrap();
@@ -406,9 +356,6 @@ fn deleting_an_imported_row_reclaims_its_payload() {
     );
 }
 
-/// Two imports whose names slug alike still own **separate** payload files: a shelf that
-/// silently overwrote another shelf's parked bytes would be a deferral that destroys what
-/// it deferred, and the index would list two rows addressing one file.
 #[test]
 fn two_imports_never_share_one_payload_file() {
     let project = TempDir::new().unwrap();
@@ -433,11 +380,6 @@ fn two_imports_never_share_one_payload_file() {
     assert!(shelve_stash::read_patch_payload(project.path(), addrs[0]).is_ok());
 }
 
-/// What the row's `source` is **for**, read back after a restart: `AppState::unshelve`
-/// branches on that field, so an imported row that came back as a stash row would hand git
-/// a lookup for a stash entry that was never made — the parked bytes would stay parked while
-/// the verb reported failure over content the store is holding. The repository has no stash
-/// entry at all, which is what makes this a routing assertion rather than just an apply one.
 #[test]
 fn a_relaunched_imported_row_unshelves_its_parked_bytes_and_not_a_stash_entry() {
     let project = TempDir::new().unwrap();

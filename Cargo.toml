@@ -7,7 +7,6 @@ edition = "2024"
 members = ["crates/*"]
 resolver = "3"
 
-# Single source of truth for every shared dependency version in the workspace.
 [workspace.dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
 # The one commit-message parser (ADR-0028 D2). Tooling-only — the `default`
@@ -44,29 +43,8 @@ turbogit-app = { path = "crates/turbogit-app" }
 turbogit-ui = { path = "crates/turbogit-ui" }
 test-support = { path = "crates/test-support" }
 
-# Clippy deny-warnings configuration, inherited by every member via
-# `[lints] workspace = true`.
 [workspace.lints.rust]
 warnings = "deny"
-# Ratchets the adjacent class of dead visibility: a `pub` item trapped inside a
-# private `mod` fails the build instead of waiting for a human.
-#
-# That class is not empty. Measured here, the lint produced 19 violations — all
-# `pub` items in private `mod`s, all narrowed rather than allowed. (A run without
-# `--keep-going` aborts a crate on its first error batch, so its count is a
-# misleading subset; `--keep-going` is required to count at all.)
-#
-# It does NOT close the hole the trimming plan was written against. Every crate
-# here is a library, so a `pub` fn in a `pub mod` is genuinely reachable from
-# outside — anyone can name it. `unreachable_pub` needs an item unreachable from
-# *outside the crate*; `dead_code` needs an item unreachable at all; the
-# widely-named-but-uncalled `pub fn` this workspace is full of is neither, so no
-# per-crate lint can see it. The ~203 such items are structurally invisible here,
-# not merely unfixed. "No other crate calls this" is a whole-workspace property;
-# only a text sweep computes it, and `crates/test-support/src/srcscan.rs` is that
-# instrument. A clean run means the private-`mod` class is empty, not that no
-# dead pub items remain.
-#
 # This is a rustc lint, NOT `clippy::unreachable_pub` — the clippy-namespaced
 # form is an unknown lint on this toolchain and fails the build with E0602
 # before linting a single file.
@@ -79,8 +57,6 @@ rfd = { workspace = true }
 turbogit-app = { workspace = true }
 turbogit-ui = { workspace = true }
 
-# The cross-layer parity suite is the root's one test that legitimately spans
-# every crate; those consumers are dev-only.
 [dev-dependencies]
 # Installs `.cargo-husky/hooks/*` into `.git/hooks` on build (ADR-0028 D3).
 # `default-features = false` is load-bearing: the defaults generate their own

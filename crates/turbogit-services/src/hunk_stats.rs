@@ -1,12 +1,5 @@
-//! Hunk-span statistics over the **Git engine**'s patch value.
-//!
-//! Pure classification: which files a whole-root diff touches, and the span of
-//! each hunk. No engine access; callers read the patch value through the
-//! [`crate::changes`] seam and cache the result per root.
-
 use turbogit_domain::model::Patch;
 
-/// One hunk's line-range span, parsed from its `@@ -a,b +c,d @@` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HunkSpan {
     /// 1-based old-file start line.
@@ -19,7 +12,6 @@ pub struct HunkSpan {
     pub new_lines: usize,
 }
 
-/// Per-file hunk spans of one multi-file unified diff.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileHunks {
     /// Repo-relative path (git's `b/` side of the `diff --git` line).
@@ -28,10 +20,6 @@ pub struct FileHunks {
     pub hunks: Vec<HunkSpan>,
 }
 
-/// The per-file hunk spans of a patch value — the same list one file section
-/// answers with, so the whole-root listings and the display model read one
-/// parser of one shape (`ADR-0022`). The four numbers a header carries are
-/// fields here; nothing re-reads `@@ -a,b +c,d`.
 pub fn file_hunks(patch: &Patch) -> Vec<FileHunks> {
     patch
         .files
@@ -56,14 +44,10 @@ pub fn file_hunks(patch: &Patch) -> Vec<FileHunks> {
 mod tests {
     use super::*;
 
-    /// git's diff syntax has exactly one reader, and it lives with the
-    /// adapters. A services test may build a value with it; nothing in this
-    /// crate's production code does.
     fn patch(text: &str) -> Patch {
         turbogit_engine_api::patch::parse_patch(text)
     }
 
-    /// Two well-separated hunks in one file, as `git diff HEAD` emits.
     const TWO_HUNK_DIFF: &str = "\
 diff --git a/src/a.rs b/src/a.rs
 index 1111111..2222222 100644

@@ -1,11 +1,3 @@
-//! Issue 21 — cascade commit (one message across several repos).
-//!
-//! Headless integration tests over real git repositories (tempdir + system
-//! `git`): each root is a fresh repo with local identity; the service
-//! classifies them by what's in the index, executes the per-repo commit, and
-//! reports per-repo outcomes through the same `Result`-shaped channel as the
-//! rest of the cascade fleet (issue 09's `run_bulk`).
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{CommitId, MultiRootManager, RootId};
@@ -15,31 +7,20 @@ use turbogit_services::multi_root::{build_root, register};
 
 use test_support::git_seed::{git as run_git, repo_with_one_commit as fresh_repo};
 
-// `git_seed::repo_with_one_commit` is these same steps, so that recipe owns
-// them; only the seeded file and message differ, and nothing here reads either.
-
-/// Write `content` to `path` and `git add` it; leaves the file staged but
-/// uncommitted.
 fn stage_file(repo: &Path, file: &str, content: &str) {
     std::fs::write(repo.join(file), content).expect("write");
     run_git(repo, &["add", "--", file]);
 }
 
-/// HEAD SHA (`git rev-parse HEAD`).
 fn head(repo: &Path) -> String {
     run_git(repo, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// The staged change count via `git diff --cached --name-only` (the canonical
-/// "anything in the index" signal). Returns an empty list for a clean
-/// index.
 fn staged_paths(repo: &Path) -> Vec<String> {
     let out = run_git(repo, &["diff", "--cached", "--name-only"]);
     out.lines().map(|s| s.to_string()).collect()
 }
 
-/// A registered manager over `repos`, built through the production
-/// registration path.
 fn manager(engine: &CliExecutor, repos: &[PathBuf]) -> MultiRootManager {
     let mut mgr = MultiRootManager::default();
     for repo in repos {
@@ -68,7 +49,6 @@ fn plan_classifies_repos_by_whether_anything_is_staged() {
     let empty = fresh_repo(tmp.path(), "empty");
     let _mgr = manager(&engine, &[staged.clone(), empty.clone()]);
 
-    // alpha: a staged edit; ui: a clean tree.
     stage_file(&staged, "feature.txt", "alpha feature\n");
 
     let rows = plan(&engine, &[staged.clone(), empty.clone()]);
@@ -114,16 +94,12 @@ fn run_one_commits_staged_changes_and_returns_the_new_head() {
         "index should be empty after commit, got {:?}",
         staged_paths(&repo)
     );
-    // Message landed in the log.
     let log = run_git(&repo, &["log", "-1", "--format=%s"]);
     assert_eq!(log.trim(), "alpha feature");
 }
 
 #[test]
 fn run_one_reports_an_engine_failure_when_the_index_is_empty() {
-    // The service does not pre-filter — an out-of-band caller could ask for a
-    // commit on a root whose index went empty between plan() and run_one().
-    // The engine refuses and the error surfaces verbatim.
     let engine = CliExecutor {
         settings: Default::default(),
     };
@@ -133,17 +109,10 @@ fn run_one_reports_an_engine_failure_when_the_index_is_empty() {
     let err = run_one(&engine, &repo, "nothing staged", false).expect_err("should fail");
     let formatted = format!("{err:?}");
 
-    // git's "nothing to commit, working tree clean" lands on stdout, which
-    // the engine does not surface here — the cascade-run monitor renders the
-    // verbatim `TgError` we forward (the "git exited with code 1:" prefix
-    // below). The contract that matters for the cascade is: an empty index
-    // is a *run failure*, surfaced as a TgError::Cli, not a silent no-op.
     assert!(
         formatted.contains("code 1") || formatted.contains("Cli"),
         "expected a Cli error carrying exit code 1, got: {formatted}"
     );
-    // The error must be a TgError so the cascade-run monitor renders it
-    // consistently with the rest of the fleet.
     let _: TgError = err;
 }
 
@@ -154,15 +123,10 @@ fn run_one_amend_replaces_the_head_message_and_keeps_the_tree() {
     };
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = fresh_repo(tmp.path(), "alpha");
-    // Start from a clean tree, amend a real prior commit: stage a new edit
-    // and amend the existing HEAD with --amend.
     stage_file(&repo, "feature.txt", "amend feature\n");
     run_one(&engine, &repo, "first message", false).expect("initial commit");
     let before_sha = head(&repo);
 
-    // Amend the message; no further file changes needed (`git commit --amend`
-    // re-uses the current index, which is now empty after the previous
-    // commit).
     run_one(&engine, &repo, "amended message", true).expect("amend");
 
     let after_sha = head(&repo);
@@ -176,10 +140,6 @@ fn run_one_amend_replaces_the_head_message_and_keeps_the_tree() {
 
 #[test]
 fn plan_and_run_one_together_only_commit_roots_with_staged_content() {
-    // The fan-out contract: a mixed selection commits only the roots that
-    // had something in the index at plan time. The skipped roots' heads are
-    // untouched and the run-one sequence over the planned roots produces one
-    // new commit per root.
     let engine = CliExecutor {
         settings: Default::default(),
     };
@@ -191,7 +151,6 @@ fn plan_and_run_one_together_only_commit_roots_with_staged_content() {
 
     stage_file(&alpha, "feature.txt", "alpha\n");
     stage_file(&lib, "feature.txt", "lib\n");
-    // ui: clean tree, nothing staged.
 
     let rows = plan(&engine, &[alpha.clone(), ui.clone(), lib.clone()]);
     let candidates: Vec<&Path> = vec![alpha.as_path(), ui.as_path(), lib.as_path()];
@@ -224,9 +183,7 @@ fn plan_and_run_one_together_only_commit_roots_with_staged_content() {
         assert!(result.is_ok(), "{rid:?} should have committed cleanly");
     }
 
-    // alpha + lib: new HEAD.
     assert_ne!(head(&alpha), alpha_before);
     assert_ne!(head(&lib), lib_before);
-    // ui: untouched.
     assert_eq!(head(&ui), ui_before);
 }

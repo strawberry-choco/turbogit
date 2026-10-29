@@ -1,10 +1,3 @@
-//! Issue 06 (deepen-git-engine) — change stats from one question.
-//!
-//! The integration preview used to ask the **Git engine** to run a raw numstat
-//! command and then split the answer on tabs inside the service. It now asks one
-//! question of the same read the log's stats column asks, and the substitutable
-//! adapter can answer it: this suite needs no `git` binary.
-
 use std::path::PathBuf;
 
 use turbogit_domain::model::{ChangeQuestion, ChangeStats, FileStat, MergeStrategy};
@@ -15,8 +8,6 @@ fn root() -> PathBuf {
     PathBuf::from("/repo")
 }
 
-/// The change `feature` would bring in: two text files and one **Binary change**,
-/// which git reports with a dash in both count columns.
 fn canned() -> ChangeStats {
     ChangeStats {
         files: vec![
@@ -71,8 +62,6 @@ fn an_unanswered_question_is_an_error_not_a_zeroed_preview() {
 
 #[test]
 fn a_target_already_merged_in_brings_nothing_and_asks_no_question() {
-    // The short-circuit stays in front of the stats read: the merge-base diff of
-    // an already-merged target would otherwise show changes it will not apply.
     let mut v = FakeExecutor::new();
     v.ancestors.insert(("feature".into(), "HEAD".into()));
     let preview = integrate_service::merge_preview(&v, &root(), "feature", MergeStrategy::Commit)

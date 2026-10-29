@@ -1,26 +1,8 @@
-//! Issue #34 follow-up — the shared recents dispatcher behind the workspace
-//! picker and the Welcome screen.
-//!
-//! `AppState::open_recent` is the single place that decides what a recents row
-//! *means*: a [`RecentKind::Workspace`] row deep-scans and re-indexes, a
-//! [`RecentKind::Project`] row takes the bounded `rescan` path. Both the
-//! Welcome screen's recent rows and the workspace picker (palette-only since
-//! the topbar's selector was deleted) route through it, so there is exactly one
-//! copy of the kind dispatch to keep honest.
-//!
-//! It also owns the missing-path guard: `open_project` on a deleted directory
-//! rescans to zero roots, and `show_welcome()` then returns true — the user is
-//! silently dumped on Welcome with no explanation. `open_recent` checks
-//! `is_dir()` first and surfaces a toast instead.
-//!
-//! Asserts only on the public surface: `AppState` transitions and the toast.
-
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::state::{AppState, ToastKind};
 
-/// Seed a minimal repo at `dir`: one branch (`main`), one commit.
 fn seed_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("repo dir");
     git(dir, &["init", "-q", "-b", "main"]);
@@ -31,8 +13,6 @@ fn seed_repo(dir: &Path) {
     git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
-/// A workspace container holding two repos, one of them strictly deeper than
-/// the bounded scanner's `SCAN_MAX_DEPTH` so only the deep scan can find it.
 fn seed_workspace(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let ws = base.join("ws");
     std::fs::create_dir_all(&ws).expect("workspace dir");
@@ -55,8 +35,6 @@ fn recent(path: &Path, kind: RecentKind, repo_count: Option<usize>) -> RecentPro
         repo_count,
     }
 }
-
-// --- Cycle 1: the kind dispatch -----------------------------------------------
 
 #[test]
 fn open_recent_deep_scans_a_workspace_row() {
@@ -102,9 +80,6 @@ fn open_recent_takes_the_bounded_path_for_a_project_row() {
     let scratch = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
 
-    // The project dir is itself a repo that also nests a repo deeper than the
-    // bounded scanner walks: a Project row must NOT reach it, or the two kinds
-    // would be indistinguishable.
     let repo = scratch.path().join("repo");
     seed_repo(&repo);
     let deep = repo.join("a").join("b").join("c").join("d");
@@ -129,8 +104,6 @@ fn open_recent_takes_the_bounded_path_for_a_project_row() {
     assert_eq!(state.multi.roots[0].id.as_path(), repo.as_path());
 }
 
-// --- Cycle 2: the missing-path guard (D6) -------------------------------------
-
 #[test]
 fn open_recent_on_a_missing_path_toasts_and_dispatches_nothing() {
     let scratch = tempfile::tempdir().unwrap();
@@ -141,7 +114,6 @@ fn open_recent_on_a_missing_path_toasts_and_dispatches_nothing() {
     let mut state = AppState::launch_in(Some(open.clone()), Some(config.path().to_path_buf()));
     assert!(!state.show_welcome(), "launched straight into the shell");
 
-    // A recents row whose directory is gone by the time it is clicked.
     let gone = scratch.path().join("gone");
     seed_repo(&gone);
     std::fs::remove_dir_all(&gone).expect("delete the recent's directory");
@@ -206,8 +178,6 @@ fn open_recent_on_a_missing_workspace_row_also_toasts_instead_of_dispatching() {
         "a missing workspace path is an error, not a silent no-op"
     );
 }
-
-// --- Cycle 3: the picker's transient flag is invalidated by its transitions ---
 
 #[test]
 fn open_recent_closes_the_workspace_picker() {
@@ -280,13 +250,8 @@ fn close_all_projects_closes_the_workspace_picker() {
     assert!(state.show_welcome());
 }
 
-// --- Cycle 4: the picker state itself -----------------------------------------
-
 #[test]
 fn workspace_picker_state_defaults_closed_and_unanchored() {
-    // A temp config dir: the picker's flags are session-only and never
-    // persisted, but the launch path still loads the real recents file, so
-    // keep it off the user's machine.
     let config = tempfile::tempdir().unwrap();
     let state = AppState::launch_in(None, Some(config.path().to_path_buf()));
     assert!(!state.ui.workspace_picker_open, "the picker starts closed");

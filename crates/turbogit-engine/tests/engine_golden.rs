@@ -1,27 +1,3 @@
-//! Golden-output tests around the CLI executor (`src/engine/cli.rs`) — Phase L0
-//! of `docs/library-migration-execution-plan.md`.
-//!
-//! Every test builds a controlled fixture repository with real `git` commands
-//! and pins the EXACT parsed output of [`CliExecutor`] for one read operation.
-//! These tests are the parity oracle for the upcoming engine migration: a
-//! replacement backend must reproduce these values to pass.
-//!
-//! Determinism: fixed identities, fixed `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`
-//! epochs, pure-LF file contents, repo-local config overriding any global
-//! `core.autocrlf` / `diff.noprefix`. No snapshot framework — plain asserts.
-//!
-//! Behavior quirks pinned here on purpose (migration must preserve them):
-//! - Conflicted (`u`) entries always parse to `staged: false, unstaged: false`
-//!   and their path is taken as the LAST whitespace token of the line.
-//! - `map_xy` prefers the index letter, falls back to the worktree letter,
-//!   maps typechange `T` (and anything unknown) to `Modified`.
-//! - `log` parses `%at` once and stores it in `author.time`, `committer.time`
-//!   AND `Commit.time` — committer time is never read independently.
-//! - `log` messages are `trim_end()`ed: git's trailing newline (and any
-//!   trailing body whitespace) disappears.
-//! - `ahead_behind` swaps rev-list's `<behind>\t<ahead>` columns into
-//!   `(ahead, behind)`.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use test_support::git_seed::{git, pin_eol_lf};
@@ -32,9 +8,6 @@ use turbogit_domain::model::{
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-// --------------------------------------------------------- fixture helpers --
-
-/// Fixed commit epochs (git internal `@<unix> <offset>` date format).
 const DATE_1: &str = "@1112911993 +0000";
 const DATE_2: &str = "@1234567890 +0000";
 const DATE_3: &str = "@1700000000 +0000";
@@ -42,21 +15,12 @@ const TIME_1: i64 = 1_112_911_993;
 const TIME_2: i64 = 1_234_567_890;
 const TIME_3: i64 = 1_700_000_000;
 
-/// The executor under test with default settings (git resolved from PATH).
 fn engine() -> CliExecutor {
     CliExecutor {
         settings: VcsSettings::default(),
     }
 }
 
-// Two runners survive, and their names say which contract each one holds:
-//
-//   * [`run_git_dates`] / [`run_git_at`] — per-call `GIT_*_DATE`, load-bearing: the
-//     times are asserted field by field, and no `git config` carries a date, so
-//     `git_seed::git` cannot express this even in principle.
-//   * [`run_git_failing`] — the opposite contract: the non-zero exit is asserted.
-
-/// [`run_git_at`] with author and committer dates pinned separately.
 fn run_git_dates(dir: &Path, args: &[&str], author_date: &str, committer_date: &str) -> String {
     let out = Command::new("git")
         .args(args)
@@ -73,19 +37,10 @@ fn run_git_dates(dir: &Path, args: &[&str], author_date: &str, committer_date: &
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Like [`git`] but pins author AND committer date to the same `date`, so
-/// fixture commits carry deterministic, assertion-friendly epochs.
 fn run_git_at(dir: &Path, args: &[&str], date: &str) -> String {
     run_git_dates(dir, args, date, date)
 }
 
-/// Run `git <args>` expecting FAILURE (e.g. a conflicting merge); returns
-/// stdout + stderr combined so the caller can sanity-check why it failed.
-/// (`git merge` reports its CONFLICT lines on stdout.)
-///
-/// Not `test_support::git_seed::git`, which asserts success: here the refusal is the
-/// fixture, so the `assert!(!out.status.success())` must not be folded into a helper
-/// that would throw the status away.
 fn run_git_failing(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
@@ -100,8 +55,6 @@ fn run_git_failing(dir: &Path, args: &[&str]) -> String {
     )
 }
 
-/// Repo-local config that makes fixtures deterministic regardless of the
-/// developer's global git config (identity, EOL translation, diff prefixes).
 fn configure_identity(repo: &Path) {
     git(repo, &["config", "user.email", "golden@example.com"]);
     git(repo, &["config", "user.name", "Golden Author"]);
@@ -109,8 +62,6 @@ fn configure_identity(repo: &Path) {
     git(repo, &["config", "diff.noprefix", "false"]);
 }
 
-/// Write `content` to `<repo>/<name>`, stage and commit it at `date`;
-/// returns the new HEAD SHA.
 fn commit_file(repo: &Path, name: &str, content: &str, msg: &str, date: &str) -> String {
     std::fs::write(repo.join(name), content).expect("write fixture file");
     git(repo, &["add", "--", name]);
@@ -118,13 +69,6 @@ fn commit_file(repo: &Path, name: &str, content: &str, msg: &str, date: &str) ->
     git(repo, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repository on `main` with one base commit (`base.txt = "base\n"` at
-/// [`DATE_1`]). The caller keeps the returned [`tempfile::TempDir`] alive for
-/// the duration of the test.
-///
-/// Not `repo_with_one_commit`: that recipe's single commit lands on the wall clock,
-/// where this one must land on [`DATE_1`], and it tracks `README.md` where this one
-/// tracks `base.txt`.
 fn temp_repo(name: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(name);
@@ -135,17 +79,10 @@ fn temp_repo(name: &str) -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Full SHAs of `commits`, in order.
 fn ids(commits: &[Commit]) -> Vec<String> {
     commits.iter().map(|c| c.id.clone()).collect()
 }
 
-/// Assert `patch` is the engine's answer for one path: the section names it,
-/// carries the blob-pair and source-pair metadata git wrote, and holds exactly
-/// one hunk with `span` and `body`. The body is spelled the way the diff reads
-/// (`" alpha"`, `"-bravo"`) because that is the shape the viewer and `git apply`
-/// both depend on — but it is assembled from the value's fields, not matched
-/// against git's text.
 #[track_caller]
 fn assert_patch_one_file(
     patch: &Patch,
@@ -201,8 +138,6 @@ fn assert_patch_one_file(
     assert_eq!(lines, body, "patch body mismatch:\n{patch}");
 }
 
-// ------------------------------------------------------------ status tests --
-
 #[test]
 fn engine_golden_status_clean_repo_is_empty() {
     let (_tmp, repo) = temp_repo("clean");
@@ -222,7 +157,6 @@ fn engine_golden_status_parses_staged_add() {
     let c = &st.changes[0];
     assert_eq!(c.path, PathBuf::from("fresh.txt"));
     assert_eq!(c.status, ChangeStatus::Added);
-    // Porcelain v2 `1 A.`: index letter set, worktree letter '.'.
     assert!(c.staged);
     assert!(!c.unstaged);
     assert_eq!(c.orig_path, None);
@@ -240,7 +174,6 @@ fn engine_golden_status_parses_unstaged_modify() {
     let c = &st.changes[0];
     assert_eq!(c.path, PathBuf::from("base.txt"));
     assert_eq!(c.status, ChangeStatus::Modified);
-    // Porcelain v2 `1 .M`: index matches HEAD, worktree differs.
     assert!(!c.staged);
     assert!(c.unstaged);
     assert_eq!(c.orig_path, None);
@@ -256,7 +189,6 @@ fn engine_golden_status_parses_untracked_file() {
     let c = &st.changes[0];
     assert_eq!(c.path, PathBuf::from("ghost.txt"));
     assert_eq!(c.status, ChangeStatus::Unversioned);
-    // `? ` entries carry no staging information at all.
     assert!(!c.staged);
     assert!(!c.unstaged);
     assert_eq!(c.orig_path, None);
@@ -272,7 +204,6 @@ fn engine_golden_status_parses_deleted_file() {
     let c = &st.changes[0];
     assert_eq!(c.path, PathBuf::from("base.txt"));
     assert_eq!(c.status, ChangeStatus::Deleted);
-    // Porcelain v2 `1 .D`: deletion happened in the worktree only.
     assert!(!c.staged);
     assert!(c.unstaged);
 }
@@ -285,7 +216,6 @@ fn engine_golden_status_parses_renamed_file_with_orig_path() {
     let st = engine().status(&repo).expect("status");
     assert_eq!(st.changes.len(), 1, "got: {:?}", st.changes);
     let c = &st.changes[0];
-    // Porcelain v2 `2 R.` entry: `path` is the NEW path, `orig_path` the old.
     assert_eq!(c.path, PathBuf::from("renamed.txt"));
     assert_eq!(c.orig_path, Some(PathBuf::from("base.txt")));
     assert_eq!(c.status, ChangeStatus::Renamed);
@@ -296,7 +226,6 @@ fn engine_golden_status_parses_renamed_file_with_orig_path() {
 #[test]
 fn engine_golden_status_maps_merge_conflict_to_conflicted() {
     let (_tmp, repo) = temp_repo("conflict");
-    // Both branches edit the same line of the same file.
     git(&repo, &["branch", "feature"]);
 
     std::fs::write(repo.join("clash.txt"), "main side\n").expect("write main side");
@@ -316,20 +245,15 @@ fn engine_golden_status_maps_merge_conflict_to_conflicted() {
     );
 
     let st = engine().status(&repo).expect("status during conflict");
-    // The `u ` porcelain entry replaces any `1 `/`2 ` entry for the path.
     assert_eq!(st.changes.len(), 1, "got: {:?}", st.changes);
     let c = &st.changes[0];
     assert_eq!(c.path, PathBuf::from("clash.txt"));
     assert_eq!(c.status, ChangeStatus::Conflicted);
-    // QUIRK: the parser ignores the `u` line's XY pair entirely — conflicts
-    // are neither staged nor unstaged in the parsed model.
     assert!(!c.staged);
     assert!(!c.unstaged);
     assert_eq!(c.orig_path, None);
     assert_eq!(st.conflicted, vec![PathBuf::from("clash.txt")]);
 }
-
-// -------------------------------------------------------------- log tests --
 
 #[test]
 fn engine_golden_log_pins_linear_history_fields() {
@@ -348,30 +272,24 @@ fn engine_golden_log_pins_linear_history_fields() {
     assert_eq!(commits.len(), 3, "whole history, newest first");
     assert_eq!(ids(&commits), vec![c3.clone(), c2.clone(), c1.clone()]);
 
-    // Parent counts and ids for a strictly linear history.
     assert!(commits[2].parents.is_empty(), "root commit has no parents");
     assert_eq!(commits[1].parents, vec![c1]);
     assert_eq!(commits[0].parents, vec![c2]);
 
-    // Identity comes from the repo-local config for BOTH signatures.
     for c in &commits {
         assert_eq!(c.author.name, "Golden Author");
         assert_eq!(c.author.email, "golden@example.com");
         assert_eq!(c.committer.name, "Golden Author");
         assert_eq!(c.committer.email, "golden@example.com");
-        // The commit is tied to the exact root path handed to the engine.
         assert_eq!(c.root, RootId(repo.clone().into()));
     }
 
-    // Epochs come straight from the fixed GIT_*_DATE fixtures.
     assert_eq!(commits[0].time, TIME_3);
     assert_eq!(commits[0].author.time, TIME_3);
     assert_eq!(commits[0].committer.time, TIME_3);
     assert_eq!(commits[1].time, TIME_2);
     assert_eq!(commits[2].time, TIME_1);
 
-    // Messages: subject-only rows and subject+body rows (the raw `%B` with
-    // git's trailing newline trimmed off).
     assert_eq!(
         commits[0].message, "subject three\n\nbody alpha\nbody beta",
         "%B must carry subject AND body"
@@ -387,8 +305,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
     let c2 = commit_file(&repo, "two.txt", "two\n", "second", DATE_2);
     let c3 = commit_file(&repo, "three.txt", "three\n", "third", DATE_3);
 
-    // Paging: `skip` moves the window down the same newest-first listing
-    // without moving the walk's start, so `-n2 --skip=1` is its tail.
     let tail = engine()
         .log(
             &repo,
@@ -401,7 +317,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
         .expect("log -n2 --skip=1");
     assert_eq!(ids(&tail), vec![c2.clone(), c1.clone()]);
 
-    // Branch filter walks ONLY the named ref's history.
     git(&repo, &["branch", "topic", &c1]);
     let topic = engine()
         .log(
@@ -414,9 +329,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
         .expect("log topic");
     assert_eq!(ids(&topic), vec![c1.clone()]);
 
-    // `--skip` is a rev-info option: it has to reach git BEFORE the rev and
-    // before the `--` pathspec separator, or git reads it as a path. A window
-    // past the end of either filtered listing is empty, never an error.
     let past_topic = engine()
         .log(
             &repo,
@@ -448,7 +360,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
         .expect("log -n1 --skip=1 -- two.txt");
     assert!(ids(&past_path).is_empty());
 
-    // max_count caps the newest-first walk of HEAD.
     let two = engine()
         .log(
             &repo,
@@ -460,7 +371,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
         .expect("log -n2");
     assert_eq!(ids(&two), vec![c3, c2]);
 
-    // Both options combine (`git log -n1 topic`).
     let combo = engine()
         .log(
             &repo,
@@ -477,7 +387,6 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
 #[test]
 fn engine_golden_log_committer_time_mirrors_author_time() {
     let (_tmp, repo) = temp_repo("log-committer-time");
-    // A commit whose author and committer epochs deliberately diverge.
     std::fs::write(repo.join("split.txt"), "split\n").expect("write");
     git(&repo, &["add", "split.txt"]);
     run_git_dates(
@@ -491,15 +400,9 @@ fn engine_golden_log_committer_time_mirrors_author_time() {
     let top = &commits[0];
     assert_eq!(top.message, "split dates");
     assert_eq!(top.author.time, TIME_1);
-    // QUIRK: cli.rs parses `%at` once and stamps it into all three time
-    // fields — the real committer epoch (TIME_3) is never observed. A
-    // migrated engine must decide whether to preserve or fix this; the
-    // oracle currently REQUIRES the mirroring.
     assert_eq!(top.committer.time, TIME_1);
     assert_eq!(top.time, TIME_1);
 }
-
-// -------------------------------------------------------------- diff tests --
 
 #[test]
 fn engine_golden_diff_unstaged_modification_exact_text() {
@@ -509,7 +412,6 @@ fn engine_golden_diff_unstaged_modification_exact_text() {
     git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
-    // Controlled single-line edit in the middle of the file.
     std::fs::write(repo.join("words.txt"), BASE.replace("bravo", "BRAVO")).expect("rewrite");
 
     let patch = engine()
@@ -530,13 +432,10 @@ fn engine_golden_diff_staged_vs_worktree_semantics() {
     git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
-    // Stage v2, then diverge the worktree to v3: index holds "TWO", the
-    // worktree holds "TWO!".
     std::fs::write(repo.join("words.txt"), "one\nTWO\nthree\n").expect("stage v2");
     git(&repo, &["add", "words.txt"]);
     std::fs::write(repo.join("words.txt"), "one\nTWO!\nthree\n").expect("worktree v3");
 
-    // Default opts → `git diff` (worktree vs INDEX).
     let wt = engine()
         .diff_patch(&repo, &DiffOpts::default())
         .expect("wt diff");
@@ -547,7 +446,6 @@ fn engine_golden_diff_staged_vs_worktree_semantics() {
         &[" one", "-TWO", "+TWO!", " three"],
     );
 
-    // staged: true → `git diff --cached` (INDEX vs HEAD).
     let staged = engine()
         .diff_patch(
             &repo,
@@ -572,8 +470,6 @@ fn engine_golden_diff_ignore_whitespace_flag_mapping() {
     git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
-    // Whitespace-only edit: visible by default, invisible under the flag
-    // (mapped to `git diff --ignore-all-space`).
     std::fs::write(repo.join("words.txt"), "alpha\nb r a v o\ncharlie\n").expect("whitespace edit");
 
     let plain = engine()
@@ -613,8 +509,6 @@ fn engine_golden_diff_ignore_whitespace_flag_mapping() {
     );
 }
 
-// ------------------------------------------------------- ahead/behind test --
-
 #[test]
 fn engine_golden_ahead_behind_counts_on_clone() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -624,7 +518,6 @@ fn engine_golden_ahead_behind_counts_on_clone() {
     configure_identity(&src);
     commit_file(&src, "base.txt", "base\n", "base", DATE_1);
 
-    // Clone the fixture repo to a second path; the clone tracks origin/main.
     let clone = tmp.path().join("clone");
     git(
         tmp.path(),
@@ -639,9 +532,6 @@ fn engine_golden_ahead_behind_counts_on_clone() {
         (0, 0)
     );
 
-    // One purely local commit → ahead 1, behind 0. This direction-check pins
-    // the column swap: rev-list prints "<behind>\t<ahead>" but the seam
-    // returns (ahead, behind).
     let _c2 = commit_file(&clone, "ahead.txt", "ahead\n", "local ahead", DATE_2);
     assert_eq!(
         ex.ahead_behind(&clone, "main", "origin/main")
@@ -649,8 +539,6 @@ fn engine_golden_ahead_behind_counts_on_clone() {
         (1, 0)
     );
 
-    // The upstream moves independently; after fetching, the clone is both
-    // ahead and behind by one.
     let _c3 = commit_file(&src, "upstream.txt", "upstream\n", "upstream move", DATE_3);
     git(&clone, &["fetch", "-q", "origin"]);
     assert_eq!(
@@ -660,14 +548,6 @@ fn engine_golden_ahead_behind_counts_on_clone() {
     );
 }
 
-// --------------------------------------------- libgit2 backend parity (L2) --
-
-/// The libgit2 backend must reproduce the CLI's `current_branch` value on a
-/// fresh repository with an unborn HEAD: `git symbolic-ref --short HEAD`
-/// succeeds there (the branch name exists before any commit does), so
-/// `is_repo` — defined as `current_branch().is_ok()` — must treat a freshly
-/// initialized repository as a repository. Otherwise root discovery misses
-/// it and opening a fresh repo never enters the shell (issue #10 flow).
 #[test]
 fn git2_backend_current_branch_matches_cli_on_unborn_head() {
     let tmp = tempfile::tempdir().expect("tempdir");

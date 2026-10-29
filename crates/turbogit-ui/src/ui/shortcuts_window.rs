@@ -1,14 +1,8 @@
-//! Passive shortcuts help window: the shell's global keyboard bindings as a
-//! plain list, opened from the tab strip's keyboard button. The list documents
-//! [`crate::ui::shell::handle_shortcuts`]'s dispatch — a binding that changes
-//! there must change here, and no row adds a binding (ADR-0009 stays frozen).
-
 use egui::{Color32, Pos2, Sense, Ui, Vec2};
 
 use crate::theme::{GROUP_ROW_HEIGHT, Palette, TYPE_CHIP, TYPE_CONTROL, chrome_font, data_font};
 use turbogit_app::state::AppState;
 
-/// The rows, in dispatch order.
 const ROWS: &[(&str, &str)] = &[
     ("Open the Commit tool window", "Ctrl+K"),
     ("Open the Push dialog", "Ctrl+Shift+K"),
@@ -42,8 +36,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The menu widget's shortcut column, minus the Response: the row reads, it
-/// does not act.
 fn row(ui: &mut Ui, action: &str, keys: &str) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, GROUP_ROW_HEIGHT), Sense::hover());

@@ -1,12 +1,3 @@
-//! Log-view-scaling 05 — the commit list lays out only the rows in its
-//! viewport.
-//!
-//! The observable is which commit rows exist as widgets: a row's
-//! [`egui::WidgetInfo`] label is the one handle every other log test already
-//! drives rows by, and a row the list did not build has no label to find. So
-//! "the row below the fold was not laid out" is a statement about the
-//! accessibility tree, not about a private field.
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -18,13 +9,6 @@ use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 
-// --- painted-output helpers (mirrors log_ux.rs) -------------------------------
-
-/// Step frames until the painted output stabilizes.
-///
-/// Not `test_support::harness::settle`'s 10 frames: the batch fetch behind the Log
-/// window is a real `git` subprocess, and a frame taken before the worker posts is
-/// byte-identical to a settled one. The shared settle has no frame-budget argument.
 fn settle(harness: &mut Harness<'_, AppState>) {
     let mut prev = String::new();
     for _ in 0..30 {
@@ -49,17 +33,10 @@ fn settle_until(harness: &mut Harness<'_, AppState>, needle: &str) {
     panic!("`{needle}` never appeared within 100 frames");
 }
 
-// --- Fixture: one long history, seeded once for the whole binary ---------------
-
-// No repository `user.*` here: every call, the `rev-parse` ones naming the head
-// row included, is pinned per call through the fixture crate's runner, because a
-// headless machine has no global identity to borrow.
-
 fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// The row label `commit_row` publishes: `<short hash> <subject>`.
 fn row_label(repo: &Path, nth_from_head: usize) -> String {
     let id = git_with_env(
         repo,
@@ -71,8 +48,6 @@ fn row_label(repo: &Path, nth_from_head: usize) -> String {
     format!("{} c{}", short(id.trim()), total - nth_from_head - 1)
 }
 
-/// Seed a project with `n` commits on `main` in one `fast-import` batch — one
-/// subprocess per commit would cost minutes across this suite.
 fn seeded_project(n: usize) -> (PathBuf, PathBuf) {
     {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -126,30 +101,21 @@ fn seeded_project(n: usize) -> (PathBuf, PathBuf) {
             &["reset", "-q", "--hard", "main"],
             &GitEnv::fixture(),
         );
-        // The temp dir outlives every test in this binary.
         std::mem::forget(dir);
         (project, repo)
     }
 }
 
-/// Two full batches of history — the list is asked to batch, and the window is
-/// twice the height of anything the viewport can show.
 fn long_project() -> &'static (PathBuf, PathBuf) {
     static PROJECT: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
     PROJECT.get_or_init(|| seeded_project(2 * LOG_BATCH_SIZE))
 }
 
-/// Exactly one batch of history. The list's end is the window's end here, so
-/// "scrolled to the end" has an unambiguous meaning: arriving at the bottom
-/// batches once more (the row limit cannot tell a full batch from the end) and
-/// then holds, without the window growing out from under the assertion.
 fn one_batch_project() -> &'static (PathBuf, PathBuf) {
     static PROJECT: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
     PROJECT.get_or_init(|| seeded_project(LOG_BATCH_SIZE))
 }
 
-/// Harness over the long project with the first batch fetched through the
-/// production path and worker events pumped every frame.
 fn log_harness_over(project: &Path, repo: &Path) -> Harness<'static, AppState> {
     let recorder: Arc<RecordingExecutor> =
         Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
@@ -159,15 +125,11 @@ fn log_harness_over(project: &Path, repo: &Path) -> Harness<'static, AppState> {
         .with_executor(recorder);
     state.fetch_log(state.multi.roots[0].id.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    // The shared shell launcher at this suite's box; the `settle` after it is still
-    // the local 30-frame one.
     let mut harness = shell_harness_over(
         state,
         egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
     settle(&mut harness);
-    // The head commit's short hash is one painted galley; the full row label is
-    // an accessibility label, not painted text, so the wait is on the hash.
     let head = git_with_env(repo, &["rev-parse", "HEAD"], &GitEnv::fixture());
     settle_until(&mut harness, &short(head.trim()));
     harness
@@ -178,11 +140,6 @@ fn log_harness() -> Harness<'static, AppState> {
     log_harness_over(project, repo)
 }
 
-/// Scroll the commit list to its end with a wheel gesture over a row, the way
-/// a developer reaches the bottom of a long log: the pointer lands on a built
-/// row, then a wheel delta far larger than the list scrolls it to its last
-/// offset. No production scroll hook is involved — this is the real gesture the
-/// settled-bottom rule reads.
 fn wheel_to_bottom(harness: &mut Harness<'static, AppState>, repo: &Path) {
     let over_a_row = harness.get_by_label(&row_label(repo, 0)).rect().center();
     harness.hover_at(over_a_row);
@@ -196,12 +153,6 @@ fn wheel_to_bottom(harness: &mut Harness<'static, AppState>, repo: &Path) {
     settle(harness);
 }
 
-// --- The list batches over the row count it is given ---------------------------
-
-/// The list is given the whole window's row count and lays out only the rows in
-/// its viewport: the top row exists, a row well below the fold does not. The
-/// count the pane reports is the whole window's either way, so "N shown" is not
-/// the number of rows the list built.
 #[test]
 fn only_the_rows_in_the_viewport_are_laid_out() {
     let (_project, repo) = long_project();
@@ -212,21 +163,14 @@ fn only_the_rows_in_the_viewport_are_laid_out() {
         harness.query_by_label(&top).is_some(),
         "the first row of the window is in view and must exist"
     );
-    // Row 40 is far below an 800px-tall list: it exists only if the list
-    // builds every row it holds.
     let below_the_fold = row_label(repo.as_path(), 40);
     assert!(
         harness.query_by_label(&below_the_fold).is_none(),
         "a row 40 rows down was laid out — the list is not paging over its rows"
     );
-    // The whole window is still what the pane reports.
     assert_painted(&harness, &format!("{LOG_BATCH_SIZE} shown"));
 }
 
-/// The row count reaches the scroll area, not just the label: the oldest loaded
-/// row is unreachable from the top, and a wheel to the end of the list brings it
-/// into view. Were the count wrong, the list would stop short of its own last
-/// row and no amount of scrolling would ever show it.
 #[test]
 fn the_last_row_of_the_window_is_reachable_by_scrolling() {
     let (project, repo) = one_batch_project();
@@ -242,23 +186,14 @@ fn the_last_row_of_the_window_is_reachable_by_scrolling() {
         harness.query_by_label(&oldest).is_some(),
         "scrolling to the end of the list must reach the last row it holds"
     );
-    // The micro-headers are painted outside the scroll area, so they are still
-    // there once the list is scrolled to its end.
     assert_painted(&harness, "HASH");
     assert_painted(&harness, "MESSAGE");
 }
 
-/// A log that matches no commits still says so. The message is the one
-/// variable-height thing in the list, so it is drawn outside the paged rows: an
-/// empty result must not have to claim a row slot it does not have, and it stays
-/// where the pane has always shown it instead of scrolling away with a list that
-/// has nothing in it.
 #[test]
 fn an_empty_window_says_so_outside_the_paged_rows() {
     let (project, repo) = one_batch_project();
     let mut harness = log_harness_over(project, repo);
-    // The premise: the list has rows to begin with. (A row's full label is one
-    // accessibility label, not one painted galley, so it is checked as a node.)
     assert!(
         harness
             .query_by_label(&row_label(repo.as_path(), 0))
@@ -266,13 +201,8 @@ fn an_empty_window_says_so_outside_the_paged_rows() {
         "the list starts populated"
     );
 
-    // A search term nothing matches: the window is empty because of the
-    // filters, which is the machine's `No commits matching filters` empty —
-    // distinct from a repository that has no history at all.
     harness.state_mut().ui.log_filter = "no-such-commit-anywhere".to_owned();
     settle(&mut harness);
     assert_painted(&harness, "No commits matching filters");
-    // And it is not one of the list's rows: the list was handed an empty row
-    // count, so it cannot have laid the message out as one.
     assert_painted(&harness, "0 shown");
 }

@@ -1,15 +1,3 @@
-//! Interactive rebase editor (issue 30, screen 17): the plan editor for F5
-//! history editing. Plan / Preview / Log tabs over one plan; plan rows with
-//! action chips and move buttons plus ⇧↑/⇧↓ and p/r/e/s/f/u/d shortcuts; a
-//! RESULT PREVIEW of the post-plan commit sequence; the raw REBASE-TODO
-//! editable as text; a right rail with CAUTIONS, AFFECTED REPOS and RECOVERY
-//! naming the backup ref; a footer with the time estimate and Start rebase.
-//!
-//! The plan is built once on open from the selected log commit
-//! ([`history_editor::base_of`] → [`history_editor::build_plan`]) and
-//! mutated in place; execution goes through the guarded, backup-ref dispatch
-//! [`history_editor::execute_with_backup`].
-
 use egui::{Align, Layout, Sense, Ui};
 use turbogit_app::history_editor;
 use turbogit_app::operation::Operation;
@@ -21,12 +9,6 @@ use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::widgets;
 
-/// The action chips a plan row offers, in the reference's own order (screen
-/// 17 / GitBundle:212-219: Pick, Edit, Reword, Squash, Fixup, Drop, Update
-/// Ref). `Update Ref` marks that the refs touching this replay follow the
-/// rewrite; it rides the `--update-refs` the engine maps the row to. A row
-/// the editor did not create (an unrecognised todo verb) is no chip at all —
-/// it renders as `Unknown` and the engine refuses it.
 const CHIPS: [(&str, RebaseAction); 7] = [
     ("pick", RebaseAction::Pick),
     ("edit", RebaseAction::Edit),
@@ -37,14 +19,11 @@ const CHIPS: [(&str, RebaseAction); 7] = [
     ("update-ref", RebaseAction::UpdateRef),
 ];
 
-/// Render the editor while `ui.dialog` is `Dialog::InteractiveRebase`.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
     egui::Window::new("Interactive Rebase")
         .open(&mut open)
-        // Seven verb chips, a hash, a subject and the move buttons share one
-        // row: narrower than this and the subject runs under the buttons.
         .default_width(1240.0)
         .show(&ctx, |ui| body(ui, state));
     if !open {
@@ -64,8 +43,6 @@ fn close(state: &mut AppState) {
     state.ui.dlg.rebase_tab = RebaseEditorTab::default();
 }
 
-/// Build the plan (and its cached cautions + todo text) on first frame from
-/// the selected log commit. Without a selection the editor shows its hint.
 fn ensure_plan(state: &mut AppState) {
     if state.ui.dlg.rebase_plan.is_some() {
         return;
@@ -98,13 +75,11 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    // Header (screen 17): the title plus the plan size it starts from.
     ui.horizontal(|ui| {
         ui.strong("Interactive rebase");
         ui.label(egui::RichText::new(format!("{} commits", plan.len())).color(Palette::INK_3));
     });
 
-    // Tab strip: Plan / Preview / Log.
     ui.horizontal(|ui| {
         for (label, tab) in [
             ("Plan", RebaseEditorTab::Plan),
@@ -129,8 +104,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         .dlg
         .rebase_selected
         .min(plan.len().saturating_sub(1));
-    // Left: the active tab's pane. Right: the CAUTIONS / AFFECTED REPOS /
-    // SHORTCUTS / RECOVERY rail (screen 17).
     ui.columns(2, |columns| {
         if state.ui.dlg.rebase_tab == RebaseEditorTab::Plan {
             shortcuts(&mut columns[0], &mut plan, &mut sel);
@@ -144,15 +117,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     });
     state.ui.dlg.rebase_selected = sel;
 
-    // Footer (screen 17): the estimate on the left, Cancel and Start on the
-    // right. Start goes through the guarded, backup-backed dispatch.
-    //
-    // The body-to-footer rule is the shared modal footer rule, so this editor's
-    // action slot wears the same tone every other modal footer does. The 5px of
-    // `add_space` restores exactly the band `ui.separator()` reserved around its
-    // 1px line (6px total, of which the shared rule paints 1px), so nothing
-    // above or below the rule moves: only the rule's tone, and which of the
-    // band's pixels it lands on, change.
     ui.add_space(5.0);
     widgets::footer_rule(ui);
     let mut dispatched = false;
@@ -174,8 +138,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                 let settings = state.settings.clone();
                 let branch = current_branch(state).unwrap_or_default();
                 if let Some(root) = root {
-                    // The editor's own replay carries the backup-ref net that
-                    // the RECOVERY panel above promises.
                     let op = Operation::rebase_interactive(
                         &root,
                         &branch,
@@ -190,27 +152,17 @@ fn body(ui: &mut Ui, state: &mut AppState) {
             }
         });
     });
-    // A dispatch or Cancel closes the editor; don't hand it the plan back.
     if !dispatched && state.ui.dialog == Some(turbogit_app::state::Dialog::InteractiveRebase) {
         state.ui.dlg.rebase_plan = Some(plan);
     }
 }
 
-/// The focused root's current branch name, for the guarded dispatch.
 fn current_branch(state: &AppState) -> Option<String> {
     let id = state.selected_root.as_ref()?;
     state.multi.by_id(id)?.current_branch.clone()
 }
 
-// ------------------------------------------------------------------- rail ---
-
-/// The right rail (screen 17): CAUTIONS computed from the plan, the
-/// AFFECTED REPOS list, the SHORTCUTS legend, and RECOVERY naming the
-/// backup ref that restores the pre-rebase state.
 fn rail(ui: &mut Ui, state: &mut AppState) {
-    // The cautions and the recovery promise are the SHARED rewrite rail (see
-    // `widgets::cautions_rail` / `widgets::recovery_note`), painted here and by
-    // the drop preflight from one function, so the wording is one wording.
     widgets::cautions_rail(ui, &state.ui.dlg.rebase_cautions);
 
     let siblings = state.rebase_affected_siblings();
@@ -256,9 +208,6 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     widgets::recovery_note(ui, &state.rewrite_backup_ref());
     ui.add_space(6.0);
     ui.label("Abort at any time to restore the pre-rewrite state.");
-    // The owner the engine names for this root: the button aborts a rebase, so a
-    // held revert must not arm it, and the answer comes from the same read the
-    // status bar and the rewrite gate ask.
     let held = state
         .selected_path()
         .and_then(|root| state.holding_operation(&root));
@@ -272,11 +221,6 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The Plan tab's keyboard shortcuts (screen 17): ⇧↑/⇧↓ move the selected
-/// row (the selection follows), and p/r/e/s/f/u/d retarget its action —
-/// `p` is the per-row reset (see [`history_editor::set_action`]). Skipped
-/// while a text field owns the keyboard — the Log tab's REBASE-TODO must
-/// take the letters literally.
 fn shortcuts(
     ui: &mut Ui,
     plan: &mut Vec<turbogit_domain::model::RebasePlanEntry>,
@@ -318,8 +262,6 @@ fn shortcuts(
     }
 }
 
-// ------------------------------------------------------------- plan rows ---
-
 fn plan_rows(
     ui: &mut Ui,
     state: &mut AppState,
@@ -354,8 +296,6 @@ fn plan_rows(
                 .max_rect(rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        // Name the row for accessibility and tests: per-row controls repeat
-        // labels across rows, so a row is addressed through its own node.
         row.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
@@ -368,9 +308,6 @@ fn plan_rows(
                 history_editor::set_action(plan, i, act.clone());
             }
         }
-        // A row the editor did not create (an unrecognised todo verb) offers
-        // no chip of its own: it is not silently coerced to pick, it renders
-        // as what it is, and the engine refuses the plan while it stands.
         if plan[i].action == RebaseAction::Unknown {
             child.label(egui::RichText::new("unknown").color(Palette::STATE_WARNING));
         }
@@ -386,27 +323,12 @@ fn plan_rows(
                 *sel = i - 1;
             }
         });
-        // Selection rides the same raw-pointer signals as the drag below.
-        // The manual paths are load-bearing: the row is a click_and_drag
-        // widget inside an egui Window whose surface claims the press for
-        // drag attribution, so egui's own click gesture does not land on the
-        // row (`row.clicked()` stays false even when the pointer genuinely
-        // pressed and released inside it). A click completed with the pointer
-        // in this row's rect selects it; a drag gesture that released while
-        // this row owned it keeps the selection on the dragged row. (A press
-        // and its release can land in ONE frame, where `any_pressed` is
-        // already false again — only `any_click` still knows.)
         let clicked_here = any_click && pointer_pos.is_some_and(|p| rect.contains(p));
         let released_from_here = any_released && state.ui.dlg.rebase_drag_from == Some(i);
         if row.clicked() || clicked_here || released_from_here {
             *sel = i;
         }
 
-        // Drag reorder, tracked from the raw pointer: a press inside the
-        // row begins the drag; moving over another row while the button is
-        // down reorders live (the drag follows the moved row); release ends
-        // it. Tracked manually because the rows sit in an egui Window whose
-        // surface claims widget-level drag attribution.
         if any_pressed && press_pos.is_some_and(|p| rect.contains(p)) {
             state.ui.dlg.rebase_drag_from = Some(i);
         }
@@ -425,10 +347,6 @@ fn plan_rows(
     }
 }
 
-// ----------------------------------------------------------- preview tab ---
-
-/// The RESULT PREVIEW tab (screen 17): the post-plan commit sequence with
-/// the N → M counts badge, one line per fold group, and the dropped count.
 fn preview_tab(ui: &mut Ui, plan: &[turbogit_domain::model::RebasePlanEntry]) {
     let preview = history_editor::plan_preview(plan);
     ui.horizontal(|ui| {
@@ -477,7 +395,6 @@ fn preview_tab(ui: &mut Ui, plan: &[turbogit_domain::model::RebasePlanEntry]) {
     });
 }
 
-/// The lowercase verb a plan action renders as.
 fn verb(action: &RebaseAction) -> &'static str {
     match action {
         RebaseAction::Pick => "pick",
@@ -491,11 +408,6 @@ fn verb(action: &RebaseAction) -> &'static str {
     }
 }
 
-// -------------------------------------------------------------- todo tab ---
-
-/// The Log tab (screen 17): the raw generated REBASE-TODO, editable as
-/// text. Every edit re-parses back into the plan; a line with an unknown
-/// verb flags an error instead of silently rewriting history.
 fn todo_tab(
     ui: &mut Ui,
     state: &mut AppState,
@@ -523,8 +435,6 @@ fn todo_tab(
         .code_editor()
         .desired_rows(6)
         .show(ui);
-    // Name the editor for accessibility (the widgets::text_input pattern)
-    // so tests and screen readers can address it.
     response
         .response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "REBASE-TODO"));

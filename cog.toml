@@ -10,7 +10,6 @@
 ignore_merge_commits = true
 ignore_fixup_commits = true
 
-# D7: dormant until the first `cog bump` — nothing here runs at any other time.
 post_bump_hooks = [
   "sed -i 's/^version = \".*\"/version = \"{{version}}\"/' Cargo.toml",
 ]

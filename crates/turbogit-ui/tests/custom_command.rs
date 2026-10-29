@@ -1,12 +1,3 @@
-//! Issue 13 — custom command across a selection: the UI seam.
-//!
-//! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
-//! over temporary git repositories and assert on public surfaces: painted
-//! labels, accessible widget labels, and `AppState` transitions. The
-//! "Custom command…" tile opens the preflight modal with a command input
-//! and the workspace's recent commands; a destructive-looking command needs
-//! a second, explicit confirmation before anything runs.
-
 use egui::Key;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
@@ -20,20 +11,10 @@ use turbogit_domain::model::VcsSettings;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
 
-/// Create an initialized temp repository with one base commit on `main`.
-///
-/// `repo_with_one_commit`'s shape verbatim, so the shared recipe owns it. Only the
-/// committed path differs, and the one assertion that reads repository state reads
-/// a *branch*, not a file. (The recipe `git init`s into `parent` rather than
-/// creating it, so the caller makes the parent.)
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     repo_with_one_commit(parent, name)
 }
 
-/// Settings with nothing protected: these suites drive the custom-command
-/// dialog's own mechanics (input, confirmation arming, recents) on repos
-/// that sit on `main`, which the shipped default protects. The per-root
-/// refusal itself is owned by the services and app suites.
 fn unprotected() -> VcsSettings {
     VcsSettings {
         protected_branch_patterns: Vec::new(),
@@ -41,8 +22,6 @@ fn unprotected() -> VcsSettings {
     }
 }
 
-/// A project with both repos under one group so a single group click
-/// selects the fleet.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = test_support::scratch_root(&format!("custom-command-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
@@ -54,12 +33,6 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, ui)
 }
 
-/// Headless harness driving the full app UI.
-///
-/// Deliberately unstyled: the clicks here are aimed at painted rects, and the production
-/// tokens would move every one of them. The worker drain per `src/app.rs` **is** kept — that
-/// half is what lets a dispatched run's rows land. `max_steps` is 1024 rather than
-/// kittest's default of 4, which `Harness::run` panics past.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
@@ -75,7 +48,6 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
     panic!("condition was not met within 1000 frames");
 }
 
-/// Select the fleet group and open the custom-command modal.
 fn open_custom_command(h: &mut Harness<'_, AppState>) {
     h.get_by_label("Select group frontend").click();
     settle(h);
@@ -94,17 +66,12 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
     open_custom_command(&mut h);
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Custom));
 
-    // The modal has a labeled command input; with nothing typed, confirming
-    // is inert — nothing dispatches.
     assert_painted(&h, "Command");
     h.get_by_label("Run on 2 of 2").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_none(), "no run without a command");
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Custom));
 
-    // The matrix's column geometry: every header label over its cell, and both
-    // band heights the painter was handed. The empty command still paints its
-    // own dash in the OUTCOME column, so every column has a cell to sit over.
     assert_matrix_geometry(
         &h,
         "OUTCOME",
@@ -119,14 +86,12 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
         30.0,
     );
 
-    // Typing the command fills the matrix — custom commands never skip.
     h.get_by_label("Command input").focus();
     h.get_by_label("Command input")
         .type_text("git branch bulk-marker");
     settle(&mut h);
     assert_painted(&h, "Will run on all 2 repositories.");
 
-    // Confirming closes the modal and opens the run monitor.
     h.get_by_label("Run on 2 of 2").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_op, None);
@@ -138,14 +103,10 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
             .is_some_and(|v| v.rows.len() == 2 && v.rows.iter().all(|r| r.state == RowState::Done))
     });
 
-    // A fast command can finish before any Running frame is rendered. Its
-    // identity must remain visible in the completed monitor, not just flash
-    // in a running row's detail cell.
     settle(&mut h);
     assert_painted(&h, "2 of 2 done");
     assert_painted(&h, "git branch bulk-marker");
 
-    // The command's effect is real on every selected repo.
     for repo in [&alpha, &ui] {
         assert!(
             git(repo, &["branch", "--list", "bulk-marker"]).contains("bulk-marker"),
@@ -153,7 +114,6 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
         );
     }
 
-    // Esc closes the monitor.
     h.key_press(Key::Escape);
     settle(&mut h);
 }
@@ -168,21 +128,16 @@ fn a_destructive_command_needs_a_second_explicit_confirmation() {
 
     open_custom_command(&mut h);
     h.get_by_label("Command input").focus();
-    // Destructive-looking, but on these clean single-commit repos it is a
-    // no-op — the point is the confirmation gate, not the damage.
     h.get_by_label("Command input")
         .type_text("git reset --hard");
     settle(&mut h);
 
-    // The first Run click only arms: the warning strip appears with the
-    // reason and the button becomes an explicit confirm naming the command.
     h.get_by_label("Run on 2 of 2").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_none(), "nothing dispatched yet");
     assert!(h.state().ui.bulk_command_armed, "the confirm is armed");
     assert_painted(&h, "Destructive command");
 
-    // The second click dispatches.
     h.get_by_label("Yes, run git reset --hard").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_some(), "the confirmed run started");
@@ -205,13 +160,11 @@ fn recent_commands_are_offered_in_the_modal_and_refill_the_input() {
 
     open_custom_command(&mut h);
 
-    // The recent command is offered; clicking it fills the input.
     assert_painted(&h, "Recent commands");
     h.get_by_label("Use git gc").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_command, "git gc");
 
-    // And the refilled command runs on confirm.
     h.get_by_label("Run on 2 of 2").click();
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_some(), "the monitor opened");
@@ -221,7 +174,6 @@ fn recent_commands_are_offered_in_the_modal_and_refill_the_input() {
             .is_some_and(|v| v.rows.iter().all(|r| r.state == RowState::Done))
     });
 
-    // A confirmed run is remembered for the next modal.
     let recents = &h.state().ui.recent_custom_commands;
     assert!(
         recents.first().is_some_and(|c| c == "git gc"),

@@ -1,26 +1,9 @@
-//! The unmerged-commit list a branch delete discloses has to name every commit
-//! it lists: a row whose subject is missing is a row that says nothing about
-//! what the delete destroyed.
-//!
-//! The shas and the subjects must come from the SAME commit set. The ids are a
-//! range (`HEAD..branch`); a subject lookup over the branch's recent history is
-//! not the same set at all, because a branch that merged the current branch
-//! back into itself reaches the shared commits too, and `git log` orders by
-//! commit date — so a shared commit newer than one of the outgoing commits
-//! takes its slot in the listing and leaves the row blank.
-//!
-//! The fixture pins committer dates for exactly that interleaving; a fixture
-//! built at wall-clock speed would put every outgoing commit ahead of every
-//! shared one and pass for the wrong reason.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use test_support::git_seed::{commit, git, repo_with_one_commit};
 use turbogit_app::state::AppState;
 
-/// `git <args>` in `dir` with the committer (and author) date forced to
-/// `date`, so the log order the fixture produces is the one it names.
 fn git_dated(dir: &Path, date: &str, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -40,22 +23,8 @@ fn rev(dir: &Path, r: &str) -> String {
     git(dir, &["rev-parse", r]).trim().to_string()
 }
 
-/// A branch whose unmerged set is interleaved by date with commits the current
-/// branch already has:
-///
-/// ```text
-/// main     C1 ───────────────────── C2      (2020-01-04)
-///            ╲                         ╲
-/// doomed      ─── O1 ─────────────────── M   (O1 2020-01-03, M 2020-01-05)
-/// ```
-///
-/// `M` is the merge of `main` back into `doomed`, so `doomed` reaches `C2` as
-/// well as `O1`. Only `O1` and `M` are unmerged, and `C2` is newer than `O1` —
-/// which is what crowds `O1` out of a recent-history listing capped at two.
-/// HEAD stays on `main`, the branch a delete of `doomed` is unmerged *into*.
 fn doomed_with_interleaved_history(project: &Path) -> PathBuf {
     let work = repo_with_one_commit(project, "alpha");
-    // C1 — the shared base, oldest of them all.
     git_dated(
         &work,
         "2020-01-01",
@@ -91,8 +60,6 @@ fn doomed_with_interleaved_history(project: &Path) -> PathBuf {
     work
 }
 
-/// Every commit a delete of `doomed` discloses carries the subject it was
-/// committed with — no blank rows, whatever the branch's date order is.
 #[test]
 fn every_unmerged_commit_a_delete_discloses_has_its_subject() {
     let tmp = tempfile::tempdir().unwrap();
@@ -105,8 +72,6 @@ fn every_unmerged_commit_a_delete_discloses_has_its_subject() {
         .unmerged_commits(&root, "doomed")
         .expect("doomed is ahead of main, so a delete discloses its commits");
 
-    // The range, not the recent history: `O1` and the merge `M`, and NOT the
-    // shared `main work` commit `M` also reaches.
     assert_eq!(
         disclosed
             .commits
@@ -133,8 +98,6 @@ fn every_unmerged_commit_a_delete_discloses_has_its_subject() {
     );
 }
 
-/// The same read on a branch nothing merged back into it — the ordinary shape,
-/// which the fix must not disturb.
 #[test]
 fn a_plain_ahead_branch_still_discloses_both_of_its_commits() {
     let tmp = tempfile::tempdir().unwrap();

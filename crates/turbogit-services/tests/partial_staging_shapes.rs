@@ -1,18 +1,7 @@
-//! Issue 11 (deepen-git-engine) — every staging shape, composed from the value.
-//!
-//! **Partial staging** now selects, composes and applies from the patch value
-//! rather than from diff text, so a hunk or line the user can see is exactly a
-//! hunk or line the app can stage. These need no `git` binary: the input is a
-//! patch, the selection is a set of hunk and line positions, and every expected
-//! value below is a hand-written literal — the guarantee `ADR-0013` protected
-//! (that a composed selection is appliable) is asserted on the composed bytes
-//! themselves, and the engine's own apply answer is the last word.
-
 use turbogit_domain::model::Patch;
 use turbogit_engine_api::patch::parse_patch;
 use turbogit_services::partial::{HunkSelection, Selection, compose};
 
-/// A hunk with no context lines at all: the whole hunk is the change.
 const NO_CONTEXT: &str = "diff --git a/tight.txt b/tight.txt\n\
      --- a/tight.txt\n\
      +++ b/tight.txt\n\
@@ -58,8 +47,6 @@ fn selected(hunk: usize, selection: HunkSelection) -> Selection {
     }
 }
 
-/// Compose from git's syntax and read the answer back as the bytes `git apply`
-/// will be fed — which is what `ADR-0013` guarantees about them.
 fn compose_from(text: &str, selection: &Selection) -> String {
     compose(
         &parse_patch(text),
@@ -80,11 +67,6 @@ fn a_hunk_with_no_context_survives_whole_byte_for_byte() {
 
 #[test]
 fn a_selection_narrowed_to_one_line_rewrites_only_the_counts() {
-    // Changed lines: 0=`-one`, 1=`+ONE`, 2=`-two`, 3=`+TWO`. Staging ord 0
-    // alone keeps the first deletion; `+ONE` and `+TWO` are unselected
-    // additions and drop out entirely, while `-two` survives on both sides and
-    // is re-emitted as context. The old side still spans 4 lines, the new side
-    // now 3 — the header has to say so, because `git apply` trusts it.
     assert_eq!(
         compose_from(
             ONE_HUNK_THREE_LINES,
@@ -99,8 +81,6 @@ fn a_selection_narrowed_to_one_line_rewrites_only_the_counts() {
 
 #[test]
 fn a_rename_keeps_its_section_headers_and_loses_only_unselected_hunks() {
-    // The second hunk alone: the rename metadata is part of *which file* the
-    // patch touches, so it survives the selection untouched.
     assert_eq!(
         compose_from(RENAMED_WITH_EDIT, &selected(1, HunkSelection::Whole)),
         "diff --git a/src/old.rs b/src/new.rs\nindex aaa..bbb 100644\n\
@@ -112,8 +92,6 @@ fn a_rename_keeps_its_section_headers_and_loses_only_unselected_hunks() {
 
 #[test]
 fn a_binary_change_is_never_a_partial_staging_target() {
-    // No hunks, so no position is selectable — and the composed patch is empty,
-    // which every staging verb treats as a no-op before the engine is touched.
     let patch: Patch = parse_patch(BINARY_CHANGE);
     assert!(patch.hunk_count() == 0, "a binary section has no hunks");
     for selection in [

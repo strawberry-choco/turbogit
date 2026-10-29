@@ -1,14 +1,3 @@
-//! Granular op interface tests (spec R2 stories 3/8/9) — direct, headless.
-//!
-//! Exercises [`turbogit_app::granular::dispatch`] and — through its
-//! production trigger, the `OpCompleted` → refresh → settle path in
-//! [`turbogit_app::state::AppState::drain_events`] — the completion settlement
-//! over a real temporary repository ([`AppState::for_roots`], whose dispatch
-//! seam runs the work inline). No UI rendering: callers pass pure intent exactly as the diff
-//! viewer's gutter controls and the palette verbs do, and assertions observe
-//! **what reached the engine** (via [`test_support::RecordingExecutor`]) and the
-//! resulting repository state via real `git` commands.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use test_support::git_seed::{git, repo_with_one_commit};
@@ -22,9 +11,6 @@ use turbogit_domain::model::{ChangeRef, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
-// ---------------------------------------------------------------- helpers --
-
-/// Short `git status --porcelain` XY code for one path.
 fn porcelain_code(repo: &Path, rel: &str) -> String {
     let out = git(repo, &["status", "--porcelain"]);
     out.lines()
@@ -41,20 +27,12 @@ struct Repo {
     path: PathBuf,
 }
 
-/// Create an initialized temp repository with one base commit on the default
-/// branch and repo-local user config so commits work headlessly. The caller
-/// keeps `parent` (a `TempDir`) alive for the duration of the test.
-///
-/// `git_seed::repo_with_one_commit` is these same steps, so that recipe owns
-/// them; only the seeded file differs and no assertion here reads it.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     Repo {
         path: repo_with_one_commit(parent, name),
     }
 }
 
-/// 20-line base content; edits at line 2 (`bravo`) and line 17 (`quebec`)
-/// sit far enough apart that git reports two independent hunks.
 const BASE: &str = concat!(
     "alpha\n",
     "bravo\n",
@@ -78,8 +56,6 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-/// Commit `words.txt` at BASE, then diverge the worktree with two single-line
-/// edits → a two-hunk working-tree diff.
 fn seed_two_hunk_change(repo: &Repo) {
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
@@ -88,9 +64,6 @@ fn seed_two_hunk_change(repo: &Repo) {
     std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
 }
 
-/// [`AppState`] over the repo with an injected recording engine — the swap
-/// happens AFTER synchronous registration, so setup reads never reach the
-/// recorder (the `partial_dispatch.rs` pattern).
 fn app_state_with_recorder(
     project_dir: &Path,
     roots: &[PathBuf],
@@ -103,16 +76,6 @@ fn app_state_with_recorder(
     (state, recorder)
 }
 
-/// Warm the two doors a granular op reads: the root's retained sections, which
-/// is what an operation composes from, and the pinned preview read, which is what
-/// an untracked path composes from.
-///
-/// This used to spell the cache key out by hand so it could stuff a string into
-/// the field — which pinned the very coupling this branch exists to remove: a
-/// test that agrees with the module's key format by copying it proves nothing
-/// when the two drift. Driving `read` asks the module instead, and the patch
-/// text it answers with is the one `git diff HEAD` really produces for the
-/// fixture.
 fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str) {
     state.ui.diff_policies = turbogit_domain::model::DiffPolicies::default();
     let root_id = RootId(root.to_path_buf().into());
@@ -133,13 +96,9 @@ fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str) {
     );
 }
 
-/// One fixture change: these suites register a single root, so every verb they
-/// dispatch belongs to the repository the fixture created.
 fn change(repo: &Path, rel: &str) -> ChangeRef {
     ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
 }
-
-// ------------------------------------------------------------------ tests --
 
 #[test]
 fn granular_dispatch_stages_whole_hunk_forward() {
@@ -189,9 +148,6 @@ fn granular_dispatch_stages_a_single_line_target() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     seed_preview_cache(&mut state, &repo.path, "words.txt");
 
-    // One row click's target: the `+BRAVO` addition, addressed by the worktree
-    // gutter the combined view numbers it with. Nothing names a direction,
-    // because the row's staged-ness is the direction.
     granular::dispatch(
         &mut state,
         change(&repo.path, "words.txt"),
@@ -226,8 +182,6 @@ fn granular_dispatch_stages_a_single_line_target() {
 fn granular_dispatch_stages_exactly_the_selected_character_range() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "char-range");
-    // One-hunk edit of a single long line; the drag happened inside the
-    // addition, selecting `calculated_value` (chars 8..24 of its body).
     std::fs::write(
         repo.path.join("code.rs"),
         "fn main() {\n    let x = 1;\n}\n",
@@ -297,8 +251,6 @@ fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
     seed_preview_cache(&mut state, &repo.path, "code.rs");
     let change = Some(change(&repo.path, "code.rs"));
 
-    // The gesture the viewer's drag forwards: anchor, move, release. The draft
-    // carries the row's worktree gutter, which is what the release addresses.
     granular::begin_char_drag(&mut state, &change, 0, 1, 2, 8);
     granular::extend_char_drag(&mut state, &change, 0, 1, 24);
     assert!(
@@ -324,8 +276,6 @@ fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
         recorder.recorded()
     );
 
-    // A drag that never moved is a click, and the click route owns the line:
-    // the release itself must stage nothing.
     granular::begin_char_drag(&mut state, &change, 0, 0, 0, 4);
     let staged_before = git(&repo.path, &["diff", "--cached"]);
     assert!(
@@ -345,15 +295,10 @@ fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
 fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "untracked");
-    // Created BEFORE registration so the snapshot lists it as Unversioned.
     std::fs::write(repo.path.join("new.txt"), "one\ntwo\nthree\n").unwrap();
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    // An Unversioned path never reaches `git diff`: the read synthesizes the
-    // creation diff itself, in the exact shape partial-staging proves
-    // appliable (pinned by `diff_load`'s own tests), and spends no engine call
-    // doing it — which is what keeps the two-call assertion below honest.
     seed_preview_cache(&mut state, &repo.path, "new.txt");
 
     granular::dispatch(
@@ -387,13 +332,6 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
     );
 }
 
-/// A row click on an untracked file, which is the one case where the operation
-/// still composes from the displayed value: an untracked path is in neither
-/// index-facing patch, so the pane's synthesized creation diff is simultaneously
-/// what the reader selected from and the only value git can take for that path.
-/// The combined read shows a never-added file's content because the preview
-/// synthesizes it, so there IS a row to click, and the row keeps its per-line
-/// granularity through intent-to-add.
 #[test]
 fn a_row_click_on_an_untracked_file_stages_that_line_through_intent_to_add() {
     let parent = tempfile::tempdir().unwrap();
@@ -404,7 +342,6 @@ fn a_row_click_on_an_untracked_file_stages_that_line_through_intent_to_add() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     seed_preview_cache(&mut state, &repo.path, "new.txt");
 
-    // Worktree line 2 is `two` in the synthesized one-hunk creation diff.
     granular::dispatch(
         &mut state,
         change(&repo.path, "new.txt"),
@@ -438,16 +375,12 @@ fn a_row_click_on_an_untracked_file_stages_that_line_through_intent_to_add() {
 fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "settle");
-    // words.txt: one-hunk worktree edit (Default bucket) — the op target.
     std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
     git(&repo.path, &["add", "words.txt"]);
     git(&repo.path, &["commit", "-q", "-m", "words"]);
     std::fs::write(repo.path.join("words.txt"), BASE.replace("bravo", "BRAVO")).unwrap();
-    // gone.txt: fully staged addition (Default bucket, rank 0) — pre-excluded
-    // below to prove focus advance SKIPS exclusions.
     std::fs::write(repo.path.join("gone.txt"), "gone\n").unwrap();
     git(&repo.path, &["add", "gone.txt"]);
-    // notes.txt: untracked (Unversioned bucket, rank 1) — expected successor.
     std::fs::write(repo.path.join("notes.txt"), "note\n").unwrap();
 
     let (mut state, recorder) =
@@ -466,8 +399,6 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
     );
     state.drain_events();
 
-    // The whole file staged (single hunk) → story 9 exclusion lands as the
-    // change's own identity, root and repo-relative path…
     assert!(
         state
             .ui
@@ -476,8 +407,6 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
         "fully staged file must be excluded, completed={:?}",
         state.ui.granularly_completed
     );
-    // …and focus advances in display order Default → Unversioned, skipping
-    // the excluded `gone.txt` (rank 0, would have won otherwise).
     assert_eq!(
         state.ui.preview_change,
         Some(change(&repo.path, "notes.txt")),
@@ -501,18 +430,12 @@ fn granular_dispatch_without_cached_diff_is_a_silent_no_op() {
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
 
-    // No `RootHunkStats` entry for the root, and no rendered preview: the
-    // retained sections a granular op composes from are missing, and that is the
-    // whole no-op. Fetching them would be a git spawn per palette verb, which is
-    // what this contract exists to forbid.
     granular::dispatch(
         &mut state,
         change(&repo.path, "words.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
 
-    // The harness runs work inline, so a dispatched op would already have
-    // reached the engine: nothing to wait for, and nothing arrived.
     state.drain_events();
     assert!(
         recorder.recorded().is_empty(),

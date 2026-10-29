@@ -28,11 +28,11 @@ domain ← engine-api ← {engine, services} ← app ← ui
 ```
 
 with a thin composition root on top (`src/`: `main.rs`, `lib.rs`, `app.rs`).
-The UI layer never calls git directly — all git work crosses the `GitExecutor`
+The UI layer never calls git directly, all git work crosses the `GitExecutor`
 seam. Per-crate responsibilities are listed in `AGENTS.md`.
 
 ## Docs
 
-- `docs/architecture.md` — the layer boundaries and the `GitExecutor` seam.
-- `docs/adr/` — 27 architecture decision records.
-- `docs/design-system-roles.md` — which design-system name owns which role.
+- `docs/architecture.md`, the layer boundaries and the `GitExecutor` seam.
+- `docs/adr/`, 27 architecture decision records.
+- `docs/design-system-roles.md`, which design-system name owns which role.

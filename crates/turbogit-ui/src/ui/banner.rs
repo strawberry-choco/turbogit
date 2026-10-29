@@ -1,8 +1,3 @@
-//! Inline banner (issue #02): severity-tinted strip with deep-link
-//! actions. The data lives on `AppState::ui::banner`; this module
-//! renders it. The data types are owned by `turbogit_app::banner` so the
-//! layer boundary stays clean (app does not depend on ui).
-
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{Color32, Ui};
@@ -11,8 +6,6 @@ use turbogit_app::state::AppState;
 
 pub use turbogit_app::banner::{Banner as AppBanner, BannerAction, BannerSeverity as AppSeverity};
 
-/// Map the app-owned severity to a theme color. Kept local to the UI
-/// crate so the app layer never references theme tokens.
 fn severity_color(s: BannerSeverity) -> Color32 {
     match s {
         BannerSeverity::Info => Palette::STATE_INFO,
@@ -22,18 +15,10 @@ fn severity_color(s: BannerSeverity) -> Color32 {
     }
 }
 
-/// Paint the banner set on `state.ui.banner`. No-op when `None`. The
-/// function borrows `state` mutably for the duration of the call; the
-/// painter is handed a short-lived borrow of the banner field through
-/// the click-tracking pattern below.
 pub fn maybe_show(ui: &mut Ui, state: &mut AppState) {
     if state.ui.banner.is_none() {
         return;
     }
-    // Phase 1: paint (immutable borrow of banner via split scope).
-    // Phase 2: dispatch the click (mutable borrow). The two phases
-    // never overlap because the inner `ui.horizontal` scope ends before
-    // we touch `state` again.
     let clicked: Option<String> = {
         let banner = state.ui.banner.as_ref().expect("checked is_none above");
         let color = severity_color(banner.severity);
@@ -50,7 +35,6 @@ pub fn maybe_show(ui: &mut Ui, state: &mut AppState) {
         })
         .inner
     };
-    // Phase 2: drop the read-borrow, take the matching action.
     if let Some(label) = clicked
         && let Some(b) = state.ui.banner.as_mut()
         && let Some(pos) = b.actions.iter().position(|a| a.label == label)

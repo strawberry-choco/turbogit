@@ -6,7 +6,7 @@ create/checkout/rename/delete/compare/worktree-add, but the UI has complete
 flows only for New Branch and Checkout today; rename, compare, and
 worktree-from-popup have engine support but no dialog or context-menu flow.
 We decided to render all actions visually and wire only what has a complete UI
-flow; the rest are visible but inert, with scope recorded in the spec —
+flow; the rest are visible but inert, with scope recorded in the spec,
 consistent with ADR-0016 (mockups win; behavior gaps are made explicit rather
 than hidden by removing controls).
 
@@ -21,5 +21,5 @@ inert: Delete routes through the issue-02 rich confirmation
 `Dialog::RenameBranch`, and Compare… opens `Dialog::CompareBranches` (spec
 E9's commit list with Swap). New Worktree… stays visibly inert until its flow
 exists. The inertness rule itself still holds for any control without a flow
-— it is the mockup-wins / explicit-gap principle (ADR-0016), not a licence to
+it is the mockup-wins / explicit-gap principle (ADR-0016), not a licence to
 render dead buttons forever.

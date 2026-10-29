@@ -8,7 +8,7 @@ store recents in one global file in the OS config directory
 last_opened }` only.
 
 Branch indicators on welcome cards are computed fresh at render time (cheap
-`git rev-parse` per visible recent, cached in memory), never persisted — a
+`git rev-parse` per visible recent, cached in memory), never persisted, a
 stored branch snapshot would be stale the moment the user switches branches
 outside TurboGit. This is the app's only global state file; everything else
 stays per-project.

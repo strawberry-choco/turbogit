@@ -4,7 +4,7 @@
 `8d5d068` landed the shelf list and the stash list with their verb pairs, and
 `d1a39ba` landed the `Unshelve` dialog with its per-root shelf picker. The
 placeholder treatment therefore no longer covers them, and neither does the last
-sentence below — those dialogs are now reached from their pane headers as well as
+sentence below, those dialogs are now reached from their pane headers as well as
 the palette. What is *not* withdrawn is the decision: unimplemented scope renders
 as a labelled placeholder rather than a disabled-looking or omitted control, and
 that still governs any sub-tab that has nothing behind it.

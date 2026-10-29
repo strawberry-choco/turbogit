@@ -1,21 +1,3 @@
-//! Issue 29 — rebase dialog upgrade (screen 15).
-//!
-//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
-//! temporary git repositories, asserting painted labels, public `AppState`
-//! transitions, and the exact rebase invocation handed to the executor
-//! boundary (via [`RecordingExecutor`]).
-//!
-//! Covered behaviors:
-//! - the MODE segmented control (Interactive / Standard / Autosquash);
-//!   clicking a segment selects it
-//! - the ONTO BRANCH picker and the commits-to-rebase list computed from the
-//!   real repository before starting
-//! - the mode + option rows map onto the dispatched invocation (plan replay
-//!   for Interactive, `RebaseOpts` for Standard/Autosquash)
-//! - the cross-repo warning banner names the affected repos and
-//!   "View affected →" hands off to the affected-repo list
-//! - a protected current branch blocks the start button
-
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -33,12 +15,6 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-// ---------------------------------------------------------------- helpers --
-
-/// Append `text` to `<dir>/<name>`, stage, commit.
-///
-/// Built on `git_seed::commit`: it overwrites where this appends, so the accumulated
-/// body is read back and rewritten whole.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
     let mut body = std::fs::read_to_string(&file).unwrap_or_default();
@@ -47,8 +23,6 @@ fn commit(dir: &Path, name: &str, text: &str) {
     git_seed_commit(dir, name, &body, text);
 }
 
-/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
-/// `base.txt` = "base\n" with the message "base", and the tests name it.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -59,8 +33,6 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path
 }
 
-/// One repo on `main` (one base commit) with a local `feature` branch two
-/// commits ahead, checked out — the rebase subject.
 fn rebase_repo(parent: &Path, name: &str) -> PathBuf {
     let repo = temp_repo(parent, name);
     git(&repo, &["checkout", "-q", "-b", "feature"]);
@@ -69,7 +41,6 @@ fn rebase_repo(parent: &Path, name: &str) -> PathBuf {
     repo
 }
 
-/// AppState with a recording executor wrapped around the real CLI engine.
 fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
     let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
@@ -80,25 +51,16 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
     (state, exec)
 }
 
-/// Headless harness driving the full app UI with event draining per frame.
-///
-/// Kept as [`shell_harness_over_unstyled`] at [`KITTEST_DEFAULT_BOX`]: the unstyled
-/// frame is what the geometry assertions here read, and `max_steps` is stated at 1024
-/// because `Harness::run` panics once a run exceeds kittest's 4.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-/// Open the Rebase dialog on the given root.
 fn open_rebase(h: &mut Harness<'_, AppState>, root: &Path) {
     h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
     h.state_mut().ui.dialog = Some(Dialog::Rebase);
     h.run();
 }
 
-/// The node labeled `label` inside the rebase dialog. The shell paints other
-/// nodes with the same labels, so disambiguate by proximity to the in-dialog
-/// "Change…" anchor.
 fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     let anchor = h
         .query_all_by_label("Change…")
@@ -115,8 +77,6 @@ fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
     best.expect("no in-dialog node with the label").1
 }
 
-// ------------------------------------------------------------------ tests --
-
 #[test]
 fn dialog_paints_mode_onto_and_options() {
     let tmp = tempfile::tempdir().unwrap();
@@ -125,7 +85,6 @@ fn dialog_paints_mode_onto_and_options() {
     let mut h = harness(state);
     open_rebase(&mut h, &repo);
 
-    // The title names the branch being rewritten (screen 15).
     assert_painted(&h, "Rebase feature");
     assert_painted(&h, "ONTO BRANCH");
     assert_painted(&h, "MODE");
@@ -136,7 +95,6 @@ fn dialog_paints_mode_onto_and_options() {
     assert_painted(&h, "Autosquash fixup commits");
     assert_painted(&h, "Update branches (--update-refs)");
     assert_painted(&h, "Keep empty commits");
-    // Interactive is the default mode; the start button names it.
     assert_eq!(h.state().ui.dlg.rebase_mode, RebaseMode::Interactive);
     assert_painted(&h, "Start interactive rebase");
 }
@@ -155,8 +113,6 @@ fn picking_an_onto_branch_lists_the_commits_to_rebase() {
     dialog_node(&h, "main").click();
     h.run();
 
-    // feature carries two commits not on main; the list names them before
-    // anything runs.
     assert_painted(&h, "2 COMMITS TO REBASE");
     assert_painted(&h, "feature-1");
     assert_painted(&h, "feature-2");
@@ -181,7 +137,6 @@ fn mode_clicks_select_the_segment() {
     }
 }
 
-/// The rebase calls recorded at the executor boundary.
 fn recorded_rebases(exec: &RecordingExecutor) -> Vec<(String, turbogit_domain::model::RebaseOpts)> {
     exec.recorded()
         .iter()
@@ -194,7 +149,6 @@ fn recorded_rebases(exec: &RecordingExecutor) -> Vec<(String, turbogit_domain::m
         .collect()
 }
 
-/// The interactive plans recorded at the executor boundary.
 fn recorded_plans(exec: &RecordingExecutor) -> Vec<Vec<turbogit_domain::model::RebasePlanEntry>> {
     exec.recorded()
         .iter()
@@ -272,8 +226,6 @@ fn standard_mode_dispatches_the_mode_mapped_rebase() {
 fn autosquash_mode_forces_the_flag_in_the_dispatch() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = rebase_repo(tmp.path(), "repo");
-    // The "Autosquash fixup commits" row is left unticked — the mode itself
-    // must turn the flag on.
     let (mut state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     state.ui.dlg.rebase_mode = RebaseMode::Autosquash;
     let mut h = harness(state);
@@ -296,8 +248,6 @@ fn autosquash_mode_forces_the_flag_in_the_dispatch() {
 #[test]
 fn cross_repo_banner_names_the_rewrite_and_view_affect_scopes_the_selection() {
     let tmp = tempfile::tempdir().unwrap();
-    // Two repos of one project, both with feature checked out: rewriting
-    // focused's feature diverges sibling's feature too.
     let focused = rebase_repo(tmp.path(), "focused");
     let sibling = rebase_repo(tmp.path(), "sibling");
     let (state, _exec) = app_state_recording(tmp.path(), &[focused.clone(), sibling.clone()]);
@@ -314,8 +264,6 @@ fn cross_repo_banner_names_the_rewrite_and_view_affect_scopes_the_selection() {
     dialog_node(&h, "View affected →").click();
     h.run();
 
-    // The hand-off scopes the fleet selection to the affected repos — the
-    // affected-repo list — and closes the dialog.
     let selection = h.state().ui.repo_selection.clone();
     assert_eq!(selection.len(), 1);
     assert!(selection.contains(&RootId(sibling.to_path_buf().into())));
@@ -355,8 +303,6 @@ fn protected_branch_blocks_the_start_button() {
     dialog_node(&h, "Start interactive rebase").click();
     h.run();
 
-    // Nothing may reach the executor boundary: the service guard refuses a
-    // protected rewrite, and the disabled start button never dispatches.
     assert!(recorded_rebases(&exec).is_empty(), "a plain rebase escaped");
     assert!(recorded_plans(&exec).is_empty(), "a plan replay escaped");
 }

@@ -1,11 +1,3 @@
-//! Issue 14 — Worktrees & Submodules tool tabs: the app-side data seam.
-//!
-//! Drives the real CLI engine over temporary repositories through the
-//! `AppState::for_roots` headless harness (CONTEXT.md "Headless harness") and
-//! asserts only on public surfaces: `AppState::fetch_worktrees` /
-//! `fetch_submodules` filling the root caches, `AppState::refresh`
-//! invalidating them, and the dispatched tab actions.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,20 +6,10 @@ use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, SubmoduleState};
 
-/// Canonicalized temp repo with one base commit (canonical because the
-/// engine's main-worktree filtering compares paths).
-///
-/// A thin composition over [`repo_with_one_commit`]; only the committed path
-/// differs, unread.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     repo_with_one_commit(parent, name).canonicalize().unwrap()
 }
 
-/// Pump events until `pred` holds or the deadline passes.
-///
-/// Not a `test_support::harness` settle: this drains the event channel on a
-/// *state* predicate, and this crate cannot reach those anyway (it does not
-/// depend on `egui_kittest`).
 fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -40,7 +22,6 @@ fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     panic!("condition not met within 10s");
 }
 
-/// A worktree of `repo` on an existing branch, canonicalized like the root.
 fn add_worktree(repo: &Path, parent: &Path, name: &str, branch: &str) -> PathBuf {
     git(repo, &["branch", branch]);
     let wt = parent.join(name);
@@ -48,12 +29,6 @@ fn add_worktree(repo: &Path, parent: &Path, name: &str, branch: &str) -> PathBuf
     wt.canonicalize().unwrap()
 }
 
-/// A superproject root with one submodule at `child`; returns the
-/// canonicalized root and the submodule's relative path.
-///
-/// Kept local: no recipe produces a superproject, and git >= 2.38's
-/// `protocol.file.allow=always` demand for a local-path submodule is outside
-/// every shared shape.
 fn super_with_submodule(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
     let child_src = parent.join(format!("{name}-child-src"));
     std::fs::create_dir_all(&child_src).unwrap();
@@ -111,7 +86,6 @@ fn fetch_worktrees_fills_the_cache_from_the_cheap_list_only() {
 #[test]
 fn fetch_submodules_fills_the_cache_with_state() {
     let tmp = tempfile::tempdir().unwrap();
-    // Superproject with one submodule (see the engine suite's fixture).
     let child_src = tmp.path().join("child-src");
     std::fs::create_dir_all(&child_src).unwrap();
     git(&child_src, &["init", "-q", "-b", "main"]);
@@ -175,9 +149,6 @@ fn refresh_drops_worktree_and_submodule_cache_entries() {
     );
 }
 
-/// An unrelated operation on the focused root (the `OpCompleted` →
-/// `refresh(Root)` shape) leaves the cached worktree list in place: nothing
-/// refetches the list for an operation that cannot have changed worktrees.
 #[test]
 fn refresh_on_the_focused_root_keeps_the_worktree_cache() {
     let tmp = tempfile::tempdir().unwrap();
@@ -216,8 +187,6 @@ fn refresh_on_the_focused_root_keeps_the_worktree_cache() {
     );
 }
 
-/// An operation completed in another root leaves the focused root's worktree
-/// cache untouched.
 #[test]
 fn refresh_on_another_root_leaves_the_focused_root_cache_alone() {
     let tmp = tempfile::tempdir().unwrap();
@@ -236,7 +205,6 @@ fn refresh_on_another_root_leaves_the_focused_root_cache_alone() {
     );
 }
 
-/// clear all lists on rescan, including roots no longer discovered (ticket 02).
 #[test]
 fn rescan_clears_every_worktree_list_and_fetch_refills() {
     let tmp = tempfile::tempdir().unwrap();
@@ -252,7 +220,6 @@ fn rescan_clears_every_worktree_list_and_fetch_refills() {
         s.caches.worktrees(&root_a).is_some() && s.caches.worktrees(&root_b).is_some()
     });
 
-    // Rescan a narrower discovery scope: beta's old list must disappear too.
     state.project_dir = a;
     state.rescan();
     assert!(state.caches.worktrees(&root_a).is_none());
@@ -263,7 +230,6 @@ fn rescan_clears_every_worktree_list_and_fetch_refills() {
     assert!(state.caches.worktrees(&root_b).is_none());
 }
 
-/// clear old project lists before fetching the new project's list (ticket 02).
 #[test]
 fn project_switch_clears_every_worktree_list_and_fetch_refills() {
     let first = tempfile::tempdir().unwrap();
@@ -298,7 +264,6 @@ fn project_switch_clears_every_worktree_list_and_fetch_refills() {
     assert!(state.caches.worktrees(&root_b).is_none());
 }
 
-/// keep sibling lists intact when a real worktree mutation settles (ticket 02).
 #[test]
 fn worktree_mutation_refills_only_the_affected_root() {
     let tmp = tempfile::tempdir().unwrap();
@@ -314,7 +279,6 @@ fn worktree_mutation_refills_only_the_affected_root() {
     wait_for(&mut state, |s| {
         s.caches.worktrees(&root_a).is_some() && s.caches.worktrees(&root_b).is_some()
     });
-    // A recognizable cached value would be reset by a cheap-list refetch.
     state
         .caches
         .update_worktree_dirty(&root_b, &sibling_wt, true);
@@ -341,7 +305,6 @@ fn worktree_mutation_refills_only_the_affected_root() {
     assert_sibling(&state);
 }
 
-/// surface current fetch errors but silently discard stale errors (ticket 02).
 #[test]
 fn worktree_fetch_errors_surface_only_for_the_current_epoch() {
     use turbogit_app::events::AppEvent;
@@ -389,11 +352,6 @@ fn worktree_fetch_errors_surface_only_for_the_current_epoch() {
     assert!(state.last_error.is_none());
 }
 
-// --------------------------------------------------- dispatched actions --
-
-/// `add_worktree` dispatches through the worker: once the operation completes
-/// it invalidates the cached worktree list, and the refetched cache lists the
-/// new worktree.
 #[test]
 fn add_worktree_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
@@ -423,8 +381,6 @@ fn add_worktree_works_end_to_end() {
     assert_eq!(wts[0].path, wt.canonicalize().unwrap());
 }
 
-/// `run_confirmed(RemoveWorktree)` deletes the worktree: its completion
-/// invalidates the cached list and the refetched cache no longer lists it.
 #[test]
 fn remove_worktree_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
@@ -455,13 +411,6 @@ fn remove_worktree_works_end_to_end() {
     );
 }
 
-// --------------------------------- stale worktree-list settlement --
-
-/// hold a real worker settlement across a mutation, then replay through the pump (ticket 01).
-///
-/// The mutation is injected while the fetch's result is still *unsettled* — it
-/// was dispatched before the mutation and settles after it — so the pump's
-/// ordering is fully driven by controlled event injection, never by timing.
 #[test]
 fn stale_pre_mutation_list_settlement_is_dropped_and_fresh_refetch_is_accepted() {
     let tmp = tempfile::tempdir().unwrap();
@@ -487,8 +436,6 @@ fn stale_pre_mutation_list_settlement_is_dropped_and_fresh_refetch_is_accepted()
     assert_eq!(rows[0].path, wt);
     assert!(state.caches.worktrees(&root).is_none());
 
-    // The worker has answered, but the request stays outstanding until its
-    // settlement is routed through the pump — that is the window under test.
     git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
     state
         .tx
@@ -523,8 +470,6 @@ fn stale_pre_mutation_list_settlement_is_dropped_and_fresh_refetch_is_accepted()
     );
 }
 
-/// receive the next real worktree-list result without polling, deferring any
-/// unrelated event back onto the channel so dispatch order is never assumed.
 fn receive_worktree_list(state: &mut AppState) -> turbogit_app::events::AppEvent {
     use turbogit_app::events::AppEvent;
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -545,7 +490,6 @@ fn receive_worktree_list(state: &mut AppState) -> turbogit_app::events::AppEvent
     event
 }
 
-/// reject held successes and errors across reset, then refill after reopening (ticket 02).
 fn assert_reset_rejects_late_worktree_list(reset: impl FnOnce(&mut AppState, &Path)) {
     use turbogit_app::events::AppEvent;
     use turbogit_domain::error::TgError;
@@ -590,7 +534,6 @@ fn assert_reset_rejects_late_worktree_list(reset: impl FnOnce(&mut AppState, &Pa
     state.drain_events();
     assert!(state.last_error.is_none());
 
-    // Reopening the same root must not reuse its pre-reset epoch.
     state.open_project(&repo);
     state.fetch_worktrees(root.clone());
     let fresh = receive_worktree_list(&mut state);
@@ -638,11 +581,6 @@ fn close_all_projects_rejects_late_worktree_list_and_refills() {
     assert_reset_rejects_late_worktree_list(|state, _| state.close_all_projects());
 }
 
-// --------------------------------------------- ticket 03 — dirty probes --
-
-/// Dirty probes only run when requested (the Worktrees window is open): the
-/// badge / eager-fill path alone never probes, so the cached rows keep their
-/// unknown dirty state until `ensure_worktree_probes` is called.
 #[test]
 fn probes_do_not_run_until_requested() {
     let tmp = tempfile::tempdir().unwrap();
@@ -683,8 +621,6 @@ fn probes_do_not_run_until_requested() {
     );
 }
 
-/// Each worktree's dirty flag fills in as its own probe settles — rows
-/// resolve independently, clean and dirty alike.
 #[test]
 fn probes_fill_each_row_independently() {
     let tmp = tempfile::tempdir().unwrap();
@@ -720,9 +656,6 @@ fn probes_fill_each_row_independently() {
     );
 }
 
-/// Adding a worktree while the window is open re-probes the affected rows so
-/// the tab stays fresh: the new row lists probe-free and fills on the next
-/// probe pass.
 #[test]
 fn probes_refill_after_add_while_window_open() {
     let tmp = tempfile::tempdir().unwrap();
@@ -780,10 +713,6 @@ fn probes_refill_after_add_while_window_open() {
     assert_eq!(new_row.dirty, Some(false), "a fresh worktree probes clean");
 }
 
-/// A probe that settles after its worktree has been removed (the row is no
-/// longer listed) is a harmless no-op — the settlement must never resurrect a
-/// stale row (ticket 03). The module routes the result to
-/// `RootCaches::update_worktree_dirty`, which only touches an existing row.
 #[test]
 fn a_dirty_probe_for_a_missing_row_is_a_noop() {
     let tmp = tempfile::tempdir().unwrap();
@@ -795,15 +724,12 @@ fn a_dirty_probe_for_a_missing_row_is_a_noop() {
     state.fetch_worktrees(root.clone());
     wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
 
-    // Drop the cached list entirely, as a project switch / rescan would — the
-    // row the in-flight probe targets no longer exists.
     state.caches.invalidate_worktrees(&root);
     assert!(
         state.caches.worktrees(&root).is_none(),
         "the row is gone before the probe settles"
     );
 
-    // The probe settles late for the old path.
     use turbogit_app::events::AppEvent;
     state
         .tx
@@ -821,9 +747,6 @@ fn a_dirty_probe_for_a_missing_row_is_a_noop() {
     );
 }
 
-/// Probe errors reach the app's normal feedback surface (last_error), like
-/// every other git error — the relocated settlement path does not swallow them
-/// (ticket 03).
 #[test]
 fn a_dirty_probe_error_surfaces_to_last_error() {
     use turbogit_app::events::AppEvent;
@@ -839,7 +762,6 @@ fn a_dirty_probe_error_surfaces_to_last_error() {
     wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
     state.last_error = None;
 
-    // A probe fails for the listed row.
     state
         .tx
         .send(AppEvent::WorktreeDirty {
@@ -857,13 +779,10 @@ fn a_dirty_probe_error_surfaces_to_last_error() {
     );
 }
 
-/// `update_submodule` checks the recorded commit back out on a submodule
-/// whose HEAD moved off the record.
 #[test]
 fn update_submodule_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     let (repo, sub_path) = super_with_submodule(tmp.path(), "alpha");
-    // Move the submodule's HEAD off the recorded commit.
     let sub_wc = repo.join(&sub_path);
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
     git(&sub_wc, &["add", "."]);
@@ -885,8 +804,6 @@ fn update_submodule_works_end_to_end() {
     assert_eq!(subs[0].head, subs[0].recorded);
 }
 
-/// `run_confirmed(DeinitSubmodule)` un-initializes the submodule: the
-/// refetched cache reports it uninitialized.
 #[test]
 fn deinit_submodule_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();

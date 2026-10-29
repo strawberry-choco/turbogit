@@ -1,19 +1,5 @@
-//! Contract tests for the branch context menu component
-//! (`ui::branch_menu`).
-//!
-//! Two seams. The gating table is a pure function over one `Branch` and the
-//! repository's current branch — every row's twelve outcomes are asserted
-//! without rendering. The component itself is props-in / action-out: the
-//! designed item order, the four rules, the multi-repo wording, and the
-//! `BranchMenuAction` each clicked item returns, asserted through painted
-//! output and the accessibility tree. What a pick DOES — including the copy
-//! verb's clipboard request and the toast that follows it — is asserted on the
-//! production path, against the real `AppState`.
-
 use turbogit_domain::model::{Branch, BranchKind, Upstream};
 use turbogit_ui::ui::branch_menu::{BranchMenuAction, MenuItemState, branch_menu_items};
-
-// --- fixture branches ----------------------------------------------------------
 
 fn local(name: &str, tracking: Option<&str>, ahead: usize, behind: usize) -> Branch {
     Branch {
@@ -38,13 +24,6 @@ fn state(branch: &Branch, current: Option<&str>, item: BranchMenuAction) -> Menu
     items[item.index()]
 }
 
-// --- cycle 1: the current branch -------------------------------------------------
-
-/// The row for the checked-out branch: Checkout and Checkout-and-pull are
-/// blocked with "already checked out", and `Pull` — once the one update
-/// action this row offered — is withheld with the pull family's scope
-/// — the family is a remote-branch verb, and the checked-out
-/// branch is always local. Rename is a local verb and stays enabled.
 #[test]
 fn the_current_branch_offers_no_checkout_and_no_pull() {
     let main = local("main", Some("origin/main"), 0, 0);
@@ -66,11 +45,6 @@ fn the_current_branch_offers_no_checkout_and_no_pull() {
     assert_eq!(s(BranchMenuAction::NewBranchFrom), MenuItemState::enabled());
 }
 
-// --- cycle 2: an untracked local branch ------------------------------------------
-
-/// A branch with no upstream has nothing to pull from: both pull items are
-/// blocked with the upstream reason, while Checkout, New branch from, and
-/// Push (which creates the upstream) stay live.
 #[test]
 fn an_untracked_branch_cannot_pull_but_still_checks_out_and_pushes() {
     let side = local("side", None, 0, 0);
@@ -88,11 +62,6 @@ fn an_untracked_branch_cannot_pull_but_still_checks_out_and_pushes() {
     assert_eq!(s(BranchMenuAction::Push), MenuItemState::enabled());
 }
 
-// --- cycle 3: an upstream deleted on the remote -----------------------------------
-
-/// `[gone]` means there is nothing to pull from either side: Pull blocks with
-/// the upstream reason on the checked-out branch, and Checkout-and-pull
-/// blocks with it on any other — where the checkout blocker is absent.
 #[test]
 fn a_gone_upstream_blocks_both_pull_items() {
     let mut stale = local("stale", Some("origin/removed"), 0, 0);
@@ -116,11 +85,6 @@ fn a_gone_upstream_blocks_both_pull_items() {
     );
 }
 
-// --- cycle 4: Push reads the ahead count and the upstream's fate -------------------
-
-/// Push acts when the branch has something to publish or no upstream to
-/// fail against; a fully pushed branch says "nothing to push", and a branch
-/// whose upstream was deleted upstream says so.
 #[test]
 fn push_follows_what_the_upstream_owes_the_branch() {
     let ahead = local("feat", Some("origin/feat"), 2, 0);
@@ -143,9 +107,6 @@ fn push_follows_what_the_upstream_owes_the_branch() {
     );
 }
 
-// --- cycle 5: renaming is a local-branch verb ---------------------------------------
-
-/// A remote-tracking row is reference material: it cannot be renamed.
 #[test]
 fn a_remote_row_cannot_be_renamed() {
     let up = Branch {
@@ -168,12 +129,6 @@ fn a_remote_row_cannot_be_renamed() {
     );
 }
 
-// --- cycle 6: the panel's three omissions became four reasons ---------------------
-
-/// The union's new items gate on the two facts the panel enforced by hiding
-/// them. Blocked means rendered-and-explained, never absent: a row for the
-/// checked-out branch says so, a remote-tracking row says it cannot be
-/// merged or rebased, and a plain local row is free of all four.
 #[test]
 fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
     let side = local("side", Some("origin/side"), 0, 0);
@@ -202,8 +157,6 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
         MenuItemState::disabled("the current branch cannot be deleted")
     );
 
-    // A remote-tracking row is reference material for history verbs, yet it
-    // is still deletable — that is what `git push origin :name` means.
     let up = Branch {
         kind: BranchKind::Remote,
         remote: Some("origin".to_string()),
@@ -219,9 +172,6 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
         MenuItemState::disabled("remote branches cannot be rebased")
     );
     assert_eq!(remote(BranchMenuAction::Compare), MenuItemState::enabled());
-    // The file-level comparison is read-only too, so a remote-tracking
-    // row can be one of its sides — which is what makes `Get from Branch` reachable
-    // for a file that only exists on `origin/*`.
     assert_eq!(
         remote(BranchMenuAction::DiffWithWorkingTree),
         MenuItemState::enabled()
@@ -229,9 +179,6 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
     assert_eq!(remote(BranchMenuAction::Delete), MenuItemState::enabled());
 }
 
-/// [`BranchMenuAction::ORDER`] and [`BranchMenuAction::index`] are maintained
-/// by hand in step with the gate array; the compiler cannot see them disagree,
-/// so this is the one check that they do not.
 #[test]
 fn the_designed_order_is_the_array_slots() {
     assert_eq!(BranchMenuAction::ORDER.len(), 12);
@@ -240,14 +187,6 @@ fn the_designed_order_is_the_array_slots() {
     }
 }
 
-// --- the copy verb is ungated, and copies the row it was opened on ---------------
-
-/// `Copy branch name` reads the `Branch` the menu was handed, so nothing about
-/// that branch can block it: no checkout, no upstream, no local-vs-remote kind,
-/// no detached HEAD. The row's OWN name is what the verb means — the menu is
-/// invoked on a row, which may well be a branch that is not checked out — and
-/// every row below is one where the checked-out branch is a different row, so a
-/// gate or a name-substitution anywhere here would silently copy the wrong thing.
 #[test]
 fn copy_branch_name_is_offered_on_every_row() {
     let current = local("main", Some("origin/main"), 0, 0);
@@ -275,19 +214,8 @@ fn copy_branch_name_is_offered_on_every_row() {
     }
 }
 
-// --- the pull family is a remote-branch verb -------------------------------------
-
-/// `Pull` and `Checkout and pull` mean "fetch and integrate this branch's
-/// upstream", and the reference scopes that family to remote branches — on a
-/// local row the history verbs above are how commits move, so offering the
-/// family there offers an operation the label does not name. The gate is
-/// `has_upstream && !is_local`: a tracking local row is withheld *because* it
-/// is local, on top of whatever the upstream checks already said.
 #[test]
 fn the_pull_family_is_offered_on_remote_branches_only() {
-    // A tracking local row — the case that used to be offered. The current
-    // branch reaches the new scope reason; any other local row hears it from
-    // `Checkout and pull`, while `Pull` names its checkout blocker first.
     let tracked = local("side", Some("origin/side"), 0, 0);
     let current = |item: BranchMenuAction| state(&tracked, Some("side"), item);
     assert_eq!(
@@ -306,9 +234,6 @@ fn the_pull_family_is_offered_on_remote_branches_only() {
         "the checkout blocker is stated first where it applies"
     );
 
-    // A remote row with an upstream: the family is offered. `Checkout and
-    // pull` can act; the collapsed `Pull` still needs the branch checked out
-    // first, and a remote-tracking row never is.
     let up = Branch {
         kind: BranchKind::Remote,
         remote: Some("origin".to_string()),
@@ -325,8 +250,6 @@ fn the_pull_family_is_offered_on_remote_branches_only() {
     );
 }
 
-// --- the component: props in, action out -------------------------------------------
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -336,12 +259,6 @@ use test_support::harness::{filled_rects, painted_galleys};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_menu::{BranchMenuProps, branch_menu};
 
-/// Render `branch_menu` for `target` inside a popup frame, recording the
-/// action the component returns each frame.
-///
-/// The 420×400 size is stated rather than inherited from kittest's 800×600
-/// default. The recording cell is an `Rc<RefCell<_>>` because `widget_harness`
-/// takes an `Fn`, not an `FnMut`.
 fn menu_harness(
     target: Branch,
     props: fn() -> BranchMenuProps<'static>,
@@ -358,10 +275,6 @@ fn menu_harness(
     (harness, returned)
 }
 
-/// The union of the three affordances in the designed order — the copy verb
-/// leading its own group, Checkout strongest, the name in the data face, four
-/// rules splitting copy / switch / history / update / edit — with Push's real
-/// accelerator in the shortcut column.
 #[test]
 fn the_menu_renders_the_twelve_items_in_the_designed_order() {
     let target = local("feature/cascade-views", Some("origin/f"), 1, 0);
@@ -372,9 +285,6 @@ fn the_menu_renders_the_twelve_items_in_the_designed_order() {
     });
 
     let mut galleys = painted_galleys(&harness);
-    // Bucket by menu row (a 26 px pitch): the two segments of one row are
-    // each vertically centered, so their exact tops differ. The pitch is the
-    // one place a scroll container would move.
     let row_pitch = 26.0;
     let first = galleys
         .iter()
@@ -409,8 +319,6 @@ fn the_menu_renders_the_twelve_items_in_the_designed_order() {
         "item order, the data segment, and the one accelerator"
     );
 
-    // The branch name reads in the data face on both rows that carry it — the
-    // copy verb's value and `New branch from`'s base — never as a label.
     let names: Vec<&egui::FontFamily> = galleys
         .iter()
         .filter(|g| g.text == "feature/cascade-views")
@@ -422,7 +330,6 @@ fn the_menu_renders_the_twelve_items_in_the_designed_order() {
         "the copied value and the base are both data"
     );
 
-    // Four rules: copy, history, update and editing each start behind a hairline.
     let rules: Vec<Color32> = filled_rects(&harness)
         .into_iter()
         .filter(|(_, fill)| *fill == Palette::LINE_SUBTLE)
@@ -430,7 +337,6 @@ fn the_menu_renders_the_twelve_items_in_the_designed_order() {
         .collect();
     assert_eq!(rules.len(), 4, "exactly four menu rules");
 
-    // Checkout is the primary item.
     assert!(
         filled_rects(&harness)
             .iter()
@@ -439,8 +345,6 @@ fn the_menu_renders_the_twelve_items_in_the_designed_order() {
     );
 }
 
-/// With no named branch checked out (detached HEAD) the history verbs state
-/// no destination rather than painting a dangling "Merge into ".
 #[test]
 fn the_history_verbs_drop_their_destination_when_no_branch_is_checked_out() {
     let target = local("side", Some("origin/side"), 0, 0);
@@ -462,8 +366,6 @@ fn the_history_verbs_drop_their_destination_when_no_branch_is_checked_out() {
     );
 }
 
-/// In a multi-repo project the primary item names the repository its action
-/// applies to (issue 14) — a bare "Checkout" is never ambiguous.
 #[test]
 fn the_primary_item_names_its_repository_when_more_than_one_is_in_scope() {
     let target = local("side", Some("origin/side"), 0, 0);
@@ -480,8 +382,6 @@ fn the_primary_item_names_its_repository_when_more_than_one_is_in_scope() {
     );
 }
 
-/// Each enabled item returns exactly its own action; a disabled item is
-/// rendered but never fires.
 #[test]
 fn clicking_an_item_returns_its_action() {
     use egui_kittest::kittest::{NodeT as _, Queryable as _};
@@ -500,7 +400,6 @@ fn clicking_an_item_returns_its_action() {
         "the component reports the pick and nothing else"
     );
 
-    // The current branch's Checkout is gated: rendered, inert.
     let target = local("main", Some("origin/main"), 0, 0);
     let (mut harness, returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
@@ -525,10 +424,6 @@ fn clicking_an_item_returns_its_action() {
     );
 }
 
-/// The copy verb is a row like any other as far as the component is concerned:
-/// it reports its own action and nothing more, leaving the clipboard to the
-/// host. `branch_menu` never touches a `Context` — that is what keeps the
-/// component props-in / action-out.
 #[test]
 fn clicking_the_copy_item_returns_its_action_and_nothing_else() {
     use egui_kittest::kittest::Queryable as _;
@@ -557,8 +452,6 @@ fn clicking_the_copy_item_returns_its_action_and_nothing_else() {
     );
 }
 
-// --- production path: the Branches surface ---------------------------------------
-
 pub(crate) mod surface {
     use std::path::PathBuf;
     use std::time::Duration;
@@ -573,9 +466,6 @@ pub(crate) mod surface {
     // headless machine has no global identity to borrow. No assertion here
     // reads an author, so nothing about what git records is under test.
 
-    /// A project under the test scratch root (`test_support::scratch_root`) holding one
-    /// repo `alpha` on `main` with locals `feature-a` and `plain-b`. `main`
-    /// and `feature-a` track a bare `origin`; `plain-b` stays untracked.
     pub(crate) fn one_repo_project(tag: &str) -> PathBuf {
         let base = test_support::scratch_root(&format!("branch-context-menu-{tag}"));
         let _ = std::fs::remove_dir_all(&base);
@@ -654,18 +544,12 @@ pub(crate) mod surface {
         assert_painted(harness, "feature-a");
     }
 
-    /// Right-click the row whose accessible label is EXACTLY `branch`, not
-    /// `harness::right_click_row`'s first label *containing* it: a sidebar row
-    /// or repo header can contain that string, and the looser matcher would not
-    /// fail any test below — it would just right-click the wrong node.
     fn right_click_row(harness: &mut Harness<'_, AppState>, branch: &str) {
         row_node(harness, branch).click_secondary();
         harness.step();
         harness.step();
     }
 
-    /// The one menu item every branch-row context menu carries. Named per call
-    /// site because "Pull" and "Push…" also label the command palette's rows.
     const MENU_SENTINEL: &str = "New branch from";
 
     fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
@@ -692,7 +576,6 @@ pub(crate) mod surface {
             .any(|e| e.message.contains(needle))
     }
 
-    /// The row's own Button node — a branch name can label several nodes.
     pub(crate) fn row_node<'t>(
         harness: &'t Harness<'_, AppState>,
         name: &str,
@@ -713,8 +596,6 @@ pub(crate) mod surface {
             .map(|(_, b)| b.clone())
     }
 
-    /// Right-clicking a row opens the six-item menu on that row, in the
-    /// frame it was clicked, with the row's branch as the target.
     #[test]
     fn right_clicking_a_row_opens_the_menu_on_that_row() {
         let project = one_repo_project("open");
@@ -731,12 +612,9 @@ pub(crate) mod surface {
         assert_painted(&harness, "New branch from");
         assert_painted(&harness, "Checkout and pull");
         assert_painted(&harness, "Rename branch");
-        // The name segment reads the clicked branch.
         assert_painted(&harness, "feature-a");
     }
 
-    /// Escape joins the existing ladder: the first press closes the context
-    /// menu and leaves the selection alone.
     #[test]
     fn escape_closes_the_menu_before_anything_else() {
         let project = one_repo_project("escape");
@@ -756,9 +634,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// A click on any row — the menu's own row or another — dismisses it,
-    /// and a click outside the menu after it has been visible for a frame
-    /// dismisses it too.
     #[test]
     fn a_row_click_or_a_click_outside_closes_the_menu() {
         let project = one_repo_project("dismiss");
@@ -766,8 +641,6 @@ pub(crate) mod surface {
         open_branches(&mut harness);
         right_click_row(&mut harness, "feature-a");
 
-        // Click another row: dismissed, and the click still selects. The
-        // menu floats over the rows below its anchor, so pick the row above.
         row_node(&harness, "main").click();
         harness.step();
         assert_eq!(context_menu_target(&harness), None, "any row click closes");
@@ -776,8 +649,6 @@ pub(crate) mod surface {
             Some("main")
         );
 
-        // Click outside the menu (the toolbar area above the list) after the
-        // menu has been visible for a frame.
         right_click_row(&mut harness, "feature-a");
         harness.step();
         harness.hover_at(egui::pos2(512.0, 8.0));
@@ -792,9 +663,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// The menu must not steal the shell's typing: it joins the popup gate
-    /// in `shell.rs`, so `/` cannot arm the Commit file filter while the
-    /// menu is open. The frozen five keep their dispatch-first contract.
     #[test]
     fn an_open_menu_freezes_shell_typing_shortcuts() {
         let project = one_repo_project("gate");
@@ -802,7 +670,6 @@ pub(crate) mod surface {
         open_branches(&mut harness);
         right_click_row(&mut harness, "feature-a");
 
-        // Ctrl+Shift+A is one of the frozen five — it still fires.
         harness.key_press_modifiers(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::A);
         harness.step();
         assert!(
@@ -812,9 +679,6 @@ pub(crate) mod surface {
         harness.state_mut().ui.command_palette = false;
         right_click_row(&mut harness, "feature-a");
 
-        // `/` arms the Commit file filter only through the popup gate. Move
-        // to the Commit tab with the menu still open: nothing may take the
-        // keyboard.
         harness.state_mut().ui.tab = Tab::Commit;
         harness.step();
         assert!(
@@ -829,8 +693,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// Clicking an item closes the menu (ticket 03's dismissal; what it
-    /// DOES is ticket 04's dispatch).
     #[test]
     fn an_item_click_closes_the_menu() {
         let project = one_repo_project("item-click");
@@ -847,10 +709,6 @@ pub(crate) mod surface {
         assert_eq!(context_menu_target(&harness), None);
     }
 
-    // --- ticket 04: each item dispatches through the existing app seam ----
-
-    /// Checkout runs the existing checkout: HEAD moves in the real
-    /// repository and the refreshed snapshot follows.
     #[test]
     fn checkout_moves_head_in_the_real_repository() {
         let project = one_repo_project("dispatch-checkout");
@@ -869,8 +727,6 @@ pub(crate) mod surface {
         assert_eq!(context_menu_target(&harness), None, "and closes");
     }
 
-    /// A dirty worktree keeps its guard: Checkout routes to the
-    /// bring-along / set-aside confirmation instead of switching silently.
     #[test]
     fn checkout_still_routes_through_the_dirty_tree_confirm() {
         let project = one_repo_project("dispatch-dirty");
@@ -891,8 +747,6 @@ pub(crate) mod surface {
         assert_eq!(current_branch(&harness).as_deref(), Some("main"));
     }
 
-    /// New branch from «name» opens the dialog prefilled with the clicked
-    /// branch as the base.
     #[test]
     fn new_branch_from_opens_the_dialog_based_on_the_row() {
         let project = one_repo_project("dispatch-newbranch");
@@ -911,8 +765,6 @@ pub(crate) mod surface {
         assert!(st.ui.dlg.new_branch_checkout);
         assert_eq!(context_menu_target(&harness), None);
     }
-
-    // --- the copy verb: the app's clipboard request, on the production path ---
 
     /// What the last frame asked the platform to put on the clipboard. egui
     /// carries a copy as an output command rather than a field, so this reads
@@ -933,12 +785,6 @@ pub(crate) mod surface {
         harness.state().ui.toast.as_ref().map(|t| t.message.clone())
     }
 
-    /// `Copy branch name` copies the ROW it was opened on, which under this
-    /// menu's contract is not necessarily the checked-out branch — the point the
-    /// reference's `Copy current branch name` does not have to answer, because it
-    /// is not invoked on a row. The confirmation is read from the same frame as
-    /// the request, which is what makes the pair assertable: a toast with no
-    /// `CopyText` command behind it would say the copy ran when nothing did.
     #[test]
     fn copy_branch_name_copies_the_row_it_was_opened_on() {
         let project = one_repo_project("dispatch-copy");
@@ -952,35 +798,21 @@ pub(crate) mod surface {
         assert_eq!(toast(&harness).as_deref(), Some("Copied plain-b"));
         assert_eq!(context_menu_target(&harness), None, "and closes");
 
-        // The checked-out row copies itself too — the verb never substitutes
-        // HEAD for the row, so the two can never disagree.
         right_click_row(&mut harness, "main");
         click_menu_item(&mut harness, MENU_SENTINEL, "Copy branch name");
         assert_eq!(copied_text(&harness).as_deref(), Some("main"));
         assert_eq!(toast(&harness).as_deref(), Some("Copied main"));
 
-        // Inert: no dialog, no confirmation, no operation in flight.
         let st = harness.state();
         assert!(st.ui.dialog.is_none() && st.ui.confirm.is_none() && !st.ui.busy);
     }
 
-    // --- the pull family is a remote-branch verb -------------------------
-
-    /// A tracking local branch is not offered the pull family — the row this
-    /// menu used to offer it on. `Pull` on the checked-out branch states the
-    /// scope; on any other local row `Checkout and pull` states it too, while
-    /// `Pull` names its checkout blocker first. Scoped to the open menu's own
-    /// column, because "Pull" also labels the toolbar, the VCS popup and the
-    /// command palette: the sentinel's rect is what keeps every assertion
-    /// here on the menu's rows.
     #[test]
     fn a_tracking_local_branch_is_not_offered_the_pull_family() {
         let project = one_repo_project("gate-pull-local");
         let mut harness = branches_harness(project);
         open_branches(&mut harness);
 
-        // The checked-out branch: `Pull` was the one update action this row
-        // offered, and the upstream check alone would still pass it.
         right_click_row(&mut harness, "main");
         assert_menu_item_disabled(&mut harness, "Pull", "pull is offered on remote branches");
 
@@ -995,10 +827,6 @@ pub(crate) mod surface {
         assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
     }
 
-    /// An untracked local branch is not offered the family either: on a local
-    /// row the withholding is unconditional on the upstream, each item naming
-    /// its nearest blocker. A gate written as `has_upstream && !(is_local &&
-    /// something)` would re-offer the family here and fail this.
     #[test]
     fn an_untracked_local_branch_is_not_offered_the_pull_family_either() {
         let project = one_repo_project("gate-pull-untracked");
@@ -1014,11 +842,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// The remote-only scope runs one way only: on a remote row the history
-    /// verbs stay withheld and the pull family is painted, while on a local
-    /// row the history verbs are the ones offered. Pinning both sides is what
-    /// stops a well-meaning "make the gates consistent" change from flipping
-    /// `Merge`/`Rebase` the way `Pull` just moved.
     #[test]
     fn a_remote_row_withholds_the_history_verbs_and_keeps_the_pull_family_painted() {
         let project = one_repo_project("gate-pull-remote");
@@ -1038,11 +861,8 @@ pub(crate) mod surface {
             "Rebase onto main",
             "remote branches cannot be rebased",
         );
-        // Painted, not offered: a remote-tracking row is never the checked-out
-        // branch, so the collapsed `Pull` names its checkout blocker.
         assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
 
-        // And the polarity is the other way on a local row.
         harness.key_press(egui::Key::Escape);
         harness.step();
         right_click_row(&mut harness, "feature-a");
@@ -1056,9 +876,6 @@ pub(crate) mod surface {
         }
     }
 
-    /// Push opens the push dialog prefilled at that branch — a non-current
-    /// branch is pushable without a checkout (the engine takes the branch
-    /// explicitly).
     #[test]
     fn push_opens_the_dialog_prefilled_at_the_row() {
         let project = one_repo_project("dispatch-push");
@@ -1076,10 +893,6 @@ pub(crate) mod surface {
         );
     }
 
-    // --- ticket 05: painted faces and real-state gating -------------------
-
-    /// The menu's name segment paints in the data face on the production
-    /// path, not just in the component fixture.
     #[test]
     fn the_menu_paints_the_branch_name_in_the_data_face() {
         let project = one_repo_project("face");
@@ -1103,32 +916,22 @@ pub(crate) mod surface {
         );
     }
 
-    /// Gating on real branch states, with the reason reachable on hover:
-    /// the current branch cannot check itself out or push; an untracked
-    /// branch cannot pull; a remote row cannot rename. Blocked items stay
-    /// rendered — never a silent vanish.
     #[test]
     fn gated_items_stay_visible_and_state_their_reason_on_hover() {
         let project = one_repo_project("gates");
         let mut harness = branches_harness(project);
         open_branches(&mut harness);
 
-        // The current branch: Checkout gated ("already checked out") and a
-        // fully pushed branch: Push gated ("nothing to push").
         right_click_row(&mut harness, "main");
         assert_menu_item_disabled(&mut harness, "Checkout", "already checked out");
         assert_menu_item_disabled(&mut harness, "Push", "nothing to push");
 
-        // An untracked branch: Pull gated behind a checkout. The open menu
-        // floats over the rows below it, so dismiss it before re-aiming.
         harness.key_press(egui::Key::Escape);
         harness.step();
         right_click_row(&mut harness, "plain-b");
         assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
     }
 
-    /// A remote-tracking row is reference material: Rename is gated. The
-    /// remotes live behind the tree's collapsed rollup, so reveal them.
     #[test]
     fn a_remote_row_gates_rename_with_a_reachable_reason() {
         let project = one_repo_project("gates-remote");
@@ -1146,10 +949,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// The left edge of the open menu, taken from the one menu item every
-    /// branch-row context menu carries (`MENU_SENTINEL`): "Pull" and "Push…"
-    /// also label the command palette's rows, and only the menu's rows all
-    /// share one left edge.
     #[track_caller]
     fn menu_column(harness: &Harness<'_, AppState>) -> egui::Rect {
         harness
@@ -1159,9 +958,6 @@ pub(crate) mod surface {
             .rect()
     }
 
-    /// The menu item whose accessible label is EXACTLY `label` and whose left
-    /// edge sits in the open menu's column — not the toolbar's, the VCS
-    /// popup's or the command palette's row of the same name.
     #[track_caller]
     fn menu_item_in_column<'t>(
         harness: &'t Harness<'_, AppState>,
@@ -1177,7 +973,6 @@ pub(crate) mod surface {
             .unwrap_or_else(|| panic!("menu item {label}"))
     }
 
-    /// Hover a menu item of the open menu until its disabled tooltip paints.
     #[track_caller]
     fn assert_menu_item_disabled(harness: &mut Harness<'_, AppState>, label: &str, reason: &str) {
         harness.remove_cursor();
@@ -1216,8 +1011,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// Rename starts the row's inline editor — one rename experience per
-    /// surface — with the draft seeded to the current name.
     #[test]
     fn rename_opens_the_rows_inline_editor() {
         let project = one_repo_project("dispatch-rename");
@@ -1231,15 +1024,9 @@ pub(crate) mod surface {
         assert_eq!(tree.rename_draft, "plain-b");
         assert!(tree.selected_root.is_some());
         assert_eq!(context_menu_target(&harness), None);
-        // The editor paints on the row itself.
         assert_painted(&harness, "plain-b");
     }
 
-    // --- ticket 01: the four actions the menu used not to offer ----------
-
-    /// Merge names its destination and opens the same preflighted dialog the
-    /// detail panel opened: source = the right-clicked row, preview computed
-    /// before anything runs.
     #[test]
     fn merge_into_opens_the_preflighted_dialog() {
         let project = one_repo_project("dispatch-merge");
@@ -1257,8 +1044,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// Rebase states its direction in the label and runs that rebase — the
-    /// report names both branches in the order the item did.
     #[test]
     fn rebase_onto_runs_the_rebase_it_names() {
         let project = one_repo_project("dispatch-rebase");
@@ -1277,8 +1062,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// Compare is read-only and names both sides, exactly as the panel's
-    /// button delivered it.
     #[test]
     fn compare_with_opens_the_compare_surface() {
         let project = one_repo_project("dispatch-compare");
@@ -1296,7 +1079,6 @@ pub(crate) mod surface {
         assert_eq!(st.ui.dlg.compare_right, "main");
     }
 
-    /// Deleting asks first, and the ask says what is lost in human terms.
     #[test]
     fn delete_asks_before_removing_the_branch() {
         let project = one_repo_project("dispatch-delete");
@@ -1321,8 +1103,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// A remote-tracking row is still deletable — the ask names the remote it
-    /// disappears from, which is a different operation from `branch -D`.
     #[test]
     fn deleting_a_remote_row_asks_to_delete_it_upstream() {
         let project = one_repo_project("dispatch-delete-remote");
@@ -1344,8 +1124,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// A branch checked out in another worktree is refused up front, naming
-    /// the worktree — the same guard the checkout path raises.
     #[test]
     fn delete_refuses_a_branch_checked_out_in_another_worktree() {
         let project = one_repo_project("dispatch-delete-worktree");
@@ -1375,9 +1153,6 @@ pub(crate) mod surface {
         );
     }
 
-    /// The four items the detail panel used to hide are gated here with the
-    /// reason they were hidden for — on the current branch and on a
-    /// remote-tracking row.
     #[test]
     fn the_history_verbs_explain_why_the_row_blocks_them() {
         let project = one_repo_project("gates-history");
@@ -1408,42 +1183,20 @@ pub(crate) mod surface {
     }
 }
 
-/// The branch context menu is a **floating surface**, so it keeps the 1px
-/// `LINE` stroke every other floating surface wears.
-///
-/// Its own test, and it lives here rather than only in the workspace-wide
-/// audit, for a specific reason: the branch menu is hosted through
-/// `widgets::menu_host::host_menu` inside an `egui::Area` — **not** an
-/// `egui::Window`. Nothing in egui's window machinery paints its frame, and
-/// `widgets::menu_surface` (which reads the token layer's mapped popup frame)
-/// is the only thing that does. A future change that routed the branch menu
-/// through a plain `Frame` with no stroke would leave every other floating
-/// surface in the app correct, and this is the assertion that notices.
-///
-/// The commit context menu's twin is asserted in `tests/r4_polish.rs`; the two
-/// are the same primitive reached from two surfaces, and each suite pins its
-/// own so neither can change without the other's test being seen.
 #[test]
 fn the_branch_context_menu_keeps_the_float_stroke() {
     use test_support::harness::right_click_row;
     let project = surface::one_repo_project("stroke");
     let mut harness = surface::branches_harness(project);
-    // Wide enough for the whole menu, which the shared harness deliberately is
-    // not — a menu item clipped off the edge would probe a point outside the
-    // frame and the assertion would fail for the wrong reason.
     harness.set_size(egui::vec2(900.0, 700.0));
     test_support::harness::settle(&mut harness);
     surface::open_branches(&mut harness);
     right_click_row(&mut harness, "feature-a");
     test_support::harness::settle(&mut harness);
 
-    // A node **inside the open menu** — a label the menu owns and the branch
-    // list does not, so the probe point is the menu's own content rather than
-    // the row it was opened on. ("Checkout" alone is a branch *row* too, and
-    // matching it would probe the list.)
     let item = surface::row_node(&harness, "Checkout and pull").rect();
     // Recursive, because a context menu is an `egui::Area` whose frame paints
-    // as a `Shape::Vec` — a top-level-only scan would see the rows' own
+    // as a `Shape::Vec`, a top-level-only scan would see the rows' own
     // geometry and never the frame.
     fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32, f32)>) {
         match shape {
@@ -1477,11 +1230,6 @@ fn the_branch_context_menu_keeps_the_float_stroke() {
             )
         });
 
-    // The stroke's **colour** is the token `LINE` — up to a uniform alpha the
-    // host applies to the whole menu, which is why the comparison is by
-    // un-multiplying rather than by equality. Stating it this way is what makes
-    // the assertion mean something: a frame that lost its stroke fails above,
-    // and a frame that kept one in some other colour fails here.
     let (rect, stroke) = frame;
     let alpha = stroke.a() as f32 / 255.0;
     assert!(

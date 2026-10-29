@@ -1,30 +1,11 @@
-//! Shared headless test doubles (DDD split issue 09).
-//!
-//! The recording executor below lives in this crate's root module so the
-//! integration suites can inject it at the executor boundary. Kept
-//! dependency-light on purpose: it needs only the engine port and the domain
-//! model, so `turbogit-app`'s tests can use it without ever pulling in egui
-//! or the UI crate.
-//!
-//! The egui shell harness (`harness::`) drives `turbogit_ui::render` through
-//! `egui_kittest`. It is gated behind the `harness` feature so consumers
-//! that only need the recording executor never compile the egui stack; the
-//! UI crate activates it through its own dev-dependencies.
-//!
-//! Anything not needing egui stays OUTSIDE the gate: `turbogit-app` and
-//! `turbogit-services` consume this crate with default features.
-
 #[cfg(feature = "harness")]
 pub mod harness;
 
-// Gated with `harness`: the WCAG helpers measure `egui::Color32`.
 #[cfg(feature = "harness")]
 pub mod wcag;
 
 pub mod git_seed;
 
-// Ungated with `git_seed`: the structural ratchets in the services' and app's
-// own suites read production source and cannot reach a feature-gated module.
 pub mod srcscan;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -40,10 +21,6 @@ use turbogit_domain::model::{
     Worktree,
 };
 use turbogit_engine_api::{GitExecutor, OwnedOperation};
-// `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
-// assert flag selection at the executor boundary through this transparent
-// wrapper: every call delegates to a real inner engine while push /
-// push-dry-run invocations are recorded verbatim (remote, branch, force).
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordedCall {
@@ -52,15 +29,9 @@ pub enum RecordedCall {
         remote: String,
         branch: String,
         force: bool,
-        /// Push tags (`--tags`) flag (issue #24).
         tags: bool,
-        /// Skip pre-push hooks (`--no-verify`) flag (issue #24).
         no_verify: bool,
-        /// Set upstream tracking ref (`--set-upstream`) flag (issue #24).
         set_upstream: bool,
-        /// Oldest selected commit SHA, when the user pushed a subset
-        /// (issue #24). The full outgoing list is pushed when this is
-        /// `None`.
         selected_oldest: Option<String>,
     },
     PushDryRun {
@@ -72,111 +43,76 @@ pub enum RecordedCall {
     ApplyPatch {
         direction: turbogit_engine_api::ApplyDirection,
     },
-    /// A worktree apply — the `Apply patch` verb, which writes the working tree
-    /// and stages nothing, so it is a different act from `ApplyPatch` above rather
-    /// than a flag on it.
     ApplyPatchToWorktree,
     AddIntentToAdd(Vec<PathBuf>),
     Add(Vec<PathBuf>),
-    /// A whole-file unstage — the per-file checkbox's way back out of the
-    /// index. Recorded because a suite asserting the checkbox's effect on the
-    /// index can only observe it through the recorder or through real git.
     Unstage(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
-    /// A remote fetch (`root`, remote name or `None` for all remotes)
-    /// (issue #27).
     Fetch {
         root: PathBuf,
         remote: Option<String>,
     },
-    /// A merge invocation with its full options (issue 28).
     Merge {
         root: PathBuf,
         target: String,
         opts: MergeOpts,
     },
-    /// A rebase invocation with its full options (issue 29).
     Rebase {
         root: PathBuf,
         onto: String,
         opts: RebaseOpts,
     },
-    /// An interactive plan replay (issue 29).
     RebaseInteractive {
         root: PathBuf,
         plan: Vec<RebasePlanEntry>,
     },
-    /// A tag creation with its full spec (issue 31).
     TagCreate {
         root: PathBuf,
         spec: TagSpec,
     },
-    /// A tag push (`remote`, tag name or `None` for `--follow-tags`)
-    /// (issue 31).
     TagPush {
         root: PathBuf,
         remote: String,
         name: Option<String>,
     },
-    /// Add a remote (issue 33).
     AddRemote {
         root: PathBuf,
         name: String,
         url: String,
     },
-    /// Set a remote's fetch/push URL (issue 33).
     SetRemoteUrl {
         root: PathBuf,
         name: String,
         fetch_url: Option<String>,
         push_url: Option<String>,
     },
-    /// Rename a remote (issue 33).
     RenameRemote {
         root: PathBuf,
         old: String,
         new: String,
     },
-    /// Remove a remote (issue 33).
     RemoveRemote {
         root: PathBuf,
         name: String,
     },
-    /// Set a branch's upstream tracking (issue 33).
     SetBranchUpstream {
         root: PathBuf,
         branch: String,
         upstream: String,
     },
-    /// Clear a branch's upstream tracking.
     UnsetBranchUpstream {
         root: PathBuf,
         branch: String,
     },
 }
 
-/// Delegating [`GitExecutor`] that records push / dry-run calls.
 pub struct RecordingExecutor {
     pub inner: Arc<dyn GitExecutor>,
     calls: Mutex<Vec<RecordedCall>>,
-    /// `log` invocation counter (log-open perf: in-flight-guard tests assert
-    /// exactly one worker per fetch, without relying on `recorded()` which
-    /// other suites compare strictly).
-    log_calls: Mutex<usize>,
-    /// `ref_decorations` invocation counter (log-open perf: the refs
-    /// in-flight guard releases on Ok and Err alike).
     ref_calls: Mutex<usize>,
-    /// `change_stats` invocation counter (logs-panels redesign issue 01:
-    /// the per-commit stats request must fire once per commit id, never once
-    /// per frame).
     stats_calls: Mutex<usize>,
-    /// Every `log` request in order, so a test can assert the shape of the
-    /// page the app asked for (log paging).
     log_opts: Mutex<Vec<LogOpts>>,
-    /// Every `patch_bytes` read in order: the origin asked for and whether
-    /// `Reverse patch` was on. A created patch is generated once per settings change,
-    /// and a suite that cannot see the count cannot say that.
     patch_reads: Mutex<Vec<(PatchOrigin, bool)>>,
 }
 
@@ -185,7 +121,6 @@ impl RecordingExecutor {
         Self {
             inner,
             calls: Mutex::new(Vec::new()),
-            log_calls: Mutex::new(0),
             ref_calls: Mutex::new(0),
             stats_calls: Mutex::new(0),
             log_opts: Mutex::new(Vec::new()),
@@ -193,40 +128,30 @@ impl RecordingExecutor {
         }
     }
 
-    /// How many `log` invocations have been made so far.
     pub fn log_call_count(&self) -> usize {
-        *self.log_calls.lock().expect("log mutex")
+        self.log_opts.lock().expect("log opts mutex").len()
     }
 
-    /// Every `log` request made so far, in order — the [`LogOpts`] the app
-    /// actually handed the engine.
     pub fn log_opts(&self) -> Vec<LogOpts> {
         self.log_opts.lock().expect("log opts mutex").clone()
     }
 
-    /// Every `patch_bytes` read made so far, in order. A created patch is generated
-    /// once per change of settings, never once per frame, and `Reverse patch` is a
-    /// question asked of git rather than an edit made afterwards.
     pub fn patch_reads(&self) -> Vec<(PatchOrigin, bool)> {
         self.patch_reads.lock().expect("patch reads mutex").clone()
     }
 
-    /// How many `ref_decorations` invocations have been made so far.
     pub fn ref_call_count(&self) -> usize {
         *self.ref_calls.lock().expect("ref mutex")
     }
 
-    /// How many `change_stats` invocations have been made so far.
     pub fn stats_call_count(&self) -> usize {
         *self.stats_calls.lock().expect("stats mutex")
     }
 
-    /// Snapshot of every recorded call so far, in order.
     pub fn recorded(&self) -> Vec<RecordedCall> {
         self.calls.lock().expect("calls mutex").clone()
     }
 
-    /// True once a `Push` with exactly these fields has been recorded.
     pub fn contains_push(&self, remote: &str, branch: &str, force: bool) -> bool {
         self.recorded().iter().any(|c| match c {
             RecordedCall::Push {
@@ -239,9 +164,6 @@ impl RecordingExecutor {
         })
     }
 
-    /// True once a `Push` with the given flag subset has been recorded
-    /// (issue #24). `selected_oldest` matches when equal to the recorded
-    /// value (use `None` to match a full-list push).
     pub fn contains_push_selected(
         &self,
         remote: &str,
@@ -266,7 +188,6 @@ impl RecordingExecutor {
         })
     }
 
-    /// True once a `PushDryRun` with exactly these fields has been recorded.
     pub fn contains_dry_run(&self, remote: &str, branch: &str, force: bool) -> bool {
         self.recorded().iter().any(|c| match c {
             RecordedCall::PushDryRun {
@@ -279,7 +200,6 @@ impl RecordingExecutor {
         })
     }
 
-    /// Every recorded `fetch` invocation as `(root, remote)` (issue #27).
     pub fn fetches(&self) -> Vec<(PathBuf, Option<String>)> {
         self.recorded()
             .iter()
@@ -297,13 +217,10 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
-        // Recorded before the counter: a test that waits on `log_call_count`
-        // must then be able to read the matching `log_opts` entry too.
         self.log_opts
             .lock()
             .expect("log opts mutex")
             .push(opts.clone());
-        *self.log_calls.lock().expect("log mutex") += 1;
         self.inner.log(root, opts)
     }
 
@@ -496,7 +413,6 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn clone(&self, url: &str, dest: &Path, depth: Option<usize>) -> TgResult<()> {
-        // `clone` collides with `Clone::clone`; disambiguate via the trait.
         GitExecutor::clone(&*self.inner, url, dest, depth)
     }
 
@@ -731,8 +647,6 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
-        // Transparent wrapper: the port's default rejects, and a CLI engine
-        // behind this wrapper can genuinely check a patch.
         self.inner.check_patch(root, patch)
     }
 
@@ -802,9 +716,6 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
-        // Counted rather than recorded verbatim: a created patch is a read, and what
-        // a suite needs to see is that the dialog asked once per change of settings
-        // and not once per frame.
         self.patch_reads
             .lock()
             .expect("patch reads mutex")
@@ -841,8 +752,6 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
-        // Transparent wrapper: the merge preview (issue 28) reads its
-        // numstat through the raw path, and the wrapped engine must answer.
         self.inner.run_raw(root, args)
     }
 }
@@ -860,8 +769,6 @@ pub fn scratch_root(leaf: &str) -> PathBuf {
     std::env::temp_dir().join(format!("turbogit-uitests-{:016x}/{leaf}", hasher.finish()))
 }
 
-/// Poll `f` every 25 ms until it returns `true` or `ms` elapses.
-///
 /// The predicate is checked **before** the deadline, so a check landing on the
 /// final instant still counts. That ordering is what lets a spawned git worker
 /// that finishes just inside its budget pass; swapping the two checks is the
@@ -869,8 +776,6 @@ pub fn scratch_root(leaf: &str) -> PathBuf {
 ///
 /// Returns `false` on timeout rather than panicking: what a timeout means
 /// differs per suite, so that wording is the caller's.
-///
-/// `FnMut`, not `Fn`, because some pollers repaint the harness between checks.
 pub fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
     let start = Instant::now();
     loop {

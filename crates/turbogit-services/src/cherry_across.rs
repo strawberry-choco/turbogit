@@ -1,13 +1,3 @@
-//! Cherry-pick across repositories (issue 16, screen 05): apply one or more
-//! source commits onto several target repositories.
-//!
-//! Cross-repo picks transport the source commits by fetching the source
-//! repository's objects into each target (a local-path fetch through the
-//! port's `fetch`) and running a real cherry-pick there. A conflicted pick
-//! therefore leaves a genuine held cherry-pick state — conflicted files and
-//! `CHERRY_PICK_HEAD` — which the run monitor's Resolve deep link opens;
-//! nothing is ever auto-resolved.
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -20,56 +10,34 @@ use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
 use crate::integrate_service;
 
-/// How far back the already-present scan looks.
 const PRESENT_SCAN: usize = 500;
 
-/// The predicted risk of applying a commit selection to one target repo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetRisk {
-    /// Every pick checks clean against identical file content.
     Low,
-    /// The picks apply, but the touched files drifted from the source's
-    /// parent versions — offsets and surprises are likely.
     Medium,
-    /// At least one pick is predicted to conflict.
     High,
 }
 
-/// The prediction for one commit against one target repo.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickForecast {
-    /// `git apply --check` passes and the touched files match the source's
-    /// parent versions.
     CleanApply,
-    /// The patch applies, but the touched files drifted — medium risk.
     CleanApplyDrifted,
-    /// The patch does not apply; `failed_hunks` is how many of the patch's
-    /// hunks overlap. The run will stop for manual resolution.
     Conflict { failed_hunks: usize },
-    /// A commit with the same subject is already in the target's history.
     AlreadyPresent,
 }
 
-/// The prediction for one target repo (one row of the targets table).
 #[derive(Clone, Debug)]
 pub struct TargetForecast {
     pub root: RootId,
     pub name: String,
-    /// How many commits the selection holds.
     pub total: usize,
-    /// How many will actually be attempted (not already present).
     pub applies: usize,
     pub risk: TargetRisk,
-    /// A repo-level reason the run will skip this target entirely
-    /// ("working tree is dirty"); `None` when the target can run.
     pub blocked: Option<String>,
-    /// One forecast per picked commit, in application order.
     pub picks: Vec<PickForecast>,
 }
 
-/// Predict, for every target repo, how the picked commits will land: how
-/// many apply, at what risk, and per-commit outcome. Reads only — a check
-/// never mutates the target. `targets` are (id, name, path) triples.
 pub fn forecast(
     exec: &dyn GitExecutor,
     source: &Path,
@@ -77,7 +45,6 @@ pub fn forecast(
     targets: &[(RootId, String, PathBuf)],
 ) -> Vec<TargetForecast> {
     let source_subjects: HashSet<String> = picks.iter().map(|c| subject(&c.message)).collect();
-    // Patch texts are per source commit, shared across targets.
     let mut patches: HashMap<String, Patch> = HashMap::new();
 
     targets
@@ -148,7 +115,6 @@ pub fn forecast(
         .collect()
 }
 
-/// The files a commit touches, for the drift comparison.
 fn touched_files(exec: &dyn GitExecutor, source: &Path, pick: &Commit) -> Vec<PathBuf> {
     exec.commit_files(source, &pick.id)
         .unwrap_or_default()
@@ -157,9 +123,6 @@ fn touched_files(exec: &dyn GitExecutor, source: &Path, pick: &Commit) -> Vec<Pa
         .collect()
 }
 
-/// Whether any touched file's content at the target's HEAD differs from the
-/// source commit's parent version (or its presence differs). A drifted file
-/// still applies — with offsets — so it rates medium risk.
 fn files_drifted(exec: &dyn GitExecutor, source: &Path, target: &Path, pick: &Commit) -> bool {
     let parent: Option<String> = pick.parents.first().cloned();
     touched_files(exec, source, pick).iter().any(|path| {
@@ -175,19 +138,6 @@ fn show(exec: &dyn GitExecutor, root: &Path, rev: &str, path: &Path) -> Option<S
     exec.show_file(root, rev, path).ok()
 }
 
-/// Anything tracked that is modified, staged, or conflicted counts as a
-/// dirty tree; unversioned and ignored files do not block a pick.
-///
-/// **This is not the repository-state ladder's dirty rule, on purpose.** It
-/// counts anything that is not unversioned or ignored, so the two disagree in
-/// both directions: an unversioned-only tree is clean here and dirty to
-/// `theme::RepoState::is_dirty`, while a conflicted change *entry* — which the
-/// ladder does not read, it reads the separate conflicted-path list — blocks a
-/// pick here and is not `Conflict` there. Reconciling them is a product
-/// question, and it crosses a layer boundary, so it is not a refactor: the
-/// disagreement is pinned on both sides
-/// (`tests/cherry_across.rs::apply_to_root_refuses_a_target_whose_only_change_is_a_conflicted_entry`
-/// and `theme.rs`'s `is_dirty` truth table) until a human rules.
 fn is_dirty(status: &turbogit_domain::model::RootStatus) -> bool {
     use turbogit_domain::model::ChangeStatus::*;
     status
@@ -196,15 +146,6 @@ fn is_dirty(status: &turbogit_domain::model::RootStatus) -> bool {
         .any(|c| !matches!(c.status, Unversioned | Ignored))
 }
 
-/// How many of the patch's hunks would not apply, asked of the **Git engine**
-/// one hunk at a time.
-///
-/// This used to match git's `error: patch failed: <file>:<line>` locations
-/// against the patch's own `@@` headers — a reading that only worked under the
-/// CLI adapter, because the port's failure channel is git's prose. The value
-/// says how many hunks there are and `check_patch` says which of them apply, so
-/// neither the header scan nor the stderr parse is needed (`ADR-0022`).
-///
 /// A hunk that checks clean alone can still fail as part of the whole, so a
 /// caller that already knows the whole failed keeps `.max(1)`.
 pub fn failed_hunks(exec: &dyn GitExecutor, root: &Path, patch: &Patch) -> usize {
@@ -218,9 +159,6 @@ pub fn failed_hunks(exec: &dyn GitExecutor, root: &Path, patch: &Patch) -> usize
                     old_path: file.old_path.clone(),
                     new_path: file.new_path.clone(),
                     combined: file.combined,
-                    // The blob pair describes the pre-image git just checked;
-                    // per hunk it is at best redundant and at worst a stale
-                    // claim about the index.
                     headers: file
                         .headers
                         .iter()
@@ -235,13 +173,10 @@ pub fn failed_hunks(exec: &dyn GitExecutor, root: &Path, patch: &Patch) -> usize
         .count()
 }
 
-/// The subject (first message line) of a commit — the identity used for
-/// already-present detection across repositories, where SHAs always differ.
 pub fn subject(message: &str) -> String {
     subject_of_message(message).to_string()
 }
 
-/// The subjects of `root`'s recent history, for already-present detection.
 fn history_subjects(exec: &dyn GitExecutor, root: &Path) -> TgResult<Vec<String>> {
     Ok(exec
         .log(
@@ -256,15 +191,10 @@ fn history_subjects(exec: &dyn GitExecutor, root: &Path) -> TgResult<Vec<String>
         .collect())
 }
 
-/// Apply `commits` (SHAs, in the given application order) onto `root`, whose
-/// repository does not share history with `source`. The source's objects are
-/// fetched once up front; a commit whose subject already exists in the
-/// target's history is skipped rather than duplicated.
-///
 /// `stop_on_conflict` is the run's policy: on a conflicted pick the held
 /// state is left in place for manual resolution and the remaining commits
 /// are not attempted (`Err`); with the policy off the held pick is aborted
-/// and the remaining commits still run — the summary `Err` then reports how
+/// and the remaining commits still run, the summary `Err` then reports how
 /// many applied and what failed.
 pub fn apply_to_root(
     exec: &dyn GitExecutor,
@@ -279,7 +209,6 @@ pub fn apply_to_root(
         ));
     }
     exec.fetch(root, Some(&source.to_string_lossy()))?;
-    // sha -> subject, resolved once from the source's own history.
     let subjects: HashMap<String, String> = exec
         .log(
             source,
@@ -304,12 +233,9 @@ pub fn apply_to_root(
             Err(e) => {
                 let held = integrate_service::operation_in_progress(exec.holding_operation(root));
                 if held && !stop_on_conflict {
-                    // Policy off: release the held pick and move on.
                     let _ = exec.abort(root, OwnedOperation::CherryPick);
                 }
                 if stop_on_conflict {
-                    // Hold the conflict for manual resolution; this repo's
-                    // remaining commits are not attempted.
                     return Err(e);
                 }
                 failures.push(format!("{}: {}", short_commit_ref(commit), first_line(&e)));
@@ -327,8 +253,6 @@ pub fn apply_to_root(
     }
 }
 
-/// First line of a failure — same primitive as a subject, deliberately not
-/// named as one, because an error's first line is failure prose.
 fn first_line(e: &TgError) -> String {
     subject_of_message(&e.to_string()).to_string()
 }

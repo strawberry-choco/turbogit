@@ -1,17 +1,3 @@
-//! Reading a patch's **provenance** — the header a git-format patch carries ahead
-//! of its first `diff --git` section.
-//!
-//! The engine owns git's diff syntax (`ADR-0022`), and this is the other half of
-//! that ownership: a patch produced by `git format-patch` or `git show` states who
-//! wrote it and what the commit said, and the apply surface fills its own fields
-//! from that rather than asking the developer to retype it. The reading stops at
-//! the section boundary, which is the assertion that matters most here — the patch
-//! body is content, and content is free to contain a line that looks like a header.
-//!
-//! One case runs against **git's own output**, because a header format is a fact
-//! about the producer: a suite that only reads text written in this file would be
-//! asserting that this file and the service agree, not that a real patch parses.
-
 use std::path::{Path, PathBuf};
 use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use turbogit_engine_api::patch::read_provenance;
@@ -38,7 +24,6 @@ fn repo(parent: &Path) -> PathBuf {
     dir
 }
 
-/// A real `git format-patch -1` file, read the way the apply window reads one.
 #[test]
 fn git_own_format_patch_output_names_its_author_and_subject() {
     let tmp = tempfile::tempdir().unwrap();
@@ -71,7 +56,6 @@ fn git_own_format_patch_output_names_its_author_and_subject() {
     );
 }
 
-/// The `[PATCH 2/3]` decoration is git's envelope, not the subject's own text.
 #[test]
 fn the_bracketed_patch_decoration_is_stripped_from_the_subject() {
     let seen = read_provenance(
@@ -95,8 +79,6 @@ diff --git a/x.txt b/x.txt
     assert_eq!(seen.author.as_deref(), Some("Grace <grace@example.com>"));
 }
 
-/// A subject that genuinely opens with a bracket keeps it: the decoration is
-/// recognised by its shape, not by any bracket being there.
 #[test]
 fn a_subject_that_really_begins_with_a_bracket_keeps_it() {
     let seen = read_provenance(
@@ -110,7 +92,6 @@ diff --git a/x.txt b/x.txt
     assert_eq!(seen.subject.as_deref(), Some("[RFC] Try a new reader"));
 }
 
-/// A plain `git diff` file has no header at all, and absence is an answer.
 #[test]
 fn a_plain_diff_patch_carries_no_provenance() {
     assert!(
@@ -127,10 +108,6 @@ fn a_plain_diff_patch_carries_no_provenance() {
     );
 }
 
-/// The one that makes the reader safe rather than merely convenient: everything
-/// after the first `diff --git` is the patch's **content**, and content can name
-/// anything. A header read that wandered into the body would let a patch file
-/// invent an author for the developer's own commit.
 #[test]
 fn the_body_of_the_patch_is_never_read_as_its_header() {
     let seen = read_provenance(
@@ -149,9 +126,6 @@ fn the_body_of_the_patch_is_never_read_as_its_header() {
     );
 }
 
-/// The two git dump formats disagree on the author's field name — `format-patch`
-/// writes `From:`, `git show` writes `Author:` — and a reader that knew only one
-/// would silently discard provenance from the other.
 #[test]
 fn a_git_show_style_header_is_read_too() {
     let seen = read_provenance(

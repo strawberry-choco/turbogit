@@ -1,16 +1,3 @@
-//! Issue 15 — Log commit actions: cherry-pick to…, revert commit, create
-//! branch here, offered from an Actions section in the commit-details pane
-//! (screen 09).
-//!
-//! Headless kittest harness driving [`turbogit_ui::ui::render`] end-to-end
-//! over a seeded repo (real git, tempdir):
-//!
-//! - `main` with `c1` ← `c2` (c2 adds `b.txt`)
-//! - `feature` forked at `c1` with one extra commit
-//!
-//! Assertions use only public surfaces: painted output, public `AppState`
-//! transitions, and the real git state of the seeded repo.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -29,10 +16,8 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::Palette;
 
-// --- git fixture ---------------------------------------------------------------
-
 /// `git` WITHOUT asserting success, for reading a ref that is expected to be
-/// absent — `git rev-parse --verify --quiet` exits non-zero when the ref does
+/// absent, `git rev-parse --verify --quiet` exits non-zero when the ref does
 /// not exist, and that non-zero exit is the answer.
 ///
 /// The OPPOSITE contract from `git_seed::git`, which asserts success: the non-zero
@@ -84,10 +69,6 @@ fn seeded_repo() -> Seed {
     }
 }
 
-// --- harness -------------------------------------------------------------------
-
-/// Answer every registered root's log through the production event path. A
-/// `refresh` drops the cache, so a test that watches a rewrite warm again.
 fn warm_logs(harness: &mut Harness<'_, AppState>) {
     let engine = CliExecutor {
         settings: VcsSettings::default(),
@@ -112,10 +93,6 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
     log_harness_over(seed.project.clone())
 }
 
-/// The log shell over any project directory, with its logs warm.
-///
-/// The warm-up stays local because it answers each root's log through the production
-/// `AppEvent::LogLoaded` channel, which is this suite's subject.
 fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     let mut state = AppState::new(project);
     let engine = CliExecutor {
@@ -143,8 +120,6 @@ fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     harness
 }
 
-/// The new-branch dialog's own row for `branch`. The branches pane paints rows
-/// with the same labels, and the dialog's rows sit leftmost.
 fn picker_row<'h>(harness: &'h Harness<'_, AppState>, branch: &'h str) -> egui_kittest::Node<'h> {
     harness
         .query_all_by_label(branch)
@@ -157,12 +132,10 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// A commit row's accessibility label: the short reference, then the subject.
 fn row_label(id: &str, subject: &str) -> String {
     format!("{} {subject}", short(id))
 }
 
-/// Wait until `pred` holds on the harness state.
 fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
     for _ in 0..300 {
         harness.step();
@@ -178,11 +151,6 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
     );
 }
 
-// --- Cycle 1: the commit's menu offers the actions -----------------------------
-
-/// The details pane used to carry an ACTIONS group with these verbs. A right-click
-/// on the commit row is now the one place they live, so the test keeps its shape
-/// and changes only its driver: the row is right-clicked rather than selected.
 #[test]
 fn the_commit_menu_offers_the_actions_the_details_pane_used_to() {
     let seed = seeded_repo();
@@ -193,16 +161,12 @@ fn the_commit_menu_offers_the_actions_the_details_pane_used_to() {
     assert_painted(&harness, "Cherry-pick to…");
     assert_painted(&harness, "Revert commit");
     assert_painted(&harness, "New branch");
-    // The group title and its alert box went with the group.
     assert_not_painted(&harness, "ACTIONS");
 }
-
-// --- Cycle 2: revert with confirmation, refreshes the graph --------------------
 
 #[test]
 fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
     let seed = seeded_repo();
-    // The default settings protect main; this run exercises the happy path.
     let mut harness = log_harness(&seed);
     harness
         .state_mut()
@@ -214,7 +178,6 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
     click_menu_item(&mut harness, "Copy hash", "Revert commit");
     settle_quiet(&mut harness);
 
-    // Confirmation gate first: the revert must not run before OK.
     assert!(
         harness.state().ui.confirm.is_some(),
         "revert must ask for confirmation before dispatching"
@@ -222,8 +185,6 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
     harness.get_by_label("OK").click();
     settle_quiet(&mut harness);
 
-    // The revert commit appears in the refreshed graph (production event
-    // path: OpCompleted → refresh → LogLoaded → cache → repaint).
     wait_for(&mut harness, |s| {
         s.caches
             .log(&s.selected_root.clone().unwrap())
@@ -242,7 +203,6 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
             .is_some_and(|t| t.message.contains("Revert")),
         "a completed revert surfaces feedback"
     );
-    // The revert really committed: HEAD's subject is the inverse commit.
     let subject = git(&seed.alpha, &["log", "-1", "--format=%s"]);
     assert!(
         subject.to_lowercase().starts_with("revert"),
@@ -250,24 +210,15 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
     );
 }
 
-// --- Cycle 3: cherry-pick to a chosen branch -----------------------------------
-
 #[test]
 fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
     let seed = seeded_repo();
     let mut harness = log_harness(&seed);
 
-    // Pick a main commit to apply onto feature.
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     click_menu_item(&mut harness, "Copy hash", "Cherry-pick to…");
     settle_quiet(&mut harness);
 
-    // The picker lists the repo's local branches. `main` is the branch the work
-    // is standing on, so it is refused as the current branch — the picker states
-    // one reason per row, and this one wins over the protection `main` also
-    // carries, because no setting change turns the branch you are on into a
-    // destination. (The hover text that goes with it is pinned by
-    // `commit_context_menu.rs`, which can drive a pointer into the row.)
     assert!(
         harness.state().ui.dialog == Some(Dialog::CherryPickTarget),
         "the action must open the target-branch picker"
@@ -281,9 +232,6 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
             .is_disabled(),
         "the current branch is refused, and stays rendered rather than vanishing"
     );
-    // Since the branch-tree extraction the branches pane paints its rows as
-    // Buttons too, so "feature" matches twice; the picker's row is the one
-    // right of the leftmost branches pane.
     let feature: Vec<_> = harness
         .query_all_by_label_contains("feature")
         .filter(|n| {
@@ -298,8 +246,6 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
     );
     let mut sorted = feature;
     sorted.sort_by(|a, b| a.rect().left().total_cmp(&b.rect().left()));
-    // The dialog's picker renders in a default-positioned Area at the far
-    // left; the pane's row sits right of the sidebar.
     sorted.first().expect("picker row").click();
     settle_quiet(&mut harness);
 
@@ -308,7 +254,6 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
             .as_ref()
             .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success)
     });
-    // c2's change landed on feature exactly once…
     let count = git(&seed.alpha, &["rev-list", "--count", "feature"])
         .trim()
         .parse::<usize>()
@@ -322,25 +267,16 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
         "two\n",
         "the cherry-picked commit's change must be on the target branch"
     );
-    // …and the original checkout was restored.
     assert_eq!(
         git(&seed.alpha, &["symbolic-ref", "--short", "HEAD"]).trim(),
         "main"
     );
 }
 
-// --- Cycle 4: create branch here prefills the new-branch dialog ----------------
-
-/// New branch creates the branch WHERE THE ROW WAS RIGHT-CLICKED, not at the
-/// tip, and leaves the current branch checked out. The repository is the
-/// assertion, not a dialog field: every field could be right while the ref git
-/// wrote points at the tip instead.
 #[test]
 fn new_branch_from_the_menu_creates_the_branch_at_the_right_clicked_commit() {
     let seed = seeded_repo();
     let mut harness = log_harness(&seed);
-    // `c1` is the middle commit, so a branch created at the tip and one created
-    // at the clicked commit cannot be mistaken for each other.
     right_click_row(&mut harness, &row_label(&seed.c1, "alpha: first commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
     settle_quiet(&mut harness);
@@ -371,9 +307,6 @@ fn new_branch_from_the_menu_creates_the_branch_at_the_right_clicked_commit() {
     );
 }
 
-/// Cancelling the new-branch dialog is a decision not to create a branch, so
-/// the repository has to say so: a name good enough to create from, the real
-/// Cancel affordance, and then no ref and no commit anywhere.
 #[test]
 fn cancelling_the_new_branch_dialog_from_the_menu_creates_nothing() {
     let seed = seeded_repo();
@@ -407,11 +340,6 @@ fn cancelling_the_new_branch_dialog_from_the_menu_creates_nothing() {
     );
 }
 
-/// "Start from:" has to read as whatever it names. A branch reads as a branch
-/// name, unchanged; a commit reads as the short reference the log shows
-/// everywhere, with its subject as a quiet annotation beside it — never the
-/// 40-character hash, which is neither legible nor a value anyone recognises,
-/// and never at the cost of the one control that changes the base.
 #[test]
 fn the_start_from_row_reads_a_commit_as_a_short_reference_and_its_subject() {
     let seed = seeded_repo();
@@ -422,7 +350,6 @@ fn the_start_from_row_reads_a_commit_as_a_short_reference_and_its_subject() {
     settle_quiet(&mut harness);
 
     assert_painted(&harness, &short(&seed.c1));
-    // A 40-character hash is not a base anyone can read.
     assert_not_painted(&harness, &seed.c1);
     let subject = painted_galleys(&harness)
         .into_iter()
@@ -438,10 +365,6 @@ fn the_start_from_row_reads_a_commit_as_a_short_reference_and_its_subject() {
     );
 }
 
-/// The branch picker lists branches, and a commit is not one of them. So the
-/// base the log named survives opening the picker — the row above still states
-/// it, legibly — and picking a branch is how you change one's mind: the base
-/// becomes that branch, the picker closes, and the row reads as a branch name.
 #[test]
 fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
     let seed = seeded_repo();
@@ -457,8 +380,6 @@ fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
         NewBranchBase::Commit(seed.c1.clone()),
         "opening the picker does not drop the commit the log named"
     );
-    // The row above still names it, so a list with nothing marked is not a
-    // mystery.
     assert_painted(&harness, &short(&seed.c1));
     assert!(
         painted_galleys(&harness)
@@ -467,11 +388,6 @@ fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
         "subject included: the base stays readable while the picker is open"
     );
 
-    // Picking a branch is the way out: it replaces the commit, closes the list,
-    // and the row reads as a branch name again. The branches pane paints rows
-    // with the same labels, so the picker's row is the leftmost — the dialog is a
-    // default-positioned area at the far left (the same disambiguation the
-    // cherry-pick test above makes).
     picker_row(&harness, "feature").click();
     settle_quiet(&mut harness);
     assert_eq!(
@@ -492,9 +408,6 @@ fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
     assert_painted(&harness, "feature");
 }
 
-// --- Cycle 4b: drop commit, end to end ----------------------------------------
-
-/// The commit count of `main`, read the way the tests reason about it.
 fn count_of(dir: &Path, rev: &str) -> usize {
     git(dir, &["rev-list", "--count", rev])
         .trim()
@@ -502,11 +415,6 @@ fn count_of(dir: &Path, rev: &str) -> usize {
         .expect("a commit count")
 }
 
-/// A project whose `feature` branch has a commit with a DESCENDANT on it — the
-/// only shape a "drop one, keep the rest" assertion can be made on. The seed is
-/// `test_support::git_seed`'s, the same history the app suite's settlement
-/// tests rewrite, so both measure the same operation. Returns the project, the
-/// repository, the commit to drop and its descendant.
 fn history_to_rewrite() -> (TempDir, PathBuf, PathBuf, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("ws");
@@ -517,7 +425,6 @@ fn history_to_rewrite() -> (TempDir, PathBuf, PathBuf, String, String) {
     (tmp, project, repo, target, descendant)
 }
 
-/// Right-click `subject`'s row, take Drop commit, and stop at the preflight.
 fn open_rewrite_preflight(harness: &mut Harness<'_, AppState>, c1: &str, subject: &str) {
     right_click_row(harness, &row_label(c1, subject));
     click_menu_item(harness, "Copy hash", "Drop commit");
@@ -529,12 +436,6 @@ fn open_rewrite_preflight(harness: &mut Harness<'_, AppState>, c1: &str, subject
     );
 }
 
-/// Confirming removes exactly that one commit, keeps the descendant that was
-/// built on it, and leaves the backup ref the recovery path restores from.
-///
-/// Every assertion is read back from the repository: the operation's own report
-/// is not the evidence that history moved, and a log that says one thing while
-/// git says another is the failure this ticket exists to prevent.
 #[test]
 fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
@@ -546,7 +447,6 @@ fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() 
     harness.get_by_label("Drop this commit").click();
     wait_for(&mut harness, |s| s.ui.toast.is_some());
 
-    // Exactly one commit fewer, and it is the one that was named.
     assert_eq!(
         count_of(&repo, "feature"),
         count_before - 1,
@@ -561,8 +461,6 @@ fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() 
         subjects.contains("feature-3"),
         "and the commit built on it is not: {subjects}"
     );
-    // Its change came along with it, and the dropped commit's own change did
-    // not: the replay is the history minus one commit, not a squash of two.
     assert_eq!(
         std::fs::read_to_string(repo.join("feature-3.txt")).unwrap(),
         "3\n",
@@ -572,8 +470,6 @@ fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() 
         !repo.join("feature-2.txt").exists(),
         "and the dropped commit's change is not"
     );
-    // The safety net: a backup ref written at the pre-rewrite HEAD, which is
-    // what the recovery path restores from.
     assert_eq!(
         git(&repo, &["rev-parse", "refs/turbogit/preflight-backup"]).trim(),
         head_before,
@@ -585,20 +481,12 @@ fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() 
         "and the branch that was checked out is still checked out"
     );
 
-    // The log refreshed through the ordinary completion path — the surface makes
-    // no refresh call of its own, so a stale listing here would mean the ordinary
-    // path did not run. (The graph's own count line is the assertion: the
-    // dropped SUBJECT still shows in the changed-files pane until the selection
-    // follows the history, which is the next test's subject.)
     warm_logs(&mut harness);
     settle_quiet(&mut harness);
     assert_painted(&harness, "3 shown");
     assert_painted(&harness, "feature-3");
 }
 
-/// Right-click `subject`'s row, take Reword commit, write `message`, and stop at
-/// the preflight — the two steps of the verb, with the developer's typing
-/// standing in for the keystrokes the editor test drives for real.
 fn open_reword_preflight(
     harness: &mut Harness<'_, AppState>,
     c1: &str,
@@ -624,11 +512,6 @@ fn open_reword_preflight(
     );
 }
 
-/// Confirming a reword rewrites the commit with the new message and IDENTICAL
-/// content — the whole point of the verb, and the one thing it must never be
-/// mistaken for. Correcting a typo does not change what the commit did, so the
-/// tree is compared before and after, and every other assertion is read back from
-/// the repository rather than taken from the operation's own report.
 #[test]
 fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
     let (_tmp, project, repo, target, tip_before) = history_to_rewrite();
@@ -645,8 +528,6 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
     harness.get_by_label("Reword this commit").click();
     wait_for(&mut harness, |s| s.ui.toast.is_some());
 
-    // The message is the new one, and it is on the commit that holds this
-    // commit's place: a reword keeps the row, so the row is read by position.
     let message = git(&repo, &["log", "--format=%B", "-1", "feature~1"]);
     assert!(
         message.trim() == "feature: the second one",
@@ -663,16 +544,11 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
         count_before,
         "a reword changes no commit's place in the history, only the message"
     );
-    // Its change came along with it, which is what "identical content" means on
-    // disk and not only in the tree object.
     assert_eq!(
         std::fs::read_to_string(repo.join("feature-2.txt")).unwrap(),
         "2\n",
         "the reworded commit's own change is still in the working tree"
     );
-    // The old reference is dead as a commit IN the history: the branch no longer
-    // contains it. It survives in the object database, which is what the backup
-    // ref below is for.
     let on_branch = git(&repo, &["rev-list", "feature"]);
     assert!(
         !on_branch.contains(&target),
@@ -691,14 +567,9 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
         "and the branch that was checked out is still checked out"
     );
 
-    // The log refreshed through the ordinary completion path, and it now shows
-    // the new message.
     warm_logs(&mut harness);
     settle_quiet(&mut harness);
     assert_painted(&harness, "feature: the second one");
-    // The old subject is gone as a SUBJECT. Checked on a whole galley rather than
-    // as a substring, because the reworded commit's file is `feature-2.txt` and
-    // the changed-files pane still paints it — the name it is, not a message.
     assert!(
         !painted_galleys(&harness)
             .iter()
@@ -707,11 +578,6 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
     );
 }
 
-/// A reword keeps the row, so the selection has a commit to STAY on — but under
-/// a new hash, because every commit above a rewritten one is re-created. It
-/// follows the history to the commit that was reworded, through the shared
-/// reselection rule, and the pane never points at an id the repository no longer
-/// has as a commit in the log.
 #[test]
 fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
@@ -729,11 +595,6 @@ fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
         "feature: the second one",
     );
     harness.get_by_label("Reword this commit").click();
-    // The selection moves when the POST-rewrite log arrives, not when the
-    // operation returns — the cache is dropped by the refresh and refilled. The
-    // log's LENGTH cannot be the signal here: a reword does not change how many
-    // commits there are, so a pre-rewrite log already has the count this waits
-    // for. The new message is the arrival.
     wait_for(&mut harness, |s| {
         s.caches.log(&root).is_some_and(|cs| {
             cs.iter()
@@ -772,14 +633,9 @@ fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
         held,
         "and it names a commit the refreshed log actually holds"
     );
-    // The pane followed too: it describes the reworded commit's own change.
     assert_painted(&harness, "feature-2.txt");
 }
 
-/// A rewrite gives every descendant a new hash, so the selection cannot stay on
-/// the id it had — it follows the history to the commit that took the dropped
-/// commit's place. The pane keeps describing where the developer is, and never
-/// points at a commit the repository no longer has.
 #[test]
 fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places() {
     let (_tmp, project, repo, target, descendant_before) = history_to_rewrite();
@@ -792,8 +648,6 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
 
     open_rewrite_preflight(&mut harness, &target, "feature-2");
     harness.get_by_label("Drop this commit").click();
-    // The selection moves when the POST-rewrite log arrives, not when the
-    // operation returns — the cache is dropped by the refresh and refilled.
     wait_for(&mut harness, |s| {
         s.caches.log(&root).is_some_and(|cs| cs.len() == 3)
     });
@@ -823,23 +677,10 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
             .is_some_and(|cs| cs.iter().any(|c| c.id == selected)),
         "and it names a commit the refreshed log actually holds"
     );
-    // The pane followed: it describes the successor's change, and no longer the
-    // dropped commit's file. Only the changed-files pane paints paths, so this
-    // is the pane's own text.
     assert_painted(&harness, "feature-3.txt");
     assert_not_painted(&harness, "feature-2.txt");
 }
 
-/// A rewrite that git refuses is reported as a FAILURE, and the selection stays
-/// exactly where it was — a rewrite that moved nothing must not leave the pane
-/// pointing at a commit the app believes was re-created.
-///
-/// The trigger is a worktree that turns dirty after the preflight was built, so
-/// the refusal comes from git through the production dispatch path rather than
-/// from a menu gate: `git rebase -i` refuses to start, and nothing is replayed.
-/// (A content conflict is not reachable for a reword at all — no content
-/// changes, so every patch re-applies to the parent it was written against. The
-/// reachable failure is git declining the replay, and that is what this drives.)
 #[test]
 fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
@@ -851,7 +692,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         .expect("the log selected a repository");
     let head_before = git(&repo, &["rev-parse", "feature"]).trim().to_string();
 
-    // The developer is looking at the commit they are about to reword.
     harness
         .get_by_label(&row_label(&target, "feature-2"))
         .click();
@@ -868,10 +708,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         "feature-2",
         "feature: the second one",
     );
-    // The worktree goes dirty between the briefing and the confirm — the menu
-    // read it clean, and this is the gap a gate can never close on its own. A
-    // TRACKED file: an untracked one does not stop a rebase, so it would not be
-    // a refusal at all.
     let tracked = repo.join("feature-3.txt");
     let mut content = std::fs::read_to_string(&tracked).unwrap();
     content.push_str("an uncommitted edit\n");
@@ -885,7 +721,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
     });
     settle_quiet(&mut harness);
 
-    // Reported as a failure, by name, with git's own reason.
     let failure = harness
         .state()
         .ui
@@ -901,11 +736,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         "the failure names the verb and the commit it belongs to: {:?}",
         failure.message
     );
-    // What the failure carries is git's VERDICT, not git's words: the engine runs
-    // `rebase -i` through `Command::status()`, so the report is the non-zero exit
-    // and the app's own summary. The verb and the commit are named either way,
-    // which is what makes this a failure of a known operation rather than a bare
-    // error in a feed.
     assert!(
         failure.message.contains("git exited with code"),
         "and attributes the failure to git rather than leaving it bare: {:?}",
@@ -922,7 +752,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         "a refused rewrite never reads as a success"
     );
 
-    // Nothing moved, and the selection did not follow anything.
     assert_eq!(
         git(&repo, &["rev-parse", "feature"]).trim(),
         head_before,
@@ -941,7 +770,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         harness.state().ui.pending_reselect.is_none(),
         "and nothing is left waiting to move it after a rewrite that did not run"
     );
-    // The log the developer is reading still describes the repository.
     wait_for(&mut harness, |s| {
         s.caches.log(&root).is_some_and(|cs| cs.len() == 4)
     });
@@ -950,9 +778,6 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
     assert_painted(&harness, "feature-2");
 }
 
-/// Cancelling is a decision not to drop anything, and the repository has to say
-/// so: no ref written, no commit moved, and the pane still describing the commit
-/// it was showing.
 #[test]
 fn cancelling_the_drop_preflight_changes_nothing() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
@@ -992,14 +817,11 @@ fn cancelling_the_drop_preflight_changes_nothing() {
     assert_painted(&harness, "feature-2");
 }
 
-// --- Cycle 5: guardrails — protected branch / dirty worktree -------------------
 #[test]
 fn actions_are_blocked_with_an_explanation_on_protected_branches() {
     let seed = seeded_repo();
     let mut harness = log_harness(&seed);
 
-    // main is protected by the default settings and currently checked out:
-    // revert must be gated on its own item, not explained in a box elsewhere.
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     assert_menu_item_gated(&mut harness, "Copy hash", "Revert commit");
     click_menu_item(&mut harness, "Copy hash", "Revert commit");
@@ -1009,7 +831,6 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
         "a blocked revert must never reach the confirmation gate"
     );
 
-    // A dirty worktree additionally blocks cherry-pick, with its own reason.
     std::fs::write(seed.alpha.join("a.txt"), "uncommitted\n").unwrap();
     harness
         .state_mut()
@@ -1025,20 +846,12 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
     );
 }
 
-// --- Post-hoc undo with a repository-changed guard ------------------------------
-
-/// Reword the middle commit through both dialogs and wait until the post-hoc
-/// undo is armed.
 fn reword_and_arm_undo(harness: &mut Harness<'static, AppState>, target: &str) {
     open_reword_preflight(harness, target, "feature-2", "feature: the second one");
     harness.get_by_label("Reword this commit").click();
     wait_for(harness, |s| s.ui.rewrite_undo.is_some());
 }
 
-/// A successful reword's notification carries the undo: the success title is
-/// painted with an `Undo`
-/// control, and the control is a primary kit button — a `Palette::ACCENT`
-/// fill — not a greyed-out stub.
 #[test]
 fn the_reword_success_notification_carries_an_undo_control() {
     let (_tmp, project, _repo, target, _tip) = history_to_rewrite();
@@ -1057,11 +870,6 @@ fn the_reword_success_notification_carries_an_undo_control() {
     );
 }
 
-/// After a SECOND operation has run in the same root, the reword's undo is
-/// withheld, not offered-then-failed:
-/// the notification paints the repository-changed reason instead of an enabled
-/// `Undo`, the success title leaves the frame with it (assertion 2), and no
-/// accent fill rides the banner row at all (assertion 3, withheld = withheld).
 #[test]
 fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
     let (_tmp, project, repo, target, _tip) = history_to_rewrite();
@@ -1069,11 +877,6 @@ fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
 
     reword_and_arm_undo(&mut harness, &target);
 
-    // The second operation: a commit lands in the root (raw git, the way an
-    // external tool would), then ANY app operation on that root settles and
-    // re-runs the guard, which reads HEAD and finds it moved. The fetch is
-    // that trigger — deliberately no-op-adjacent, so the withholding is
-    // attributable to the repository state, not to what the operation did.
     commit(&repo, "e.txt", "4\n", "a second operation");
     let root = harness.state().selected_root.clone().unwrap();
     harness
@@ -1086,8 +889,6 @@ fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
     assert_painted(&harness, "Cannot undo commit message edit");
     assert_not_painted(&harness, "Commit message changed");
     assert_not_painted(&harness, "Undo");
-    // Withheld entirely, not painted inert: no ACCENT fill intersects the
-    // banner row the reason was painted on.
     let reason_rect = painted_galleys(&harness)
         .iter()
         .find(|g| g.text == "Cannot undo commit message edit — the repository has changed since")
@@ -1105,9 +906,6 @@ fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
     );
 }
 
-/// The undo is real: clicking it restores the dropped commit from the backup
-/// ref — the repository, not the notification, is the evidence. This is also
-/// assertion 1's drop half: the success notification carries the affordance.
 #[test]
 fn clicking_undo_after_a_drop_restores_the_dropped_commit() {
     let (_tmp, project, repo, target, _tip) = history_to_rewrite();
@@ -1146,10 +944,6 @@ fn clicking_undo_after_a_drop_restores_the_dropped_commit() {
     );
 }
 
-/// The undo-failed outcome is reachable, and its wording is its own:
-/// with the backup ref removed behind the app's back — HEAD has
-/// not moved, so the guard still holds the undo valid — the restore fails and
-/// the frame reports that, not the success title.
 #[test]
 fn an_undo_without_its_backup_reports_a_distinct_failure() {
     let (_tmp, project, repo, target, _tip) = history_to_rewrite();
@@ -1180,10 +974,6 @@ fn an_undo_without_its_backup_reports_a_distinct_failure() {
     );
 }
 
-/// The three outcome strings are three strings:
-/// success title, impossible reason and undo-failed wording
-/// never share text, for either covered verb — and the two verbs never share
-/// either, so a drop never reads as a reword.
 #[test]
 fn the_three_undo_outcomes_never_share_wording() {
     use turbogit_app::state::RewriteUndoVerb;

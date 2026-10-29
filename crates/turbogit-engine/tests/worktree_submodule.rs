@@ -1,10 +1,3 @@
-//! Issue 14 — Worktrees & Submodules tool tabs: the engine operations the
-//! tabs read through.
-//!
-//! Every test builds a real fixture repository with `git` on PATH and pins
-//! the CLI adapter's behavior for one operation: `worktree_list`'s dirty
-//! state, `worktree_remove`, and the submodule read/update/deinit trio.
-
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::git;
@@ -12,23 +5,12 @@ use turbogit_domain::model::{SubmoduleState, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-/// The executor under test with default settings (git resolved from PATH).
 fn engine() -> CliExecutor {
     CliExecutor {
         settings: VcsSettings::default(),
     }
 }
 
-// Both builders stay local, deliberately NOT `git_seed` recipes:
-// `temp_repo` must track `base.txt` at "base\n" (every worktree test writes to
-// `base.txt` and probes the result), and `temp_super_with_submodule` needs a
-// second repository as a clone source plus a `-c
-// protocol.file.allow=always` submodule add — a two-repository shape with a
-// gitlink, which no recipe produces.
-
-/// An initialized temp repository with one base commit on `main`. The
-/// returned path is canonicalized (macOS tempdirs are symlinked) so the
-/// engine's main-worktree filtering — a path comparison — matches.
 fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
@@ -42,12 +24,6 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
     (tmp, repo.canonicalize().unwrap())
 }
 
-// ------------------------------------------------------- worktree reads --
-
-/// `worktree_list` reports each linked worktree with its checked-out branch
-/// and an unset dirty flag: the list is decoupled from the dirty probe
-/// (ticket 01), so dirtiness is unknown here — see the `worktree_probe`
-/// suite for the pinned probe semantics and the probe's on-demand answers.
 #[test]
 fn worktree_list_reports_branch_and_probe_free_dirty() {
     let (_tmp, repo) = temp_repo("wt-dirty");
@@ -73,9 +49,6 @@ fn worktree_list_reports_branch_and_probe_free_dirty() {
     );
 }
 
-/// `worktree_remove` deletes a linked worktree: it refuses a dirty one
-/// without `force`, and `force` removes it — the directory is gone and the
-/// listing comes back empty.
 #[test]
 fn worktree_remove_refuses_dirty_without_force_and_removes_with_force() {
     let (_tmp, repo) = temp_repo("wt-remove");
@@ -102,11 +75,6 @@ fn worktree_remove_refuses_dirty_without_force_and_removes_with_force() {
     );
 }
 
-// ------------------------------------------------------ submodule reads --
-
-/// A superproject with one locally-added submodule. The child repo lives
-/// outside the superproject (`../child-src` relative to it) so the clone
-/// has a real source.
 fn temp_super_with_submodule(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let child = tmp.path().join("child-src");
@@ -123,8 +91,6 @@ fn temp_super_with_submodule(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf)
     git(&superproject, &["init", "-q", "-b", "main"]);
     git(&superproject, &["config", "user.email", "test@example.com"]);
     git(&superproject, &["config", "user.name", "Test"]);
-    // Newer git refuses the file transport for submodule clones by default;
-    // `-c` travels through GIT_CONFIG_PARAMETERS to the child clone.
     git(
         &superproject,
         &[
@@ -141,8 +107,6 @@ fn temp_super_with_submodule(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf)
     (tmp, superproject, child)
 }
 
-/// `submodule_status` reports the pinned HEAD commit, the recorded gitlink,
-/// and the up-to-date state for a fresh submodule (issue 14 pinned-vs-recorded).
 #[test]
 fn submodule_status_reports_pinned_and_recorded_for_fresh_submodule() {
     let (_tmp, repo, _child) = temp_super_with_submodule("sub-fresh");
@@ -156,13 +120,9 @@ fn submodule_status_reports_pinned_and_recorded_for_fresh_submodule() {
     assert_eq!(sha.len(), 40, "a full gitlink sha is reported");
 }
 
-/// Moving the submodule's HEAD to a newer commit (without recording it in
-/// the superproject) flips the state to needs-update and separates the
-/// pinned HEAD from the recorded gitlink.
 #[test]
 fn submodule_status_flags_needs_update_when_head_moves_off_record() {
     let (_tmp, repo, _child_src) = temp_super_with_submodule("sub-ahead");
-    // Move the SUBMODULE's HEAD (the checked-out copy), not the source repo.
     let sub_wc = repo.join("child");
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
     git(&sub_wc, &["add", "."]);
@@ -172,14 +132,10 @@ fn submodule_status_flags_needs_update_when_head_moves_off_record() {
     let sub = &subs[0];
     assert_eq!(sub.state, SubmoduleState::NeedsUpdate);
     assert_ne!(sub.head, sub.recorded);
-    // The recorded side stays at the old commit.
     let recorded = sub.recorded.as_deref().unwrap();
     assert_eq!(recorded.len(), 40);
 }
 
-/// `submodule_deinit` un-initializes the submodule (the status flips to
-/// uninitialized, HEAD reads None, the recorded gitlink survives), and
-/// `submodule_update` with `init` re-checks it out up to date again.
 #[test]
 fn submodule_deinit_then_update_round_trips() {
     let (_tmp, repo, _child) = temp_super_with_submodule("sub-cycle");
@@ -204,12 +160,9 @@ fn submodule_deinit_then_update_round_trips() {
     assert_eq!(subs[0].head, subs[0].recorded);
 }
 
-/// `submodule_update` on a needs-update submodule checks the recorded
-/// commit back out (the update action's core contract, issue 14).
 #[test]
 fn submodule_update_checks_recorded_commit_back_out() {
     let (_tmp, repo, _child_src) = temp_super_with_submodule("sub-update");
-    // Move the SUBMODULE's HEAD (the checked-out copy), not the source repo.
     let sub_wc = repo.join("child");
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
     git(&sub_wc, &["add", "."]);

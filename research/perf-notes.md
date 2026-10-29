@@ -1,4 +1,4 @@
-# Performance Probing — Notes & Benchmark Table
+# Performance probing. Notes & benchmark table
 
 > **Caveat up front.** The scripted tasks below (5k-line render, 10k-commit history)
 > require *hands-on* execution on each tool. That is not possible in this sandbox (no GUI
@@ -6,7 +6,7 @@
 > **documented/vendor-claimed/review-reported** behavior only, with confidence marked.
 > Items marked ⚠ are estimates from reviews, not measured here, and need a hands-on pass.
 
-## Benchmark Table (documented behavior, 2026-08-02)
+## Benchmark table (documented behavior, 2026-08-02)
 
 | Tool | Engine | 5k-line diff render | Large-repo scroll | Memory profile | Confidence |
 | --- | --- | --- | --- | --- | --- |
@@ -29,25 +29,25 @@
 | P4Merge | Native | Good | Good | Low | Med |
 | WinMerge | Native (Win) | Good | Good | Low | Med |
 
-## Key Findings
+## Key findings
 1. **Native > Electron > JVM** for steady-state memory and large-diff smoothness. Sublime
    Merge/Fork/Tower (native) and lazygit/gitui (Rust TUI) lead; GitKraken/VS Code/GitHub
    Desktop (Electron) are repeatedly cited as heavy on large repos.
 2. **difftastic has a real memory cliff** on files with many changes (its own "Known
-   Issues"); this is the central risk for making structural diff the *default* — it must be
+   Issues"); this is the central risk for making structural diff the *default*, it must be
    opt-in or bounded for 5k-line refactors (see `recommendations.md` R3).
 3. **Virtualization is the unlock.** VS Code's diff editor and the native GUIs all virtualize;
    TurboGit's existing `egui_extras::Table` virtualization (project MEMORY) is the right
    primitive for the diff view too. **Superseded 2026-09-28:** the parenthetical is the
-   error — `egui_extras` is used nowhere in TurboGit, and the "project MEMORY" it credits
+   error, `egui_extras` is used nowhere in TurboGit, and the "project MEMORY" it credits
    was never checked against the tree. The diff viewer virtualizes over
    `egui::ScrollArea::show_rows` (ADR-0014) and the commit list does the same (ADR-0026). The
    finding that virtualization is the unlock stands.
 4. **Rust TUI proves the floor.** lazygit/gitui show a Rust git UI can be the fastest diff
-   surface at trivial memory — validates TurboGit's Rust/egui choice for flow, separate from
+   surface at trivial memory, validates TurboGit's Rust/egui choice for flow, separate from
    rendering fidelity.
 
-## Scripted-Task Status
+## Scripted-task status
 | Task | Status |
 | --- | --- |
 | T1 5k-line render + scroll | ⚠ Documented only; hands-on blocked in sandbox |

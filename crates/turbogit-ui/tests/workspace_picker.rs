@@ -1,33 +1,3 @@
-//! Issue #34 follow-up — the workspace picker.
-//!
-//! The picker's rows used to be reachable only through the topbar's
-//! workspace selector, which discarded every click; this suite pins the
-//! real picker end-to-end (headless egui_kittest harness driving
-//! [`turbogit_ui::ui::render`], same pattern as `welcome.rs` with
-//! locally-defined helpers so the file is self-contained).
-//!
-//! Covered here:
-//! - the command palette's `Switch Workspace…` action opens the picker
-//!   (`Open Project…` / `Attach Workspace Root…` become reachable)
-//! - the sidebar's workspace header row is the mouse trigger: a real click
-//!   anywhere in the band opens the same picker, anchored to the row, and the
-//!   row carries a hover affordance (hand cursor + "Switch workspace" tooltip)
-//! - a `Workspace` recent row deep-scans back into the shell (both repos,
-//!   including one beyond the bounded scanner's depth)
-//! - a `Project` recent row takes the bounded path
-//! - the current workspace is always a row, marked `current`, and clicking
-//!   it is inert — the click must not re-dispatch and reset the focused root
-//!   or drop caches (this is the assertion the original stub would have
-//!   failed)
-//! - a recents row whose directory vanished toasts instead of dispatching
-//! - the picker's folder-picker entries go through the same seam as the
-//!   Welcome cards
-//! - Esc / click-outside dismiss the dropdown
-//!
-//! The global recents store (ADR-0005) and the directory-picker seam are
-//! injected per test: a temp config dir stands in for the OS config dir and
-//! closures stand in for the native folder picker.
-
 use egui::accesskit::Role;
 use egui::epaint::color::ColorMode;
 use egui::{Color32, Shape};
@@ -40,13 +10,6 @@ use turbogit_app::recents::{RecentKind, RecentProject, Recents, recents_file, sa
 use turbogit_app::state::{AppState, ToastKind};
 use turbogit_ui::theme::{ITEM_SPACING, Palette};
 
-// --- Fixture seeding -----------------------------------------------------------
-
-/// Create a real repository with a deterministic initial branch (`main`).
-///
-/// Kept local, not `git_seed::repo_with_one_commit`: this seeds `git init` and
-/// nothing else, because these repos exist to be FOUND by the scanner and a
-/// commit is not part of that question.
 fn seed_repo(base: &Path, name: &str) -> PathBuf {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).expect("create repo dir");
@@ -54,8 +17,6 @@ fn seed_repo(base: &Path, name: &str) -> PathBuf {
     dir
 }
 
-/// A workspace container with two nested repos, one strictly deeper than the
-/// bounded scanner's `SCAN_MAX_DEPTH` so only the deep scan finds it.
 fn seed_workspace(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let ws = base.join("ws");
     std::fs::create_dir_all(&ws).expect("create workspace dir");
@@ -76,7 +37,6 @@ fn recent(path: &Path, name: &str, kind: RecentKind, repo_count: Option<usize>) 
     }
 }
 
-/// Seed the global recents file under a TEMP config dir (never the real one).
 fn seed_recents(config_dir: &Path, projects: &[RecentProject]) {
     let file = recents_file(config_dir);
     std::fs::create_dir_all(file.parent().unwrap()).expect("create config dir");
@@ -95,12 +55,6 @@ struct Fixture {
     _config: tempfile::TempDir,
 }
 
-/// A harness over `launch` (empty → Welcome) with `picker` as the injected
-/// folder picker and `recents` seeded into a temp config dir first.
-///
-/// The shared constructor's per-frame worker drain is load-bearing here: the
-/// scanner reads go through the app's own worker, so draining is what makes
-/// their answers observable at all.
 fn fixture(
     launch: Option<PathBuf>,
     picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
@@ -119,12 +73,10 @@ fn fixture(
     }
 }
 
-/// Shell-up fixture: launched straight into `launch` with no picker wired.
 fn fixture_at(launch: PathBuf) -> Fixture {
     fixture(Some(launch), Some(Box::new(|| None)), &[])
 }
 
-/// Shell-up fixture whose injected folder picker returns `pick`.
 fn fixture_at_with_picker(
     launch: PathBuf,
     pick: impl Fn() -> Option<PathBuf> + Send + Sync + 'static,
@@ -132,24 +84,16 @@ fn fixture_at_with_picker(
     fixture(Some(launch), Some(Box::new(pick)), &[])
 }
 
-/// Shell-up fixture with seeded recents.
 fn fixture_at_with_recents(launch: PathBuf, recents: &[RecentProject]) -> Fixture {
     fixture(Some(launch), Some(Box::new(|| None)), recents)
 }
 
-/// Shell-up fixture, sized so the sidebar's rail is on screen: it is a
-/// wide-window region (`shell::MIN_SIDEBAR_WINDOW_WIDTH`), and the rail is
-/// where the picker lives on the header. The app's own default window is
-/// 1280 wide, so this is the ordinary case rather than a test convenience.
 fn fixture_at_wide(launch: PathBuf, recents: &[RecentProject]) -> Fixture {
     let mut fx = fixture(Some(launch), Some(Box::new(|| None)), recents);
     fx.harness.set_size(egui::vec2(1280.0, 768.0));
     fx
 }
 
-// --- Label helpers -------------------------------------------------------------
-
-/// The available button labels, for failure messages.
 fn button_labels(harness: &Harness<'_, AppState>) -> Vec<String> {
     harness
         .get_all_by_role(Role::Button)
@@ -173,9 +117,6 @@ fn button<'t>(harness: &'t Harness<'_, AppState>, label: &'t str) -> Node<'t> {
     })
 }
 
-/// The first Button whose accessible label contains `needle`. Used for the
-/// picker's decorated rows, whose labels are the row name plus its count /
-/// `current` markers.
 #[track_caller]
 fn button_containing<'t>(harness: &'t Harness<'_, AppState>, needle: &'t str) -> Node<'t> {
     harness
@@ -189,9 +130,6 @@ fn button_containing<'t>(harness: &'t Harness<'_, AppState>, needle: &'t str) ->
         })
 }
 
-/// Open the picker through the command palette
-/// (`Action::SwitchWorkspace`) — the keyboard route, alongside the sidebar
-/// header's click route in cycle 7.
 #[track_caller]
 fn open_picker(fx: &mut Fixture) {
     fx.harness.state_mut().ui.command_palette = true;
@@ -204,8 +142,6 @@ fn open_picker(fx: &mut Fixture) {
         "the palette entry must open the picker"
     );
 }
-
-// --- Cycle 1: the palette route opens the picker -----------------------------
 
 #[test]
 fn escape_closes_the_picker() {
@@ -234,18 +170,12 @@ fn clicking_outside_the_picker_closes_it() {
     open_picker(&mut fx);
     assert_painted(&fx.harness, "Open Project…");
 
-    // The picker anchors at the window's top-left (the palette route, so the
-    // fallback position — the header records no anchor on this path); the
-    // commit window's own refresh sits below and to the right of that
-    // dropdown, so a click on it is a click outside.
     button(&fx.harness, "Refresh changes").click();
     settle(&mut fx.harness);
 
     assert_not_painted(&fx.harness, "Open Project…");
     assert!(!fx.harness.state().ui.workspace_picker_open);
 }
-
-// --- Cycle 2: rows switch workspaces -------------------------------------------
 
 #[test]
 fn picker_row_switches_to_a_recent_workspace() {
@@ -259,7 +189,6 @@ fn picker_row_switches_to_a_recent_workspace() {
     settle(&mut fx.harness);
 
     open_picker(&mut fx);
-    // The workspace row paints its indexed repo count.
     assert_painted(&fx.harness, "ws");
     assert_painted(&fx.harness, "2 repos");
 
@@ -313,8 +242,6 @@ fn picker_row_switches_to_a_recent_project() {
     assert!(!s.ui.workspace_picker_open);
 }
 
-// --- Cycle 3: the current workspace is a marked, inert row ----------------------
-
 #[test]
 fn current_workspace_row_is_marked_and_inert() {
     let scratch = tempfile::tempdir().unwrap();
@@ -326,12 +253,9 @@ fn current_workspace_row_is_marked_and_inert() {
     );
     settle(&mut fx.harness);
 
-    // A genuinely attached workspace: 2 roots, `ws` as the project dir.
     fx.harness.state_mut().attach_workspace(&ws);
     settle(&mut fx.harness);
 
-    // Sentinel state a re-dispatch would wipe: the focused root and one
-    // cache entry.
     let root_id = fx
         .harness
         .state()
@@ -343,7 +267,6 @@ fn current_workspace_row_is_marked_and_inert() {
         .caches
         .store_ahead_behind(root_id.clone(), (7, 9));
 
-    // Reopen the picker (this test is about the row, not the entry route).
     fx.harness.state_mut().ui.workspace_picker_open = true;
     settle(&mut fx.harness);
 
@@ -378,8 +301,6 @@ fn current_workspace_row_is_marked_and_inert() {
         "the click still closes the picker"
     );
 }
-
-// --- Cycle 4: the folder-picker entries share the Welcome seam ------------------
 
 #[test]
 fn open_project_entry_goes_through_the_picker_seam() {
@@ -444,8 +365,6 @@ fn attach_entry_indexes_the_whole_tree() {
     );
 }
 
-// --- Cycle 5: a vanished recents row --------------------------------------------
-
 #[test]
 fn missing_recent_path_toasts_instead_of_dispatching() {
     let scratch = tempfile::tempdir().unwrap();
@@ -484,8 +403,6 @@ fn missing_recent_path_toasts_instead_of_dispatching() {
     assert_painted(&fx.harness, "no longer exists");
 }
 
-// --- Cycle 6: the palette opens the same picker --------------------------------
-
 #[test]
 fn palette_entry_opens_the_same_picker() {
     let scratch = tempfile::tempdir().unwrap();
@@ -493,7 +410,6 @@ fn palette_entry_opens_the_same_picker() {
     let mut fx = fixture_at(repo);
     settle(&mut fx.harness);
 
-    // Nothing opens the picker behind the palette's back.
     assert_not_painted(&fx.harness, "Open Project…");
     assert!(!fx.harness.state().ui.workspace_picker_open);
 
@@ -520,14 +436,6 @@ fn palette_entry_opens_the_same_picker() {
     assert_painted(&fx.harness, "Open Project…");
 }
 
-// --- Cycle 7: the sidebar header is the mouse trigger ---------------------------
-// The picker used to have no mouse route at all (the topbar's selector was
-// deleted), so the sidebar's workspace header row became the trigger. These
-// drive a real pointer click at it, through the shell's own render, and assert
-// the same picker the palette opens.
-
-/// The header row's control node, found by the name it carries for both
-/// assistive tech and the hover tooltip.
 #[track_caller]
 fn header<'t>(harness: &'t Harness<'_, AppState>) -> Node<'t> {
     button(harness, "Switch workspace")
@@ -543,7 +451,7 @@ fn click_at(harness: &mut Harness<'_, AppState>, pos: egui::Pos2) {
     settle(harness);
 }
 
-/// The inks stroked by the row's glyphs inside `band` — the brand folder icon
+/// The inks stroked by the row's glyphs inside `band`, the brand folder icon
 /// and the chevron. Text paints as galleys, so this is the icon vocabulary.
 fn glyph_inks(harness: &Harness<'_, AppState>, band: egui::Rect) -> Vec<Color32> {
     harness
@@ -576,12 +484,9 @@ fn clicking_the_sidebar_header_opens_the_picker() {
     );
     settle(&mut fx.harness);
 
-    // Nothing opens the picker behind the header's back.
     assert_not_painted(&fx.harness, "Open Project…");
     assert!(!fx.harness.state().ui.workspace_picker_open);
 
-    // The hit target is the whole band, not the icon/name/count/chevron
-    // cluster the row's own layout shrinks to.
     let band = header(&fx.harness).rect();
     assert_eq!(
         band.width(),
@@ -589,8 +494,6 @@ fn clicking_the_sidebar_header_opens_the_picker() {
         "the header's hit target spans the full rail, insets included"
     );
 
-    // Aim at the empty stretch between the project name and the right-aligned
-    // count — the part that used to swallow the click.
     let aim = egui::Pos2::new(band.right() - 70.0, band.center().y);
 
     click_at(&mut fx.harness, aim);
@@ -610,8 +513,6 @@ fn clicking_the_sidebar_header_opens_the_picker() {
         band.bottom() + ITEM_SPACING.y
     );
 
-    // The switcher content: the recents row, the current row, both folder
-    // entries.
     assert_painted(&fx.harness, "ws");
     assert_painted(&fx.harness, "2 repos");
     assert_painted(&fx.harness, "current");
@@ -628,7 +529,6 @@ fn hovering_the_sidebar_header_offers_the_switch() {
 
     let band = header(&fx.harness).rect();
     let aim = egui::Pos2::new(band.right() - 70.0, band.center().y);
-    // At rest the chevron is muted, the folder icon brand.
     let resting = glyph_inks(&fx.harness, band);
     assert!(
         resting.contains(&Palette::INK_3) && resting.contains(&Palette::BRAND),
@@ -666,8 +566,6 @@ fn clicking_the_header_again_closes_the_picker() {
     settle(&mut fx.harness);
 
     let band = header(&fx.harness).rect();
-    // Left of the right-aligned count, and above the dropdown: the click
-    // reaches the header through the open picker.
     let aim = egui::Pos2::new(band.left() + 150.0, band.center().y);
     click_at(&mut fx.harness, aim);
     assert!(

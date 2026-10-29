@@ -1,18 +1,8 @@
-//! The stash writes, from the stash dialog and from the commit window's
-//! stash list.
-//!
-//! Four entries rather than two: the dialog's `Pop latest` always names index
-//! `0` and says `Stash pop`, while the commit window names the row's own
-//! `stash_ref` and index and says `Pop stash {ref}`. The verbs differ in the
-//! entry they touch and in what the toast says, so they stay apart — unlike
-//! the conflict pair, which is one verb said twice.
-
 use turbogit_domain::model::RootId;
 
 use crate::operation::Operation;
 use crate::root_caches::Affected;
 
-/// `git stash push` the whole working tree under `msg`.
 pub fn push(root: &RootId, msg: &str, keep_index: bool) -> Operation {
     let msg = msg.to_string();
     let root = root.clone();
@@ -21,7 +11,6 @@ pub fn push(root: &RootId, msg: &str, keep_index: bool) -> Operation {
     })
 }
 
-/// `git stash pop` the newest entry — the dialog's `Pop latest`.
 pub fn pop_latest(root: &RootId) -> Operation {
     let root = root.clone();
     Operation::custom("Stash pop", Affected::Root(root.clone()), move |v| {
@@ -29,7 +18,6 @@ pub fn pop_latest(root: &RootId) -> Operation {
     })
 }
 
-/// `git stash pop` the entry at `index`, labelled with the row's `stash_ref`.
 pub fn pop_at(root: &RootId, stash_ref: &str, index: usize) -> Operation {
     let work_root = root.clone();
     Operation::custom(

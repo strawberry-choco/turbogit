@@ -1,12 +1,3 @@
-//! Nothing serde drops: after the save entry runs, `.turbogit/ui.ron` names all
-//! ten durable keys, with a value no field's default could produce.
-//!
-//! This is the generalised form of the diff-policies suite's "written down
-//! rather than merely held" check, for the whole set — and the one that fails
-//! when a declaration's transcriber drops a field, mangles a key or adds a
-//! `skip_serializing_if`: the session would stay perfectly correct and the next
-//! launch wrong, which no round-trip assertion catches.
-
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -19,10 +10,6 @@ use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{DiffHighlighting, DiffPolicies, DiffWhitespace};
 use turbogit_services::bulk_ops::BulkOp;
 
-/// Every durable key, each with a marker only its **non-default** value can put
-/// on the page. Key presence and written value are two different claims, and a
-/// key holding nothing is the failure this file exists to rule out — so both are
-/// checked, and a red names what is missing rather than dumping a diff.
 const DURABLE_KEYS: [(&str, &str); 10] = [
     ("tab", "\"Worktrees\""),
     ("recent_repos", "/w/durable-keys/recent-root"),
@@ -36,7 +23,6 @@ const DURABLE_KEYS: [(&str, &str); 10] = [
     ("diff_policies", "IgnoreWhitespaceAndEmptyLines"),
 ];
 
-/// The live values behind the markers above.
 fn state_holding_every_durable_value(project: &std::path::Path) -> AppState {
     let mut state = AppState::for_roots(project, &[]);
     state.ui.tab = Tab::Worktrees;
@@ -101,9 +87,6 @@ fn every_durable_key_reaches_the_file_with_its_value_on_it() {
         "ui.ron names none of these durable keys: {missing:?}\n{written}"
     );
 
-    // Presence is the weaker half: a key written with its field's default value
-    // is a field that was captured and then silently skipped. Naming the value
-    // in the file rules that out for the whole set.
     let defaulted: Vec<(&str, &str)> = DURABLE_KEYS
         .iter()
         .filter(|(_, marker)| !written.contains(marker))

@@ -1,36 +1,14 @@
-//! Plain-data diff-viewer types owned by the application state, kept beside
-//! [`crate::state`] instead of inside the UI modules (DDD split issue 04:
-//! invert the state→UI type leak). The UI modules import them back up;
-//! nothing here references egui, which is what makes an egui-free
-//! application crate possible later.
-//!
-//! Two groups live here:
-//! - the non-text diff pane cache ([`PaneCache`], spec R8): decoded image
-//!   bytes and binary sizes keyed by load key. GPU textures are deliberately
-//!   NOT part of these types — they are a UI-layer concern, built lazily at
-//!   first paint in [`crate::ui::diff`] and dropped with the pane generation.
-//! - the hunk-navigation edge-nudge vocabulary ([`Dir`], [`EDGE_WINDOW`],
-//!   spec R7): the direction and timing window the pure decision in
-//!   [`crate::ui::hunk_nav`] consumes.
-
 use crate::events::{DecodedImage, FetchedBlob};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-// --- non-text pane cache (spec R8) -------------------------------------------
-
-/// One resolved side of a non-text pane: byte length plus the decoded image
-/// when the side was decodable within the cap. Constructed off the frame
-/// path via [`PaneSide::from_blob`].
 pub struct PaneSide {
     pub byte_len: u64,
     pub image: Option<DecodedImage>,
 }
 
 impl PaneSide {
-    /// Plain-data half of a fetched blob: the byte length and the decoded
-    /// image. Any GPU upload happens later, in the UI layer.
     pub fn from_blob(blob: FetchedBlob) -> Self {
         Self {
             byte_len: blob.byte_len,
@@ -39,26 +17,14 @@ impl PaneSide {
     }
 }
 
-/// Both sides of one non-text pane result, keyed by load key.
 #[derive(Default)]
 pub struct PaneEntry {
     pub old: Option<PaneSide>,
     pub new: Option<PaneSide>,
 }
 
-/// Cache bound: a few entries cover back-and-forth file switching without
-/// pinning every visited image in memory.
 const PANE_CACHE_CAP: usize = 4;
 
-/// Bounded cache of non-text pane results (CONTEXT.md "Root caches"
-/// philosophy): invalidated wholesale with root refreshes through
-/// [`crate::state::AppState::refresh`], never poked field-by-field; evicts
-/// oldest beyond [`PANE_CACHE_CAP`].
-///
-/// Entries sit behind an [`Arc`] because that is the handle the keyed read
-/// hands out: a painter holds one pane's result while it writes state, and the
-/// read's `Fresh` verdict costs a refcount bump rather than a pixel copy
-/// (ADR-0021).
 #[derive(Default)]
 pub struct PaneCache {
     map: HashMap<String, Arc<PaneEntry>>,
@@ -74,8 +40,6 @@ impl PaneCache {
         self.map.contains_key(key)
     }
 
-    /// Live load keys, oldest first — lets the UI layer prune its GPU
-    /// texture cache to exactly the entries still cached here.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.order.iter().map(String::as_str)
     }
@@ -104,17 +68,12 @@ impl PaneCache {
     }
 }
 
-// --- hunk-navigation edge-nudge vocabulary (spec R7) --------------------------
-
 /// How long the second edge press may follow the first to cross files.
 pub const EDGE_WINDOW: Duration = Duration::from_millis(500);
 
-/// Direction of a hunk-navigation step.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dir {
-    /// `F7` — next hunk / next file.
     Next,
-    /// `Shift+F7` — previous hunk / previous file.
     Prev,
 }
 

@@ -1,19 +1,3 @@
-//! Bulk preflight matrix modal (issue 09, screen 02): before a fleet
-//! operation runs, one row per selected repo shows its current state, what
-//! will happen, and why it would be skipped, under a "N of M will run"
-//! header with a per-op policy control. Nothing runs until the user
-//! confirms the predicted plan.
-//!
-//! The cascade create-&-checkout branch operation (issue 11) shares the
-//! modal: a branch-name input with the type/owner/value pattern hint, the
-//! apply-broadly policy control, and a TARGET column showing where every
-//! running repo will land. Existing matching branches are checked out
-//! rather than recreated; Esc cancels before anything runs.
-//!
-//! The matrix is plain data — `turbogit_app::bulk_ops::Preflight`
-//! over the live selection — computed here at render time so it can never
-//! drift from the repos' actual state.
-
 use egui::{
     Align, Align2, Color32, Key, Layout, Sense, TextEdit, Ui, Vec2, WidgetInfo, WidgetType,
 };
@@ -23,12 +7,8 @@ use turbogit_app::state::AppState;
 use crate::theme::Palette;
 use crate::ui::widgets::PaneColumn;
 
-/// The header band every matrix in this file paints, in the same one size.
 const HEADER_H: f32 = 22.0;
 
-/// The four columns `body` and `command_body` show. The custom-command variant
-/// has no column of its own — the command is its OUTCOME cell — so the two
-/// share one table rather than restating it.
 const MATRIX_COLUMNS: [PaneColumn; 4] = [
     PaneColumn::start("REPO", 0.0),
     PaneColumn::start("CURRENT BRANCH", 170.0),
@@ -36,8 +16,6 @@ const MATRIX_COLUMNS: [PaneColumn; 4] = [
     PaneColumn::start("OUTCOME", 390.0),
 ];
 
-/// The cascade variant's columns: the four above, at its own wider offsets,
-/// plus TARGET.
 const BRANCH_COLUMNS: [PaneColumn; 5] = [
     MATRIX_COLUMNS[0],
     PaneColumn::start("CURRENT BRANCH", 150.0),
@@ -46,18 +24,8 @@ const BRANCH_COLUMNS: [PaneColumn; 5] = [
     PaneColumn::start("OUTCOME", 520.0),
 ];
 
-/// One row of a preflight / affected-repo list, at the height every such list in
-/// this family uses. Three call sites in this file each re-declared the same
-/// 30.0 until the conformance sweep collapsed them (issue 13).
-///
-/// It is *not* [`crate::ui::components::BRANCH_ROW_H`], which is also 30.0: a
-/// branch row and a bulk row agree on a number for unrelated reasons, and
-/// sharing a token between them would couple two screens that change separately.
-/// Neither joins the `theme` ramp, which offers 24 and 26 (issue 06's decision).
 const ROW_H: f32 = 30.0;
 
-/// Render the modal when a bulk operation is awaiting preflight
-/// confirmation (`ui.bulk_op` is `Some`).
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let Some(op) = state.ui.bulk_op else {
         return;
@@ -75,8 +43,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO);
     if op == BulkOp::Custom {
-        // The command input, recents row, and 390px-offset matrix columns
-        // need a wider modal than the auto-sized window would pick.
         win = win.min_width(560.0);
     }
     win.show(&ctx, |ui| match op {
@@ -94,8 +60,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
     let will_run = pf.will_run();
     let total = pf.total();
 
-    // Header: the "N of M will run" line (screen 02), left the skipped
-    // summary, right the count.
     ui.horizontal(|ui| {
         if will_run == total {
             ui.label(format!("Will run on all {total} repositories."));
@@ -111,7 +75,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
     });
     ui.separator();
 
-    // Policy control (pull only): merge vs rebase, seeded from settings.
     if op == BulkOp::PullAll {
         ui.checkbox(
             &mut state.ui.bulk_rebase,
@@ -119,7 +82,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
         );
     }
 
-    // Matrix table: REPO / CURRENT BRANCH / STATUS / OUTCOME.
     let width = ui.available_width();
     let col_branch = MATRIX_COLUMNS[1].x;
     let col_status = MATRIX_COLUMNS[2].x;
@@ -162,8 +124,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
 
     ui.add_space(8.0);
 
-    // Footer: cancel / confirm. The confirm button names the exact scope
-    // ("Run on 9 of 12") and is disabled when nothing will run.
     ui.horizontal(|ui| {
         if ui.button("Cancel").clicked() {
             state.ui.bulk_op = None;
@@ -179,9 +139,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
                 )
             });
             if run.clicked() {
-                // Cascade merge (issue 28): the source branch picked in the
-                // merge dialog rides in the plan's branch field, the same
-                // slot the create-&-checkout cascade uses.
                 let branch = if op == BulkOp::Merge {
                     state.ui.dlg.merge_target.clone()
                 } else {
@@ -205,18 +162,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
     });
 }
 
-/// The STATUS column text and color for one row.
-///
-/// **Its own status ladder, and deliberately not the owner's words.** This
-/// column answers *may this row run*, which is a different question from *what
-/// colour is this repository*, and the two happen to share a definition of
-/// diverged today — a coincidence to revisit, not an invariant. That is why the
-/// strings stay capitalised and stay this short (`Dirty` where the owner words
-/// it lowercase, and `Clean` where the owner says nothing at all) and why
-/// `No upstream` is
-/// an arm at all: a missing upstream is not a repository state the ladder models.
-/// Only the diverged *condition* is the owner's, and only because the bulk-ops
-/// skip reason beside it already states that definition.
 fn row_status(row: &PreflightRow) -> (String, Color32) {
     if row.outcome == Err(SkipReason::Diverged)
         || crate::theme::RepoState::is_diverged(row.ahead, row.behind)
@@ -231,8 +176,6 @@ fn row_status(row: &PreflightRow) -> (String, Color32) {
     }
 }
 
-/// The OUTCOME column text for a will-run row. `merge_target` is the merge
-/// dialog's picked source branch (cascade merge, issue 28).
 fn outcome_text(op: BulkOp, rebase: bool, merge_target: &str) -> String {
     match op {
         BulkOp::FetchAll => "Fetch from all remotes".to_string(),
@@ -245,15 +188,9 @@ fn outcome_text(op: BulkOp, rebase: bool, merge_target: &str) -> String {
         }
         BulkOp::PushAll => "Push to upstream".to_string(),
         BulkOp::StashAll => "Stash local changes".to_string(),
-        // The cascade renders through `branch_body` / `branch_outcome_text`.
-        // The cascade renders through `branch_body` / `branch_outcome_text`.
         BulkOp::CreateBranch => String::new(),
-        // The custom command renders through `command_body`.
         BulkOp::Custom => String::new(),
-        // Cascade commit doesn't have a preflight modal (issue 21).
         BulkOp::Commit => String::new(),
-        // Cascade merge (issue 28): the outcome names the source branch the
-        // dialog picked, which rides in the dialog state until dispatch.
         BulkOp::Merge => {
             let target = merge_target.trim();
             if target.is_empty() {
@@ -265,7 +202,6 @@ fn outcome_text(op: BulkOp, rebase: bool, merge_target: &str) -> String {
     }
 }
 
-/// The trailing detail of a skip outcome ("will retry on clean" style).
 fn skip_detail(reason: SkipReason) -> &'static str {
     match reason {
         SkipReason::DirtyWorktree => "commit or stash first",
@@ -276,14 +212,6 @@ fn skip_detail(reason: SkipReason) -> &'static str {
     }
 }
 
-// -- Custom command (issue 13, screen 04) -------------------------------------
-
-/// The custom-command variant of the modal: a command input with the
-/// workspace's recent commands for reuse, the same matrix (a root on a
-/// protected branch is refused whatever the command typed), and — for a
-/// destructive-looking command (reset,
-/// clean, history rewrites, force pushes, `-D`) — a two-stage confirmation:
-/// the first Run click only arms an explicit "Yes, run <command>" button.
 fn command_body(ui: &mut Ui, state: &mut AppState) {
     let pf = state.bulk_preflight(BulkOp::Custom);
     let will_run = pf.will_run();
@@ -292,7 +220,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     let destructive = state.bulk_command_is_destructive();
     let armed = state.ui.bulk_command_armed;
 
-    // Header: the "N of M will run" line (screen 02).
     ui.horizontal(|ui| {
         if will_run == total {
             ui.label(format!("Will run on all {total} repositories."));
@@ -308,7 +235,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Command row: the input with its semantics hint.
     ui.weak("Command");
     let edit = ui.add(
         TextEdit::singleline(&mut state.ui.bulk_command)
@@ -321,8 +247,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     ui.weak("Runs verbatim on every selected repo; the leading “git” is optional.");
     ui.add_space(4.0);
 
-    // Recent commands (issue 13): one chip per remembered command; clicking
-    // refills the input.
     if !state.ui.recent_custom_commands.is_empty() {
         ui.horizontal(|ui| {
             ui.weak("Recent commands");
@@ -340,8 +264,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     }
     ui.separator();
 
-    // Destructive warning: painted as soon as the command looks destructive;
-    // the run itself still needs the second, explicit confirmation.
     if destructive {
         let reason = turbogit_app::bulk_ops::parse_command(&state.ui.bulk_command)
             .and_then(|args| turbogit_app::bulk_ops::destructive_reason(&args))
@@ -352,7 +274,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    // Matrix table: REPO / CURRENT BRANCH / STATUS / OUTCOME.
     let width = ui.available_width();
     let col_branch = MATRIX_COLUMNS[1].x;
     let col_status = MATRIX_COLUMNS[2].x;
@@ -388,8 +309,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
 
     ui.add_space(8.0);
 
-    // Footer: cancel / confirm. A destructive command's first Run click only
-    // arms; the explicit confirm names the exact command it will run.
     ui.horizontal(|ui| {
         ui.weak("Esc to cancel");
         if ui.button("Cancel").clicked() {
@@ -429,18 +348,12 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-// -- Cascade create & checkout branch (issue 11) -----------------------------
-
-/// The cascade variant of the modal: a branch-name input with the
-/// type/owner/value pattern hint, the apply-broadly policy, and a matrix
-/// with a TARGET column predicting where each repo will land.
 fn branch_body(ui: &mut Ui, state: &mut AppState) {
     let bpf = state.bulk_branch_preflight();
     let will_run = bpf.will_run();
     let total = bpf.total();
     let name = state.ui.bulk_branch_name.trim().to_string();
 
-    // Header: the "N of M will run" line (screen 02).
     ui.horizontal(|ui| {
         if will_run == total {
             ui.label(format!("Will run on all {total} repositories."));
@@ -456,7 +369,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Branch-name row: the input with its pattern hint and semantics.
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.weak("Branch name");
@@ -478,7 +390,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.add_space(4.0);
 
-    // Skip summary + the apply-broadly policy control.
     ui.horizontal(|ui| {
         let totals = bpf
             .skip_totals()
@@ -498,7 +409,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
     });
     ui.separator();
 
-    // Matrix table: REPO / CURRENT BRANCH / TARGET / STATUS / OUTCOME.
     let width = ui.available_width();
     let col_branch = BRANCH_COLUMNS[1].x;
     let col_target = BRANCH_COLUMNS[2].x;
@@ -536,8 +446,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
 
     ui.add_space(8.0);
 
-    // Footer: cancel / confirm. The confirm button names the exact scope
-    // ("Run on N of M") and stays disabled without a name or will-run rows.
     ui.horizontal(|ui| {
         ui.weak("Esc to cancel");
         if ui.button("Cancel").clicked() {
@@ -562,7 +470,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The STATUS column text and color for one cascade row.
 fn branch_row_status(action: &BranchAction) -> (String, Color32) {
     match action {
         BranchAction::Skip(SkipReason::DirtyWorktree) => {
@@ -576,7 +483,6 @@ fn branch_row_status(action: &BranchAction) -> (String, Color32) {
     }
 }
 
-/// The OUTCOME column text for one cascade row.
 fn branch_outcome_text(action: &BranchAction) -> String {
     match action {
         BranchAction::CheckoutExisting => "Check out existing branch".to_string(),

@@ -14,7 +14,7 @@
 //! [`turbogit_app::state::TreeState`], owned by the caller and the only thing
 //! the function mutates; everything the user does comes back as a
 //! [`TreeEvent`]. The component takes no application state, makes no git
-//! calls, and decides no policy — the caller applies the returned events
+//! calls, and decides no policy, the caller applies the returned events
 //! between painting the tree and painting any floating surface that depends
 //! on them (the right-click context menu still opens in the frame it was
 //! requested).
@@ -53,61 +53,57 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
 use crate::ui::widgets::{self, ref_chip};
 
-/// Height of one repo section header (repo name + head-ref chip + state summary).
 const REPO_HEADER_H: f32 = 30.0;
 
-/// Share of a branch row's content width held by the icon + name zone; the
-/// tracking branch starts on the other side of that line. A fraction of the
-/// row — not a pixels-per-character reserve — so the tracking column keeps one
-/// left edge whatever the names do.
 const NAME_ZONE_SHARE: f32 = 0.5;
 
-/// Share of a repo header held by its identity cluster (name, current
-/// branch); the status summary and Fetch take the rest.
 const HEADER_IDENTITY_SHARE: f32 = 0.45;
 
-/// What the user did to the tree (plan D4). Plain data — every action target
-/// arrives as `(owning repository, branch)` so no surface re-derives it and no
-/// flat row aggregate is needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TreeEvent {
-    /// A row was clicked: selection policy is the caller's (the Branches
-    /// window selects and toggles the detail; the Log window scopes the graph).
-    RowClicked { root: RootId, branch: String },
-    /// A row was double-clicked: activation (checkout in Branches, graph
-    /// scope in the Log window).
-    RowActivated { root: RootId, branch: String },
-    /// The row was right-clicked: the surface owns the context menu — its
-    /// open state, its anchor, and what its items do.
-    ContextMenuRequested { root: RootId, branch: String },
-    /// A Local/Tags group header was clicked.
+    RowClicked {
+        root: RootId,
+        branch: String,
+    },
+    RowActivated {
+        root: RootId,
+        branch: String,
+    },
+    ContextMenuRequested {
+        root: RootId,
+        branch: String,
+    },
     GroupToggled(TreeGroup),
-    /// A remote group header was clicked: collapse/expand that remote.
-    RemoteToggled { root: RootId, remote: String },
-    /// One repository's collapsed REMOTE rollup was clicked, or its REMOTE
-    /// header used to hide them again. Root-bearing: revealing one repo's
-    /// remotes never reveals another's.
-    RemoteRevealToggled { root: RootId, revealed: bool },
-    /// A repository header's Fetch button was clicked.
-    FetchRequested { root: RootId },
-    /// The inline rename started from a row action.
-    RenameStarted { root: RootId, branch: String },
+    RemoteToggled {
+        root: RootId,
+        remote: String,
+    },
+    RemoteRevealToggled {
+        root: RootId,
+        revealed: bool,
+    },
+    FetchRequested {
+        root: RootId,
+    },
+    RenameStarted {
+        root: RootId,
+        branch: String,
+    },
     /// The inline rename editor confirmed; `new` is the trimmed draft.
     RenameCommitted {
         root: RootId,
         old: String,
         new: String,
     },
-    /// The inline rename editor was cancelled.
     RenameCancelled,
-    /// Create a branch — from the empty state (`name` empty: "the first
+    /// Create a branch, from the empty state (`name` empty: "the first
     /// branch") or the no-match state (`name` = the typed query).
-    CreateBranchRequested { name: String },
-    /// The no-match state asked to clear the search.
+    CreateBranchRequested {
+        name: String,
+    },
     ClearFilterRequested,
 }
 
-/// Which expandable group header was toggled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeGroup {
     Recent,
@@ -115,64 +111,39 @@ pub enum TreeGroup {
     Tags,
 }
 
-/// Everything the tree is told, each frame (plan D3). Borrows and scalars —
-/// no application state, no policy.
 pub struct TreeProps<'a> {
-    /// The repo-grouped view model (pure builder output).
     pub view: &'a BranchView,
-    /// The live search text (owned by the surface).
     pub filter: &'a str,
     /// The repo scope narrowing, `None` = every in-scope repo.
     pub repo_filter: Option<&'a RootId>,
-    /// The warm tag cache, keyed by repository (plan D10: one shared warm
-    /// cache reaches the tree as a prop; each section already carries its
-    /// list from the view model). Entries carry their decoration state.
     pub tags_by_root: &'a HashMap<RootId, Vec<(String, turbogit_domain::model::RefState)>>,
-    /// More than one repository in scope (scope wording, identity chrome).
     pub multi_repo: bool,
-    /// An operation is in flight (the reading state).
     pub busy: bool,
-    /// Any in-scope root has branch data or a HEAD — `false` shows the
+    /// Any in-scope root has branch data or a HEAD, `false` shows the
     /// reading/empty states instead of the list.
     pub has_any_data: bool,
-    /// A merge is in progress (the current branch's row reads "merging…").
     pub merge_in_progress: bool,
-    /// The last fetch timestamp (remote-group freshness hint).
     pub last_fetch: Option<chrono::DateTime<chrono::Utc>>,
-    /// The caller-supplied "now" — painted staleness/freshness stays
-    /// deterministic in tests.
     pub now: chrono::DateTime<chrono::Utc>,
-    /// Capability: this instance allows inline rename.
     pub allows_rename: bool,
-    /// Capability: rows report right-clicks as
-    /// [`TreeEvent::ContextMenuRequested`]. The Branches surface sets it;
-    /// the Git Log pane's branches pane does not.
     pub allows_context_menu: bool,
-    /// egui id salt for the scroll area — unique per surface.
+    /// egui id salt for the scroll area, unique per surface.
     pub id_salt: &'a str,
-    /// Whether the scroll area claims all remaining height (`true` for the
-    /// Branches tool window's full-height list) or shrinks to its content
-    /// (`false` for the Log pane, which paints its Roots filter below).
     pub full_height: bool,
-    /// Per-remote collapse default: `false` starts every remote group expanded
-    /// (the Branches window), `true` starts them collapsed (the Log pane). A
-    /// user toggle still flips the effective state either way.
     pub collapse_remotes_by_default: bool,
 }
 
 /// Paint the branch tree and report what the user did.
 ///
 /// Renders the repo-grouped view model: per-repo sections (header, Local
-/// group with directory subgroups, Remote area — expanded groups or the
-/// collapsed rollup — and a Tags group), filtered live by `props.filter`, or
+/// group with directory subgroups, Remote area, expanded groups or the
+/// collapsed rollup, and a Tags group), filtered live by `props.filter`, or
 /// the reading/empty/no-match states instead of a blank panel. Mutates only
 /// `tree` (scroll, the rename draft, the filter-transition bookkeeping) and
 /// returns every policy-level action as events.
 pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> Vec<TreeEvent> {
     let mut events = Vec::new();
 
-    // No branch data anywhere and no HEAD: reading or the one-sentence empty
-    // state (the tree never paints a blank panel).
     if !props.has_any_data {
         if props.busy {
             reading_state(ui);
@@ -185,10 +156,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
     let filter = props.filter.to_string();
     let filtering = !filter.trim().is_empty();
 
-    // Search is for jumping, not browsing: save the scroll position the
-    // moment filtering begins and restore it when it clears. The transition
-    // is detected against the previous frame's filter (plan D3's
-    // `previous_filter`), so the tree owns the save/restore itself.
     let was_filtering = !tree.previous_filter.trim().is_empty();
     if filtering && !was_filtering {
         tree.scroll_saved = Some(tree.scroll);
@@ -203,9 +170,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
     let mut target_y: Option<f32> = None;
     let mut y_cursor = 0.0;
 
-    // Only the in-scope repos paint: the scope chip narrows the tree to one
-    // repo (issue 04), and a lone in-scope repo renders its section invisibly
-    // (issue 02 — the grouping adds no chrome).
     let in_scope: Vec<&RepoSection> = props
         .view
         .repos
@@ -222,7 +186,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
         .auto_shrink([false, !props.full_height])
         .vertical_scroll_offset(scroll)
         .show(ui, |ui| {
-            // A dead end turns into the likely next intent.
             if filtering
                 && in_scope.iter().all(|s| {
                     section_match_count(
@@ -236,8 +199,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                 no_match_state(ui, filter.trim(), &mut events);
                 return;
             }
-            // The Recent group first: it is the tree's one view-level group, so
-            // it sits above the repository sections rather than inside each one.
             paint_recent_group(
                 ui,
                 props,
@@ -278,8 +239,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
             }
         });
     tree.scroll = out.state.offset.y;
-    // Scroll the freshly created branch into view (issue 08) and consume the
-    // intent.
     if tree.scroll_to.take().is_some()
         && let Some(ty) = target_y
     {
@@ -289,12 +248,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
     events
 }
 
-/// Total visible branches/tags in a section under the current filter — used to
-/// decide the no-match state and to size group headers. `remotes` is this
-/// section's own reveal, so a hidden remote branch cannot suppress the
-/// no-match state. `show_tags` is the gear's toggle: a tag list that is not
-/// painted at all must not be counted as a match either, or the tree would show
-/// an empty frame instead of turning the dead end into the likely next intent.
 fn section_match_count(
     section: &RepoSection,
     filter: &str,
@@ -323,9 +276,6 @@ fn section_match_count(
     locals + remotes + tags
 }
 
-/// Recursively keep nodes whose branch (or descendant) matches the query,
-/// preserving the directory structure. Counts on surviving directory nodes are
-/// recomputed from the surviving children.
 fn filter_nodes(nodes: &[BranchNode], filter: &str) -> Vec<BranchNode> {
     if filter.trim().is_empty() {
         return nodes.to_vec();
@@ -353,21 +303,10 @@ fn filter_nodes(nodes: &[BranchNode], filter: &str) -> Vec<BranchNode> {
     out
 }
 
-/// Count the leaf branches beneath a node forest.
 fn leaf_count(nodes: &[BranchNode]) -> usize {
     branches_tree::leaf_count(nodes)
 }
 
-/// Paint the Recent group — the tree's one view-level group, above every
-/// repository section.
-///
-/// It paints nothing when there is no history to show: an empty `Recent` band is
-/// a promise of five recently checked-out branches that this repository set has
-/// never made. The rows are the group's own flat list, never directory-nested —
-/// the node reads "up to five recently checked-out branches", so each row names a
-/// branch and is answered by the repository it was checked out in (its own
-/// [`branches_tree::BranchLeaf::root`]) rather than by the section it happens to
-/// be drawn above.
 #[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_recent_group(
     ui: &mut Ui,
@@ -379,15 +318,9 @@ fn paint_recent_group(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    // `Show Recent Branches` off paints no group at all — the rows are still in
-    // the model and still in Local, because the toggle hides a level rather than
-    // taking branches away.
     if !props.view.options.show_recent {
         return;
     }
-    // The scope chip narrows the pane to one repository; a group that spans
-    // repositories narrows with it, or a filtered pane would act on a
-    // repository it says it is not showing.
     let rows: Vec<&branches_tree::BranchLeaf> = props
         .view
         .recent
@@ -414,8 +347,6 @@ fn paint_recent_group(
             *target_y = Some(*y_cursor);
         }
         *y_cursor += BRANCH_ROW_H;
-        // The leaf's label is the full branch name already: this group has no
-        // directory header to strip a prefix into and no remote header either.
         branch_row(
             ui,
             props,
@@ -430,8 +361,6 @@ fn paint_recent_group(
     }
 }
 
-/// Paint one repo's section: header (unless invisible for single-repo), Local
-/// group, Remote area, and Tags group.
 #[allow(clippy::too_many_arguments)] // the painter-thread this function shares
 fn paint_repo_section(
     ui: &mut Ui,
@@ -445,9 +374,6 @@ fn paint_repo_section(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    // The header always paints so the repo-level Fetch stays one click away
-    // (issue 03); its identity chrome is suppressed for a single-repo project
-    // whose grouping must stay invisible (issue 02).
     repo_header(ui, section, !invisible, events);
     *y_cursor += REPO_HEADER_H;
 
@@ -486,20 +412,6 @@ fn paint_repo_section(
     );
 }
 
-/// Paint every in-scope repository's branches as **one** set of groups: the
-/// `Group by Repository` level is the thing the toggle removed, so no band and
-/// one Local group, one Tags group, over all of them at once.
-///
-/// Nothing else about the list changes. Every branch keeps a row — the count on
-/// the merged header is the sum of the same leaves the per-repository bands carry
-/// — and the builder has already qualified the rows whose name another repository
-/// also answers with, so the row still says where it came from with no band to
-/// say it.
-///
-/// The Remote area stays per repository: revealing one repository's remotes is
-/// that repository's own decision ([`TreeEvent::RemoteRevealToggled`] carries its
-/// root), so merging it would paint one header that two repositories disagree
-/// about.
 #[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_ungrouped_sections(
     ui: &mut Ui,
@@ -556,10 +468,6 @@ fn paint_ungrouped_sections(
     );
 }
 
-/// The `Local` group: one header sized by the leaves actually painted beneath
-/// it, then each forest handed in. One forest per repository is the grouped
-/// shape; one forest per repository under a single header is the un-grouped one,
-/// which is why the caller hands a list and not a section.
 #[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_local_group(
     ui: &mut Ui,
@@ -595,8 +503,6 @@ fn paint_local_group(
     }
 }
 
-/// One repository's remote area: the expanded per-remote groups when its remotes
-/// are revealed, the collapsed rollup row when they are not.
 #[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_remote_area(
     ui: &mut Ui,
@@ -610,9 +516,6 @@ fn paint_remote_area(
     events: &mut Vec<TreeEvent>,
 ) {
     if remotes_revealed(tree, &section.root_id) {
-        // A repo revealed from its own rollup gets one header that puts it back.
-        // The view-wide surface (`show_remotes`) has no such control and paints
-        // no such row, so its rendering is unchanged.
         if !tree.show_remotes {
             let header = section_header(ui, "Remote", section.remote_branch_count, true, |_| {});
             if header.clicked() {
@@ -645,18 +548,11 @@ fn paint_remote_area(
             }
         }
     } else {
-        // Collapsed rollup row — one per repo, toggles remotes on when clicked.
         remote_rollup_row(ui, tree, section, events);
         *y_cursor += BRANCH_ROW_H;
     }
 }
 
-/// The `Tags` group, over the tag lists handed in — one per repository while
-/// repository grouping is on, all of them under one header when it is off.
-///
-/// `Show Tags` off paints neither the rows nor the header: the toggle is the
-/// group's visibility, and a header for a group that cannot open would be a
-/// control with nothing to control. The lists stay in the view model regardless.
 #[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_tags_group(
     ui: &mut Ui,
@@ -691,7 +587,6 @@ fn paint_tags_group(
     }
 }
 
-/// A repository's tags under the live filter, in the order the list shows them.
 fn section_tags(section: &RepoSection, filter: &str) -> Vec<branches_tree::TagLeaf> {
     let mut tags: Vec<branches_tree::TagLeaf> = section
         .tags
@@ -703,12 +598,6 @@ fn section_tags(section: &RepoSection, filter: &str) -> Vec<branches_tree::TagLe
     tags
 }
 
-/// Paint a forest of branch nodes (local or remote) with directory headers at
-/// `depth` indentation.
-///
-/// No repository context is passed: every leaf carries its own owner
-/// ([`branches_tree::BranchLeaf::root`]), which is what lets the same forest
-/// painter serve the view-level Recent group.
 #[allow(clippy::too_many_arguments)]
 fn paint_nodes(
     ui: &mut Ui,
@@ -721,8 +610,6 @@ fn paint_nodes(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    // A level hangs one icon's width rather than the shared tree step: rows
-    // here lead with an icon, so a level costs exactly one icon.
     let step = KIT_ICON;
     for n in nodes {
         match n {
@@ -762,22 +649,6 @@ fn paint_nodes(
     }
 }
 
-/// One repo section header — the **repository band** (ticket 16). Its
-/// composition, left to right: the repository's name in the interface face, its
-/// head ref as a **neutral ref chip** (never a brand-filled pill), and — on the
-/// right — its state summary in coloured words, then a Fetch that fetches
-/// **this repository only**.
-///
-/// The band carries no state dot. The head-ref chip and the Fetch already fix
-/// what the band is, so the summary reads as a sentence on it; a repository
-/// with nothing to report says nothing. Other surfaces' state marks keep their
-/// dot for scanning states side by side with nothing else to anchor them
-/// ([`crate::ui::components::state_mark`]).
-///
-/// `show_identity` is false for a single-repo project, where the grouping is
-/// invisible: the identity cluster (name, chip) is suppressed so no redundant
-/// repo band appears, but the Fetch control stays so primary actions remain one
-/// click away.
 fn repo_header(
     ui: &mut Ui,
     section: &RepoSection,
@@ -786,13 +657,8 @@ fn repo_header(
 ) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
-    // A repository reads as a block, and its band is the one strip that says
-    // so. SURFACE, so the band is neither a row's hover fill nor a current row's
-    // band.
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-    // Identity on the left, summary and Fetch on the right. Without an explicit
-    // split a truncating repo name consumes the whole strip.
     let split_x = rect.left() + rect.width() * HEADER_IDENTITY_SHARE;
     let chip_w = section
         .current_branch
@@ -810,9 +676,6 @@ fn repo_header(
     left.spacing_mut().item_spacing.x = 0.0;
     left.add_space(PAD_LIST);
     if show_identity {
-        // Repo name (UI sans — a name the developer gave a folder, not a
-        // machine identifier), fitted to what is left of its head-ref chip so
-        // neither can be pushed off the line.
         let name_w = (split_x - rect.left() - 2.0 * PAD_LIST - chip_w).max(24.0);
         let name = middle_truncate_to_width(
             &left,
@@ -828,22 +691,12 @@ fn repo_header(
             )
             .selectable(false),
         );
-        // The head ref rides the name rather than trailing the strip, and it is
-        // a **ref chip**: a ref name on the raised-on-card surface, in the chip
-        // radius, at the chip type size, in the data face. It used to be a pill
-        // that filled the accent token with brand ink, which spent the one blue
-        // the pane has left (New Branch) on a piece of chrome and made the head
-        // ref look like a button.
         if let Some(cur) = &section.current_branch {
             left.add_space(8.0);
             ref_chip(&mut left, cur);
         }
     }
 
-    // Right cluster: the repo's Fetch, with the state summary in front of it.
-    // The summary is coloured words and nothing else — never a chip: a state
-    // behind a fill stops reading as state and starts reading as a category —
-    // and a summary with nothing to say paints nothing, gap included.
     let mut right = ui.new_child(
         UiBuilder::new()
             .max_rect(Rect::from_min_max(
@@ -855,10 +708,6 @@ fn repo_header(
     right.spacing_mut().item_spacing.x = 0.0;
     right.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_LIST);
-        // Repo-level Fetch (issue 03): one click away even with remotes hidden,
-        // because the old Remote group header is gone. It reports
-        // `FetchRequested { root }`, so the caller fetches **that** repository —
-        // the action is per-repository and says so by carrying the root.
         if kit_button(ui, KitButton::Quiet, "Fetch").clicked() {
             events.push(TreeEvent::FetchRequested {
                 root: section.root_id.clone(),
@@ -874,9 +723,6 @@ fn repo_header(
     });
 }
 
-/// The band's state summary, elided from the right when the strip cannot hold
-/// it. Geometry decides, never the words: a state that is silently dropped is
-/// worse than one that is visibly cut.
 fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
     if state_words_width(ui, text) <= avail {
         return text.to_owned();
@@ -896,17 +742,6 @@ fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
     "…".to_owned()
 }
 
-/// The header's state summary: the current branch's counts in the one badge
-/// spelling (`↑2 · ↓1`), then the repository's state in words — all read off
-/// the section the builder already derived, so the numbers and the words can
-/// never disagree. A state with nothing to report contributes no words, and an
-/// empty part is dropped rather than left to dangle a separator — so a clean,
-/// in-sync repository yields the empty string, and the band paints no summary
-/// at all.
-///
-/// The band is one chrome galley, so the arrows ride the fallback cut exactly
-/// as they do in the sidebar's repository rows; the row badges take the data
-/// face ([`badge_words`]).
 fn header_summary(section: &RepoSection) -> String {
     let mut parts: Vec<String> = sync_badge(section.ahead, section.behind, false)
         .into_iter()
@@ -917,19 +752,10 @@ fn header_summary(section: &RepoSection) -> String {
     parts.join(" · ")
 }
 
-/// Whether one already-reserved row lies in the viewport, so its body can be
-/// skipped for this frame.
-///
-/// The test reads the row's **own allocated rect**, never the walk's `y_cursor`.
-/// That counter adds the row height alone while the flow adds
-/// `item_spacing.y` on top of it, so it runs six pixels short per row and would
-/// cull against a position no row actually occupies.
 fn row_visible(ui: &Ui, rect: Rect) -> bool {
     ui.is_rect_visible(rect)
 }
 
-/// One directory group header inside a repo section: the directory segment
-/// (sans) and its branch count, indented by nesting depth.
 fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
@@ -943,12 +769,8 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     );
     child.spacing_mut().item_spacing.x = 0.0;
     child.add_space(PAD_LIST + depth as f32 * step);
-    // A subgroup is scaffolding with a name, so it shows the folder it stands
-    // for before the name.
     icons::icon(&mut child, Icon::FOLDER, KIT_ICON, Palette::T_MUTED);
     child.add_space(6.0);
-    // The segment is data, like a branch name (spec §19) — and a larger step
-    // than a section label's, so the two cannot be confused at a glance.
     child.add(
         egui::Label::new(
             RichText::new(format!("{label}/"))
@@ -965,17 +787,10 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     ));
 }
 
-/// Whether one repository shows its remote groups: the view-wide switch (the Git
-/// Log pane forces it) or that repository's own reveal from the rollup.
 pub fn remotes_revealed(tree: &TreeState, root: &RootId) -> bool {
     tree.show_remotes || tree.remotes_revealed.contains(root)
 }
 
-/// Whether a remote group is effectively collapsed. The per-surface default
-/// (`collapse_remotes_by_default`) flips the meaning of
-/// `TreeState::collapsed_remotes` membership: with the default expanded, a
-/// member is collapsed; with the default collapsed, a member is expanded.
-/// Either way the user toggle flips the effective state.
 fn remote_collapsed(tree: &TreeState, props: &TreeProps<'_>, root: &RootId, remote: &str) -> bool {
     let user_collapsed = tree
         .collapsed_remotes
@@ -987,9 +802,6 @@ fn remote_collapsed(tree: &TreeState, props: &TreeProps<'_>, root: &RootId, remo
     }
 }
 
-/// One expanded remote group header: the remote name, its branch count, and a
-/// "fetched Nm ago" freshness hint from the last-fetch timestamp. Clicking the
-/// header collapses that remote's group.
 fn remote_group_header(
     ui: &mut Ui,
     props: &TreeProps<'_>,
@@ -1018,8 +830,6 @@ fn remote_group_header(
     };
     icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
     child.add_space(6.0);
-    // A remote's name is data, like a branch name (spec §19) — monospace, so
-    // `origin` and `upstream-fork` line up the same way branch paths do.
     child.add(
         egui::Label::new(
             RichText::new(rg.remote.clone())
@@ -1028,7 +838,6 @@ fn remote_group_header(
         )
         .truncate(),
     );
-    // Branch count.
     child.add_space(6.0);
     child.add(egui::Label::new(
         RichText::new(rg.count.to_string())
@@ -1042,8 +851,6 @@ fn remote_group_header(
         });
     }
 
-    // Freshness hint: the last fetch, reused from the single view-wide
-    // timestamp (spec: "fetched Nm ago").
     if let Some(last) = props.last_fetch {
         let age = props
             .now
@@ -1061,9 +868,6 @@ fn remote_group_header(
     }
 }
 
-/// The collapsed per-repo "REMOTE" rollup row: a chevron, the section-cased
-/// label, and a count like "3 remotes · 41 branches". Clicking it reveals the
-/// remote groups for the whole view (issue 03).
 fn remote_rollup_row(
     ui: &mut Ui,
     tree: &mut TreeState,
@@ -1071,9 +875,6 @@ fn remote_rollup_row(
     events: &mut Vec<TreeEvent>,
 ) {
     let width = ui.available_width();
-    // Hover-only allocation; the `interact` below owns the click target. (An
-    // extra `Sense::click` on the allocation would register a second, silently
-    // discarded widget that wins the press and swallows the click.)
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
     let id = ui.auto_id_with(("remote_rollup", &section.root_id));
     let response = ui.interact(rect, id, Sense::click());
@@ -1100,9 +901,6 @@ fn remote_rollup_row(
         )
         .truncate(),
     );
-    // The derived rollup count — never a separate estimate. Labels and counts
-    // are chrome, so it reads in the UI sans (spec §19): only the branch and
-    // remote *names* are monospace.
     if let Some(rollup) = section.remote_rollup() {
         child.add_space(8.0);
         child.add(
@@ -1122,26 +920,6 @@ fn remote_rollup_row(
     }
 }
 
-/// One 30px branch row, laid out as three measured zones — icon + name,
-/// tracking branch, state words — each painted at an explicit x so the columns
-/// line up down the list.
-///
-/// **Identity and state are two different objects, and this row is where that
-/// stops being a convention.** The name is a **ref chip** (the shared chip
-/// geometry on the raised-on-card fill, in the row's own ink); the ahead /
-/// behind / dirty state is **coloured text** beside it, in the one
-/// repository-state map's inks. The name's ref chip is the row's only filled
-/// pill; the current marker is an icon on no fill, so no row carries two.
-///
-/// The fill is the shared row shell's: [`row_fill`] for a chosen row, or
-/// [`current_row_fill`] for the repository's current ref, and a **2px brand
-/// rail** at the leading edge through the one [`paint_rail`] whenever the row is
-/// the current ref or the chosen one. No row in this pane ever resolves to
-/// [`Palette::SELECTION`]: that token belongs to `current_row_fill` alone, and a
-/// chosen row — current or not — takes [`Palette::ROW_SELECTED`].
-///
-/// Clicking reports [`TreeEvent::RowClicked`] (never checks out — the caller
-/// decides).
 #[allow(clippy::too_many_arguments)]
 fn branch_row(
     ui: &mut Ui,
@@ -1154,8 +932,6 @@ fn branch_row(
     indent: f32,
     events: &mut Vec<TreeEvent>,
 ) {
-    // Issue 11: the branch being renamed edits inline on its own row. Rename
-    // is a local-branch verb, scoped to the owning repo.
     if props.allows_rename
         && branch.kind == BranchKind::Local
         && tree.selected_root.as_ref() == Some(id)
@@ -1172,14 +948,11 @@ fn branch_row(
     }
     let now = props.now;
     let meta = row_meta(branch, now);
-    // Remote rows are reference material (issue 13): quieter, labelled with
-    // their remote's name, and never carrying the current marker.
     let is_remote = branch.kind == BranchKind::Remote;
     let selected = tree.selected_root.as_ref() == Some(id)
         && tree.selected.as_deref() == Some(branch.name.as_str());
     let hovered = ui.rect_contains_pointer(rect);
 
-    // Interact after contents so child widgets (later actions) win clicks.
     let response = ui.interact(
         rect,
         ui.auto_id_with(("branch_row", id, &branch.name)),
@@ -1193,11 +966,6 @@ fn branch_row(
     } else {
         RowState::Default
     };
-    // A **chosen** row is one thing whichever of the two facts it also carries:
-    // it takes the list-row fill, never the current-ref token, so a selected
-    // current row cannot paint a band no other row in the app can produce. The
-    // current ref's own resting band is only consulted while the row is *not*
-    // chosen, which is the state in which nothing else is marking the row.
     let marked = selected || (is_current && !is_remote);
     let fill = if selected {
         row_fill(row_state)
@@ -1207,39 +975,18 @@ fn branch_row(
         row_fill(row_state)
     };
     if fill != Color32::TRANSPARENT {
-        // Paint on the row's own layer, before the row content: a dedicated
-        // `Order::Background` layer renders *above* the scroll content in the
-        // final pass, so a fill parked there would bury the branch name. Same
-        // layer + insertion order keeps the fill behind the row's own text.
         ui.painter()
             .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), fill);
     }
-    // The rail is **paint, not layout**: drawn over the row's own fill at its
-    // leading edge, so a marked row's first text origin *is* an unmarked row's.
-    // Reserving its width as padding would shift every row's content the moment
-    // it is selected or made current.
     if marked {
         paint_rail(ui.painter(), rect);
     }
 
-    // --- The row's three zones, laid out once over the full rect ---------------
-    // icon + name | tracking branch | state words. Every boundary comes from
-    // measuring what actually paints there, so nothing drifts with the length
-    // of a branch name.
     let chips = &meta.badge;
 
     let name_x = rect.left() + PAD_LIST + indent;
     let text_x = name_x + KIT_ICON + 6.0;
     let shows_pill = is_current && !is_remote;
-    // The current marker is a check icon, not a filled chip, and this is the
-    // measurement that reserves its slot. The reason is the design frame's, and
-    // it is a real one: the current chip's fill *is* the selected-row fill, so a
-    // filled marker on the current row would put the same opaque value on it
-    // that a chosen row takes — the marker would name the current ref in exactly
-    // the way the selection already names itself, and a row would carry a
-    // second filled shape whose whole job was to repeat a colour its own band
-    // already had. The row already answers "which one is current" with its
-    // band, its rail, and the repository band's head-ref chip above it.
     let pill_w = if shows_pill { KIT_ICON + 8.0 } else { 0.0 };
     let content_right = rect.right() - PAD_LIST;
     let mut badges_w: f32 = pill_w
@@ -1248,33 +995,19 @@ fn branch_row(
             .map(|(kind, label)| badge_words_width(ui, *kind, label) + 4.0)
             .sum::<f32>();
 
-    // The name/tracking split reads off the row's own width and nothing else —
-    // not this row's badges, not its current marker — which is what gives the
-    // tracking column one left edge down the whole list.
     let share_x = text_x + (content_right - 8.0 - text_x).max(0.0) * NAME_ZONE_SHARE;
     let name_w = (share_x - 8.0 - text_x).max(0.0);
 
-    // Space is then yielded in a stated order: the `current` marker never gives
-    // way and the name keeps its share; the tracking line shrinks to whatever
-    // lies between the name zone and the group, and the state words give up
-    // entirely before they would cross into the name zone. In the ~210px Git
-    // Log pane this ordering is the difference between marking the current
-    // branch and not marking it.
     let name_right = share_x - 8.0;
     let shows_badges = name_right - badges_w >= text_x;
     if !shows_badges {
-        // Only the state words give way; the current marker keeps its slot.
         badges_w = pill_w;
     }
-    // Right to left: the current marker, then the state words.
     let badges_right = content_right;
     let badges_x = badges_right - badges_w;
     let track_x = share_x;
     let track_w = (badges_x - 8.0 - share_x).max(0.0);
 
-    // The trailing zone: the current marker and the state words, right-anchored
-    // and permanent. A row's actions live in its context menu, so hovering never
-    // takes what the row says about itself away.
     let actions_rect = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(badges_right, rect.bottom()),
@@ -1286,17 +1019,9 @@ fn branch_row(
     );
     zone.spacing_mut().item_spacing.x = 0.0;
     zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        // The current marker takes the trailing slot, so it lines up down the
-        // list and is never the thing a narrow row squeezes out. It is the
-        // accent **text** ink — the ink the current chip would have used — on no
-        // fill at all, so the accent still says "the current ref" and the row
-        // never grows a second filled shape.
         if shows_pill {
             let _ = current_marker(ui);
         }
-        // Mid-operation state is first-class on the row (issue 09): a
-        // merge in progress reads "merging…" and survives tab switches. It is a
-        // state, so it is coloured words like every other one.
         if is_current && props.merge_in_progress {
             ui.add_space(8.0);
             state_words(
@@ -1307,31 +1032,16 @@ fn branch_row(
         }
         if shows_badges {
             for (kind, label) in chips.iter().rev() {
-                // **Coloured text**, never a chip: the reserved counter orange
-                // and the diverged red are state inks and a state behind a fill
-                // reads as a category.
-                //
-                // The gap is spent *before* the badge: this zone runs
-                // right-to-left, so a space added after it would land between
-                // this badge and the one further left, leaving the rightmost
-                // flush against the current marker it stands apart from. It
-                // also matches the slot the row reserved, which charges each
-                // badge 4px on its left.
                 ui.add_space(4.0);
                 badge_words(ui, *kind, label, sync_ink(*kind));
             }
         }
-        // A remote-tracking ref deleted upstream reads "gone" (issue 17,
-        // carried over from the Log pane's decoration states via the
-        // branch snapshot the caller assembles).
         if branch.kind == BranchKind::Remote && branch.gone {
             ui.add_space(8.0);
             state_words(ui, "gone", Palette::STATE_ERROR);
         }
     });
 
-    // The tracking zone: its own left edge, its own truncation budget, and no
-    // zone at all when the row is too narrow to hold one.
     if let Some(up) = &meta.upstream
         && track_w > 8.0
     {
@@ -1355,25 +1065,11 @@ fn branch_row(
         );
     }
 
-    // The name zone: a leading icon so the column has a fixed left edge, then
-    // the name **as a ref chip**.
-    //
-    // The v1 ink ladder is gone, and that is the point of the ticket: it
-    // painted diverged red, ahead/behind amber and everything else the row's own
-    // ink, so the *identity* text changed colour with the branch's *state* and
-    // the two read as one thing. Identity is now one object (the ref chip, in
-    // the row's ink) and state is another (coloured text, in the state zone).
     let ink = if is_remote {
         Palette::INK_2
     } else {
-        // Plain local branch: stale-aware primary (preserves §14.1 dimming).
         row_ink(meta.stale)
     };
-    // Display the leaf's own label: remote leaves carry the prefix-stripped
-    // name because their group header already names the remote (issue 03), so
-    // "origin/" is never re-printed here. The chip adds its own inset on each
-    // side, so the truncation budget leaves room for it or the chip would paint
-    // over the tracking column's left edge.
     let name = middle_truncate_to_width(
         ui,
         label,
@@ -1389,8 +1085,6 @@ fn branch_row(
             .max_rect(name_rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    // The zone's gaps are stated below, so egui's own inter-item spacing must
-    // not add an unstated one on top of them.
     child.spacing_mut().item_spacing.x = 0.0;
     icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, ink);
     child.add_space(6.0);
@@ -1402,10 +1096,6 @@ fn branch_row(
             branch: branch.name.clone(),
         });
     } else if props.allows_context_menu && response.secondary_clicked() {
-        // The anchor is the pointer position at the right-click, stashed in
-        // egui memory — the app crate has no egui types to carry it in
-        // `TreeState`. The surface that paints the menu reads it back under
-        // the same target key.
         let target = menu_host::target_of(id, &branch.name);
         let pos = ui
             .input(|i| i.pointer.interact_pos())
@@ -1417,8 +1107,6 @@ fn branch_row(
         });
     }
     if response.double_clicked() {
-        // Double-click activates — selecting and switching stay separate
-        // intents, and double-click is the explicit switch gesture.
         events.push(TreeEvent::RowActivated {
             root: id.clone(),
             branch: branch.name.clone(),
@@ -1427,17 +1115,8 @@ fn branch_row(
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &branch.name));
 }
 
-/// The current row's marker's accessible name: the marker is a check icon, and
-/// this is the word it says.
 const CURRENT_MARKER: &str = "Current";
 
-/// The current row's marker: a check icon at `KIT_ICON` in
-/// [`Palette::ACCENT_TEXT`], the ink the current chip would have used, on no
-/// background at all.
-///
-/// Painted through `paint_icon` over a manually allocated rect rather than
-/// through `icons::icon`, so the response carries the "Current" accessible
-/// label, which [`CURRENT_MARKER`] spells.
 fn current_marker(ui: &mut Ui) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(KIT_ICON), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -1453,12 +1132,6 @@ fn current_marker(ui: &mut Ui) -> Response {
     response
 }
 
-/// Inline rename editor on the row (issue 11): a draft input plus the
-/// upstream-follows disclosure, with confirm/cancel. Renaming the current
-/// branch does not touch the working tree (git's `branch -m` moves the ref
-/// and HEAD follows); the renamed branch re-sorts under the current ordering
-/// after the refresh. The draft lives in `TreeState` — the one deliberate
-/// exception to events-out — and only commit/cancel are reported.
 fn rename_editor(
     ui: &mut Ui,
     tree: &mut TreeState,
@@ -1484,8 +1157,6 @@ fn rename_editor(
     let enter = child.input(|i| i.key_pressed(egui::Key::Enter));
     child.horizontal(|ui| {
         ui.add_space(PAD_LIST);
-        // The buttons claim their space first: `widgets::text_input` takes every
-        // pixel the row has left, which pushed Apply and Cancel past its edge.
         let buttons_w = kit_button_width(ui, "Apply rename")
             + ui.spacing().item_spacing.x
             + kit_button_width(ui, "Cancel");
@@ -1507,8 +1178,6 @@ fn rename_editor(
             events.push(TreeEvent::RenameCancelled);
         }
     });
-    // The one thing the person must know before confirming: the tracking
-    // relationship does NOT follow the rename (issue 11, design §6.5).
     if let Some(up) = &branch.tracking {
         child.add_space(2.0);
         child.horizontal(|ui| {
@@ -1525,11 +1194,6 @@ fn rename_editor(
     }
 }
 
-/// One tag row: quiet mono name (tags are reference material, issue 13 makes
-/// them visually quieter; today they read at secondary) plus the tag's
-/// per-ref marker — `pushed` / `local only` / `gone` — when a decoration
-/// state exists (plan D8). The warm Branches cache is all-Default, so its
-/// rows paint unchanged.
 fn tag_row(ui: &mut Ui, tag: &crate::ui::branches_tree::TagLeaf) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
@@ -1562,8 +1226,6 @@ fn tag_row(ui: &mut Ui, tag: &crate::ui::branches_tree::TagLeaf) {
     }
 }
 
-/// The painted `(text, ink)` for a decoration state, or `None` for the plain
-/// default. Shared by tag rows and remote rows (the gone marker).
 fn ref_state_marker(state: turbogit_domain::model::RefState) -> Option<(&'static str, Color32)> {
     use turbogit_domain::model::RefState;
     match state {
@@ -1574,7 +1236,6 @@ fn ref_state_marker(state: turbogit_domain::model::RefState) -> Option<(&'static
     }
 }
 
-/// Muted "reading branches…" line in place of the list — never a blank panel.
 fn reading_state(ui: &mut Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
@@ -1586,8 +1247,6 @@ fn reading_state(ui: &mut Ui) {
     });
 }
 
-/// No search results: the list itself says so and turns the dead end into the
-/// likely next intent — creating the branch (design doc §3/§15).
 fn no_match_state(ui: &mut Ui, query: &str, events: &mut Vec<TreeEvent>) {
     ui.add_space(24.0);
     ui.horizontal(|ui| {
@@ -1609,13 +1268,6 @@ fn no_match_state(ui: &mut Ui, query: &str, events: &mut Vec<TreeEvent>) {
     });
 }
 
-/// A repo with no branches at all: one sentence + one create action, and no
-/// empty group headers (design doc §2/§15).
-///
-/// **Named `no_branches_state`, and deliberately *not* routed through
-/// [`crate::ui::widgets::empty_state`].** This is a centred sentence with a primary
-/// action button under it — a call to action — where `empty_state` is a sentence
-/// alone, at the muted step, in a list's place.
 fn no_branches_state(ui: &mut Ui, events: &mut Vec<TreeEvent>) {
     ui.vertical_centered(|ui| {
         ui.add_space(56.0);
@@ -1633,9 +1285,6 @@ fn no_branches_state(ui: &mut Ui, events: &mut Vec<TreeEvent>) {
     });
 }
 
-/// One local-branch reference for the keyboard path (plan D6): the owning
-/// repository, the branch, its repo's current branch (for the marker), and the
-/// repo's display name (deterministic tie-break across repos).
 #[derive(Clone, Copy, Debug)]
 pub struct LocalRow<'a> {
     pub root: &'a RootId,
@@ -1659,10 +1308,6 @@ pub fn keyboard_order<'a>(rows: &mut [LocalRow<'a>]) {
     });
 }
 
-/// Warm the per-root tag cache for every in-scope root (plan D10). The fill
-/// is the app layer's (["AppState::warm_branch_tags"]); both tree surfaces
-/// invoke this one shared step before rendering, so whichever opens first
-/// warms the cache for both.
 pub fn warm_tags(state: &mut turbogit_app::state::AppState) {
     state.warm_branch_tags();
 }

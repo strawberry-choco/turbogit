@@ -1,12 +1,3 @@
-//! Issue 02 — Branch tip commit in the data model.
-//!
-//! `branches()` must attach the tip's short hash, subject, author and time to
-//! every branch row on the same listing read (single `git for-each-ref` /
-//! libgit2 peel) with no extra per-branch git calls. Expected values come from
-//! `git rev-parse` / the pinned commit dates directly — an independent source
-//! of truth. Runs against the real CLI adapter *and* libgit2 so both backends
-//! stay in parity.
-
 use std::path::Path;
 
 use test_support::git_seed::{GitEnv, GitIdent, git_with_env};
@@ -17,15 +8,6 @@ use turbogit_engine_api::GitExecutor;
 
 const EPOCH: i64 = 1_700_000_000;
 
-// Every call, `commit` and `tip_repo` included, goes through the fixture crate's
-// runner under one identity value: an author (`ada`) that differs from the
-// committer (`comm`) — no single `git config user.*` can stand in — and, on the
-// commits that take an epoch, a per-call date pin, without which the asserted
-// `old_tip.time.timestamp() == EPOCH` would assert nothing.
-
-/// What every call in this file commits as. Carried as a value rather than four
-/// literals because the difference between the two roles is the property under
-/// test here.
 fn ident() -> GitEnv {
     GitEnv {
         author: GitIdent {
@@ -52,9 +34,6 @@ fn commit(repo: &Path, msg: &str, file: &str, epoch: Option<i64>) {
     git_with_env(repo, &["commit", "-q", "-m", msg], &env);
 }
 
-/// A repo on `main`: the pinned multi-line commit `# first topic`, branch
-/// `old` at it, then a fresh `second topic` on `main`, plus a tracked remote
-/// carrying both branches (fetched, so remote rows exist).
 fn tip_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("r");
@@ -108,8 +87,6 @@ fn find(branches: &[turbogit_domain::model::Branch], kind: BranchKind, name: &st
     assert!(b.tip.is_some(), "{kind:?} branch {name} carries a tip");
 }
 
-/// Every branch — local and remote — carries its tip commit's short hash,
-/// subject, author and time; the body of a multi-line message stays out.
 #[test]
 fn tip_commit_attached_to_local_and_remote_rows_on_both_backends() {
     for exec in [Box::new(cli()) as Box<dyn GitExecutor>, Box::new(g2())] {
@@ -122,8 +99,6 @@ fn tip_commit_attached_to_local_and_remote_rows_on_both_backends() {
         find(&branches, BranchKind::Remote, "main");
         find(&branches, BranchKind::Remote, "old");
 
-        // main's tip is the fresh `second topic` commit; the short hash must
-        // match git's own abbreviation.
         let main = branches
             .iter()
             .find(|b| b.kind == BranchKind::Local && b.name == "main")
@@ -147,8 +122,6 @@ fn tip_commit_attached_to_local_and_remote_rows_on_both_backends() {
             tip.time
         );
 
-        // `old`'s tip is the pinned commit: same fields, exact pinned time,
-        // and the body line is NOT part of the message.
         let old = branches
             .iter()
             .find(|b| b.kind == BranchKind::Local && b.name == "old")
@@ -172,8 +145,6 @@ fn tip_commit_attached_to_local_and_remote_rows_on_both_backends() {
     }
 }
 
-/// Local and remote rows pointing at the same commit agree on the tip, and
-/// the tip anchors `last_touched` (issue 32's stale input stays consistent).
 #[test]
 fn tip_time_anchors_last_touched() {
     for exec in [Box::new(cli()) as Box<dyn GitExecutor>, Box::new(g2())] {

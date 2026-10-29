@@ -1,10 +1,3 @@
-//! In-memory [`GitExecutor`] adapter for tests.
-//!
-//! One adapter at the engine seam is hypothetical; two make it real — the CLI
-//! executor in production, this fake in tests (ADR-0001). It records every
-//! mutating call so tests can assert call sequences ("stage then commit the
-//! index") without spawning git or touching a real repository.
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -14,12 +7,9 @@ use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
 use turbogit_engine_api::patch::parse_patch;
 
-/// One recorded engine call (mutating operations only).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     Add(Vec<PathBuf>),
-    /// A whole-file unstage, recorded with its paths: the per-file checkbox
-    /// writes the index in both directions, and a suite can only see one.
     Unstage(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
@@ -42,19 +32,13 @@ pub enum Call {
     ApplyPatch {
         direction: turbogit_engine_api::ApplyDirection,
     },
-    /// A worktree apply, recorded with the paths its sections name so a suite
-    /// can see the order the sections went in — the order is what the rollback's
-    /// coverage is argued against.
     ApplyPatchToWorktree {
         paths: Vec<PathBuf>,
     },
     AddIntentToAdd(Vec<PathBuf>),
-    /// A tag creation with its full spec (issue 31).
     TagCreate {
         spec: TagSpec,
     },
-    /// A tag push (`remote`, tag name or `None` for `--follow-tags`)
-    /// (issue 31).
     TagPush {
         root: PathBuf,
         remote: String,
@@ -62,64 +46,26 @@ pub enum Call {
     },
 }
 
-/// In-memory fake. Configure per-test state through the public fields before
-/// handing `&FakeExecutor` to core services.
 pub struct FakeExecutor {
-    /// Paths that answer `is_repo() == true` (test-only mutation via interior mutability).
     pub repos: Mutex<Vec<PathBuf>>,
-    /// Working-tree file contents served by `show_file` (`:<n>` revs).
     pub files: Mutex<HashMap<PathBuf, String>>,
-    /// Raw binary file contents served by `show_file_bytes` (`:<n>` revs);
-    /// consulted before [`Self::files`] so image/binary tests can stage
-    /// non-UTF-8 blobs (R8).
     pub files_bytes: Mutex<HashMap<PathBuf, Vec<u8>>>,
-    /// The three sides of a conflicted path, served by `conflict_versions` —
-    /// one answer per side, so a test can tell ours from theirs.
     pub conflicts: HashMap<PathBuf, ConflictVersions>,
-    /// How much changed, served by `change_stats` per question asked.
     pub change_stats: HashMap<ChangeQuestion, ChangeStats>,
-    /// The `(upstream, branch)` pairs that answer `is_ancestor` — an ancestor
-    /// relation is a fact a fixture states, not something to assume.
     pub ancestors: HashSet<(String, String)>,
-    /// Commit counts served by `commit_count_between`, keyed by `(from, to)`.
     pub commit_counts: HashMap<(String, String), usize>,
-    /// Revisions served by `resolve_revision`, keyed by the name asked for.
     pub revisions: HashMap<String, CommitId>,
-    /// Upstreams served by `branch_upstream`, keyed by branch name.
     pub upstreams: HashMap<String, Upstream>,
-    /// Branches returned per repo path.
     pub branches: HashMap<PathBuf, Vec<Branch>>,
-    /// Checkout history served by `recent_checkouts` per repo path, newest
-    /// first as a real reflog answers it. Absent = a repo whose HEAD has never
-    /// moved, which the port answers as an empty list rather than an error.
     pub recents: HashMap<PathBuf, Vec<RecentCheckout>>,
-    /// Current branch per repo path (`None` = detached).
     pub current_branch: HashMap<PathBuf, Option<String>>,
-    /// Remotes per repo path.
     pub remotes: HashMap<PathBuf, Vec<Remote>>,
-    /// Status per repo path.
     pub status: HashMap<PathBuf, RootStatus>,
-    /// The operation holding a repository, served by `holding_operation` per
-    /// repo path. Absent means idle — the fixture states who holds the
-    /// repository instead of planting git's marker files, which is what lets a
-    /// suite drive the rewrite gate and the status bar's item with no working
-    /// tree at all.
     pub holders: HashMap<PathBuf, OwnedOperation>,
-    /// Config values served by `config_get`, keyed by `(root, key)`.
     pub config: HashMap<(PathBuf, String), String>,
-    /// Patch text served by `diff` per repo path — the shapes a diff can take,
-    /// canned rather than computed, which is what lets a display suite run with
-    /// no `git` binary.
     pub diffs: HashMap<PathBuf, String>,
-    /// Commit log served per repo path, newest first. `log` slices it exactly
-    /// like a real backend: `skip` entries off the front, then up to
-    /// `max_count` (log paging) — so app-level paging tests can run without
-    /// git. Scoping (`branch`, `path`, `pickaxe`) is not modelled: every
-    /// listing is the whole seeded one.
     pub logs: HashMap<PathBuf, Vec<Commit>>,
-    /// Force-push to these branch names fails with `TgError::Other`.
     pub reject_force_branches: Vec<String>,
-    /// Recorded mutating calls, in order.
     pub calls: Mutex<Vec<Call>>,
 }
 
@@ -175,16 +121,11 @@ impl FakeExecutor {
 }
 
 impl GitExecutor for FakeExecutor {
-    // ---- read ----
-
     fn status(&self, root: &Path) -> TgResult<RootStatus> {
         Ok(self.status.get(root).cloned().unwrap_or_default())
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
-        // Page the seeded listing the way a real backend does: discard `skip`
-        // entries off the front, then take up to `max_count`. A window past
-        // the end is empty, not an error.
         let all = self.logs.get(root).map(Vec::as_slice).unwrap_or_default();
         let rest = all.get(opts.skip.unwrap_or(0)..).unwrap_or_default();
         Ok(match opts.max_count {
@@ -206,10 +147,6 @@ impl GitExecutor for FakeExecutor {
     }
 
     fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        // An empty answer is the normal case, exactly as the port states it for
-        // a repository whose reflog holds no checkout: a test that wants a
-        // Recent group seeds [`FakeExecutor::recents`], one that does not gets
-        // no group and no git binary.
         Ok(self.recents.get(root).cloned().unwrap_or_default())
     }
 
@@ -227,9 +164,6 @@ impl GitExecutor for FakeExecutor {
     }
 
     fn is_ancestor(&self, _root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
-        // Answered from what the fixture states: an ancestor relation is a
-        // fact, and an adapter that always says "merged" cannot fail a test
-        // about divergence.
         Ok(self
             .ancestors
             .contains(&(upstream.to_string(), branch.to_string())))
@@ -314,8 +248,6 @@ impl GitExecutor for FakeExecutor {
             .get(&(root.to_path_buf(), key.to_string()))
             .cloned())
     }
-
-    // ---- mutating ----
 
     fn init(&self, root: &Path) -> TgResult<()> {
         std::fs::create_dir_all(root.join(".git"))?;
@@ -470,8 +402,6 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    /// Records the skip and answers `Ok`: a fake has no sequencer to advance, so
-    /// the assertion a caller can make is that the verb was asked for.
     fn rebase_skip(&self, _root: &Path) -> TgResult<()> {
         Ok(())
     }
@@ -481,8 +411,6 @@ impl GitExecutor for FakeExecutor {
         _root: &Path,
         _conflicted: &[PathBuf],
     ) -> TgResult<Vec<PathBuf>> {
-        // The fake is never mid-merge (production tests use the CLI engine
-        // for the redesigned resolver — see `tests/conflict_resolver.rs`).
         Ok(Vec::new())
     }
 
@@ -524,8 +452,6 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    // ---- staging / working tree ----
-
     fn add(&self, _root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         self.calls.lock().unwrap().push(Call::Add(paths.to_vec()));
         Ok(())
@@ -556,9 +482,6 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    /// Records the section's paths and answers `Ok`: the fake has no working
-    /// tree to write into, so what a suite asserts through it is that the apply
-    /// was asked for, per section, in order — never that bytes moved.
     fn apply_patch_to_worktree(&self, _root: &Path, patch: &Patch) -> TgResult<()> {
         let paths: Vec<PathBuf> = patch
             .files
@@ -583,13 +506,8 @@ impl GitExecutor for FakeExecutor {
     }
 
     fn exclude_dir(&self, _root: &Path, _dir: &Path) -> TgResult<()> {
-        // Nothing to write: the fake has repositories only as far as its
-        // scripted answers reach, and no ignore file behind them. A caller
-        // that wants the entry asserted drives the real engine instead.
         Ok(())
     }
-
-    // ---- branches ----
 
     fn branch_create(
         &self,
@@ -617,8 +535,6 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    // ---- tags ----
-
     fn tag_create(&self, _root: &Path, spec: &TagSpec) -> TgResult<()> {
         self.calls
             .lock()
@@ -644,21 +560,13 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    // ---- diff / blame / history ----
-
     fn diff_patch(&self, root: &Path, _opts: &DiffOpts) -> TgResult<Patch> {
-        // Canned per root as git's text, parsed by the engine's own reader: a
-        // display or staging suite sees every shape with no `git` binary, and
-        // unseeded stays the empty patch it always answered.
         Ok(parse_patch(
             self.diffs.get(root).cloned().unwrap_or_default().as_str(),
         ))
     }
 
     fn patch_bytes(&self, root: &Path, _origin: &PatchOrigin, _reverse: bool) -> TgResult<Vec<u8>> {
-        // The same seeded text `diff_patch` parses, as bytes: a create-patch suite
-        // driving the fake needs the body it staged, and a read records no call —
-        // `Call` is the record of the mutations this fake stands in for.
         Ok(self
             .diffs
             .get(root)
@@ -672,8 +580,6 @@ impl GitExecutor for FakeExecutor {
     }
 
     fn index_file_bytes(&self, _root: &Path, path: &Path) -> TgResult<Vec<u8>> {
-        // The index side is what `files` / `files_bytes` hold here: this fake
-        // has no separate worktree, so the staged bytes are the seeded ones.
         if let Some(bytes) = self.files_bytes.lock().unwrap().get(path) {
             return Ok(bytes.clone());
         }
@@ -687,17 +593,12 @@ impl GitExecutor for FakeExecutor {
     }
 
     fn show_file(&self, _root: &Path, rev: &str, path: &Path) -> TgResult<String> {
-        // One content per path whatever the rev: a commit-scoped read is not
-        // modelled here. A conflict's three sides are — seed `conflicts`.
         let _ = rev;
         let bytes = self.show_file_bytes(_root, rev, path)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn show_file_bytes(&self, _root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
-        // Same rev-agnostic convention as `show_file`: binary content staged
-        // in `files_bytes` wins, text staged in `files` degrades to its UTF-8
-        // bytes; anything else is a clear unknown-path error.
         let _ = rev;
         if let Some(bytes) = self.files_bytes.lock().unwrap().get(path) {
             return Ok(bytes.clone());
@@ -710,8 +611,6 @@ impl GitExecutor for FakeExecutor {
             path.display()
         )))
     }
-
-    // ---- revert / undo ----
 
     fn revert(&self, _root: &Path, _commit: &str) -> TgResult<()> {
         Ok(())

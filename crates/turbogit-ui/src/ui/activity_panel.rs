@@ -1,12 +1,3 @@
-//! Activity log panel (issue #04, screen 01): a collapsible strip at the
-//! bottom of the shell recording every dispatched git operation and its
-//! outcome. Entries are session-durable — the feed outlives toasts; each
-//! row shows timestamp · repo · human-readable outcome, colored by severity.
-//!
-//! Filtering is by repo and by time window (header controls); Clear empties
-//! the feed. Collapse/expand only flips [`turbogit_app::activity::ActivityLog::expanded`]
-//! — the entries stay.
-
 use chrono::Local;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, ScrollArea, Sense, Shape,
@@ -20,18 +11,12 @@ use turbogit_app::activity::{ActivityKind, TimeWindow};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::DisplayName;
 
-/// Expanded panel height (header strip + feed).
 pub const ACTIVITY_HEIGHT: f32 = 200.0;
-/// Collapsed height: the header strip only.
 pub const ACTIVITY_COLLAPSED_HEIGHT: f32 = 26.0;
 
-// Shared type roles (T2): headers/metadata render at TYPE_CONTROL, rows/body
-// at TYPE_BODY — the activity panel consumes the global ramp instead of local
-// size copies.
 const HEADER_TEXT: f32 = crate::theme::TYPE_CONTROL;
 const ROW_TEXT: f32 = crate::theme::TYPE_BODY;
 
-/// The STATE_* token an entry's severity paints with (issue #04).
 pub fn kind_color(kind: ActivityKind) -> Color32 {
     match kind {
         ActivityKind::Success => Palette::STATE_SUCCESS,
@@ -40,18 +25,12 @@ pub fn kind_color(kind: ActivityKind) -> Color32 {
     }
 }
 
-/// Render the panel into `ui`, whose max rect is the panel's reserved
-/// bottom strip of the central body (see `shell::render`).
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-    // `LINE`, not `LINE_SUBTLE`: this edge separates the bottom strip from the
-    // central body above it.
     widgets::edge_rule(ui.painter(), rect, widgets::Edge::Top, Palette::LINE);
 
-    // Snapshot the visible feed so the rows borrow nothing while the
-    // header controls mutate the log.
     let rows: Vec<_> = state
         .ui
         .activity
@@ -97,8 +76,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 widgets::empty_state(ui, "No activity yet — dispatched operations land here.");
                 return;
             }
-            // Newest first: the feed is a record, but what the user wants to
-            // see is what just happened.
             for e in rows.iter().rev() {
                 ui.horizontal(|ui| {
                     ui.style_mut().spacing.item_spacing.x = 8.0;
@@ -123,12 +100,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         });
 }
 
-/// The header's title chip — the chevron and the LOG label inside one
+/// The header's title chip, the chevron and the LOG label inside one
 /// interactive rect, so the glyph a user aims at is the glyph that responds.
 ///
 /// History worth keeping: the old toggle allocated the click target and then
 /// let `icons::icon` allocate its own slot *beside* it, so the painted
-/// chevron landed outside the hit rect and the visible control was dead —
+/// chevron landed outside the hit rect and the visible control was dead,
 /// only the invisible 16px box to its left answered. The headless suite
 /// never noticed because kittest clicks the a11y rect's centre.
 fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
@@ -163,15 +140,6 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
         state.ui.activity.expanded = !expanded;
     }
     if response.hovered() {
-        // One radius for the fill and the ring around it. The ring is painted
-        // by the shared `widgets::focus_ring` contract, which strokes at
-        // CONTROL_RADIUS app-wide, so the hover fill follows the *ring* up
-        // from CHIP_RADIUS — never the other way round: moving the shared
-        // helper's radius would re-round every other custom-drawn control in
-        // the shell. This lands the control on the same radius as every
-        // vocabulary button, which paints its fill and its ring at
-        // CONTROL_RADIUS too. The Noop slot stays as it is: the tint has to
-        // paint behind the icon and label already emitted above.
         ui.painter().set(
             hover_tint,
             Shape::rect_filled(
@@ -197,7 +165,6 @@ fn window_label(window: TimeWindow) -> &'static str {
     }
 }
 
-/// The repo filter button's label: the active filter, or "All repos".
 fn repo_label(state: &AppState) -> String {
     state
         .ui
@@ -207,8 +174,6 @@ fn repo_label(state: &AppState) -> String {
         .unwrap_or_else(|| "All repos".to_owned())
 }
 
-/// Cycle the repo filter: All repos → each registered root in registration
-/// order → back to All repos.
 fn cycle_repo_filter(state: &mut AppState) {
     let labels: Vec<String> = state
         .multi
@@ -224,7 +189,6 @@ fn cycle_repo_filter(state: &mut AppState) {
             .skip_while(|l| *l != &cur)
             .nth(1)
             .cloned()
-            // Past the last root: back to all repos.
             .or(None),
     };
 }
