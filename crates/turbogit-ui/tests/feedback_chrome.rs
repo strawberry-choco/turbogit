@@ -210,7 +210,9 @@ fn dismiss_clears_the_toast() {
 fn confirm_ok_executes_the_destructive_action() {
     let (_project, dir) = repo_project();
     let mut harness = feedback_harness(dir);
+    let root = harness.state().selected_root.clone().unwrap();
     harness.state_mut().ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+        root,
         name: "feature-a".into(),
     });
     settle_quiet(&mut harness);
@@ -237,7 +239,9 @@ fn confirm_ok_executes_the_destructive_action() {
 fn confirm_cancel_keeps_everything_intact() {
     let (_project, dir) = repo_project();
     let mut harness = feedback_harness(dir);
+    let root = harness.state().selected_root.clone().unwrap();
     harness.state_mut().ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+        root,
         name: "feature-b".into(),
     });
     settle_quiet(&mut harness);

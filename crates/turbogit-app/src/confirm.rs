@@ -73,11 +73,11 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
                 ],
             }
         }
-        PendingConfirm::DeleteLocalBranch { name } => {
+        PendingConfirm::DeleteLocalBranch { root, name } => {
             let mut rows = vec![Row::strip(vec![format!(
                 "Delete local branch '{name}'? This cannot be undone."
             )])];
-            if let Some(warning) = state.branch_ahead_warning(name) {
+            if let Some(warning) = state.branch_ahead_warning(root, name) {
                 rows.push(Row::warning(warning));
             }
             if let Some(consequence) = &state.ui.branches_delete_consequence {
@@ -94,7 +94,11 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
                 buttons: vec![Button::ok(), Button::cancel()],
             }
         }
-        PendingConfirm::DeleteRemoteBranch { remote, name } => Prompt::question(
+        PendingConfirm::DeleteRemoteBranch {
+            remote,
+            name,
+            ..
+        } => Prompt::question(
             format!("Delete remote branch '{remote}/{name}'? This cannot be undone."),
             vec![Button::ok(), Button::cancel()],
         ),
@@ -217,20 +221,18 @@ pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
             ConfirmAction::Close => state.ui.confirm = None,
             _ => {}
         },
-        PendingConfirm::DeleteLocalBranch { name } => match action {
+        PendingConfirm::DeleteLocalBranch { root, name } => match action {
             ConfirmAction::OpenUnmerged => {
                 if let Some(unmerged) = state.ui.branches_delete_unmerged.clone() {
                     state.open_unmerged_commits(&unmerged);
                 }
             }
             ConfirmAction::Confirm => {
-                if let Some(root) = state.selected_root.clone()
-                    && let Some(tip_sha) = state.branch_tip(&root, name)
-                {
-                    let upstream = state.branch_upstream(&root, name);
+                if let Some(tip_sha) = state.branch_tip(root, name) {
+                    let upstream = state.branch_upstream(root, name);
                     let unmerged = state.ui.branches_delete_unmerged.clone();
                     state.ui.branches_delete_pending = Some(BranchDeletePending {
-                        root,
+                        root: root.clone(),
                         name: name.clone(),
                         tip_sha,
                         upstream,
@@ -300,16 +302,10 @@ pub fn run(state: &mut AppState, c: PendingConfirm) {
                 move |v| changes::discard_changes(v, root.as_path(), &changes),
             ));
         }
-        PendingConfirm::DeleteLocalBranch { name } => {
-            let Some(root) = state.selected_root.clone() else {
-                return;
-            };
+        PendingConfirm::DeleteLocalBranch { root, name } => {
             state.dispatch(Operation::DeleteBranch { root, name });
         }
-        PendingConfirm::DeleteRemoteBranch { remote, name } => {
-            let Some(root) = state.selected_root.clone() else {
-                return;
-            };
+        PendingConfirm::DeleteRemoteBranch { root, remote, name } => {
             state.dispatch(Operation::custom(
                 "Delete remote branch",
                 Affected::Root(root.clone()),

@@ -408,10 +408,16 @@ pub enum PendingConfirm {
     Discard {
         changes: Vec<Change>,
     },
+    /// The delete confirms carry their `root` because `AppState::selected_root` is
+    /// the workspace focus, not the row's repository: the branches tree never writes
+    /// it, so a name-only confirm deletes in whichever repo the user last selected,
+    /// including one that holds a same-named branch.
     DeleteLocalBranch {
+        root: RootId,
         name: String,
     },
     DeleteRemoteBranch {
+        root: RootId,
         remote: String,
         name: String,
     },

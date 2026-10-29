@@ -114,14 +114,13 @@ impl AppState {
             .ok()
     }
 
-    pub fn branch_ahead_warning(&self, branch: &str) -> Option<String> {
-        let root = self.selected_root.clone()?;
+    pub fn branch_ahead_warning(&self, root: &RootId, branch: &str) -> Option<String> {
         let upstream = self
             .executor
             .branch_upstream(root.as_path(), branch)
             .ok()??;
         if self
-            .is_ancestor(&root, &upstream.git_ref(), branch)
+            .is_ancestor(root, &upstream.git_ref(), branch)
             .unwrap_or(false)
         {
             return None;

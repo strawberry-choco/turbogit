@@ -85,6 +85,7 @@ fn a_branch_delete_carries_the_unmerged_link_to_what_it_would_lose() {
     let prompt = prompt(
         &state,
         &PendingConfirm::DeleteLocalBranch {
+            root: RootId(Arc::from(PathBuf::from("/repo/alpha"))),
             name: "feature".to_string(),
         },
     );

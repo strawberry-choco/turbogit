@@ -668,13 +668,17 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
         BranchRowAction::Delete(e) => match e {
             PopupEntry::Remote { name, .. } => {
                 state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch {
+                    root: id.clone(),
                     remote: "origin".into(),
                     name: name.clone(),
                 });
             }
             PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
                 state.ui.branches_delete_unmerged = state.unmerged_commits(id, name.as_str());
-                state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch { name: name.clone() });
+                state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+                    root: id.clone(),
+                    name: name.clone(),
+                });
             }
             PopupEntry::Tag { .. } => {}
         },

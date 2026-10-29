@@ -597,6 +597,7 @@ fn undo_banner(ui: &mut Ui, state: &mut AppState) {
             let label = format!("Remove the tracking remote branch {}", upstream.git_ref());
             if kit_button(ui, KitButton::Quiet, &label).clicked() {
                 state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch {
+                    root: undo.root.clone(),
                     remote: upstream.remote.clone(),
                     name: upstream.branch.clone(),
                 });
@@ -713,7 +714,11 @@ fn apply_branch_action(
                     .split_once('/')
                     .map(|(r, n)| (r.to_string(), n.to_string()))
                     .unwrap_or(("origin".into(), branch.name.clone()));
-                state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch { remote, name });
+                state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch {
+                    root: root.clone(),
+                    remote,
+                    name,
+                });
             }
             BranchKind::Local => {
                 if let Some(wt) = state
@@ -732,6 +737,7 @@ fn apply_branch_action(
                 state.ui.branches_delete_consequence = delete_consequence(state, root, branch);
                 state.ui.branches_delete_unmerged = state.unmerged_commits(root, &branch.name);
                 state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+                    root: root.clone(),
                     name: branch.name.clone(),
                 });
             }

@@ -1090,7 +1090,7 @@ pub(crate) mod surface {
         wait_for(&mut harness, |st| st.ui.confirm.is_some());
         assert!(matches!(
             harness.state().ui.confirm,
-            Some(turbogit_app::state::PendingConfirm::DeleteLocalBranch { ref name }) if name == "feature-a"
+            Some(turbogit_app::state::PendingConfirm::DeleteLocalBranch { ref name, .. }) if name == "feature-a"
         ));
         assert_painted(
             &harness,
@@ -1117,7 +1117,7 @@ pub(crate) mod surface {
         assert!(
             matches!(
                 &st.ui.confirm,
-                Some(turbogit_app::state::PendingConfirm::DeleteRemoteBranch { remote, name })
+                Some(turbogit_app::state::PendingConfirm::DeleteRemoteBranch { remote, name, .. })
                     if remote == "origin" && name == "remote-only"
             ),
             "a remote row's Delete reaches the upstream delete ask"

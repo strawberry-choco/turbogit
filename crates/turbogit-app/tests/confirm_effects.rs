@@ -34,6 +34,7 @@ fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
     let root = state.selected_root.clone().unwrap();
     let tip = git(&alpha, &["rev-parse", "work"]).trim().to_string();
     state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+        root: root.clone(),
         name: "work".to_string(),
     });
     state.ui.branches_delete_consequence = Some("This branch is unmerged.".to_string());
@@ -51,6 +52,7 @@ fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
     apply(
         &mut state,
         &PendingConfirm::DeleteLocalBranch {
+            root: root.clone(),
             name: "work".to_string(),
         },
         ConfirmAction::Confirm,
@@ -204,11 +206,13 @@ fn the_unmerged_link_opens_the_viewer_over_the_disclosure_it_carried() {
     let (_tmp, project) = tracking_project();
     let alpha = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = state.selected_root.clone().unwrap();
     state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+        root: root.clone(),
         name: "work".to_string(),
     });
     state.ui.branches_delete_unmerged = Some(UnmergedCommits {
-        root: state.selected_root.clone().unwrap(),
+        root: root.clone(),
         branch: "work".to_string(),
         merged_target: "main".to_string(),
         commits: vec![UnmergedCommit {
@@ -221,6 +225,7 @@ fn the_unmerged_link_opens_the_viewer_over_the_disclosure_it_carried() {
     apply(
         &mut state,
         &PendingConfirm::DeleteLocalBranch {
+            root,
             name: "work".to_string(),
         },
         ConfirmAction::OpenUnmerged,
