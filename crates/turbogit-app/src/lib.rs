@@ -30,6 +30,7 @@ pub mod persistence;
 pub mod pinned_views;
 pub mod polling;
 pub mod recents;
+pub mod reveals;
 pub mod root_caches;
 pub mod settle;
 pub mod shell_reads;

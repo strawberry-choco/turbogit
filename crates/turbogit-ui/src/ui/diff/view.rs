@@ -1,10 +1,10 @@
 use super::actions::{
-    commit_current_hunk, diff_options_button, hunk_gutter_actions, hunk_header_extras, hunk_nav,
-    hunk_nav_width,
+    Strip, commit_current_hunk, diff_options_button, hunk_gutter_actions, hunk_header_extras,
+    hunk_nav, hunk_nav_width, reveal_strip,
 };
 use super::model::{
-    DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
-    TEXT_X, is_file_row, mono_font, pane_kind,
+    BarKind, DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind,
+    SIGN_W, TEXT_X, gap_shape, is_file_row, mono_font, pane_kind,
 };
 use super::panes::{binary_placeholder, pane_byte_lens, render_image_pane};
 use crate::theme::Palette;
@@ -15,7 +15,8 @@ use egui::{
 };
 use std::ops::Range;
 use turbogit_app::granular;
-use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
+use turbogit_app::keyed_read::{DiffTarget, Keyed, PaneFlavour, PaneTarget, Read};
+use turbogit_app::reveals::Ask;
 use turbogit_app::staged_lines::{self, FileLineSets};
 use turbogit_app::state::{AppState, DiffPane};
 use turbogit_domain::model::{ChangeRef, ChangeStatus, DisplayName, RootId};
@@ -247,7 +248,13 @@ pub fn render_diff(
         Read::Fresh(diff)
             if view_failure.is_none() && pane_kind(&diff.model.files) == PaneKind::Text =>
         {
-            Some(paint_plan(state, &diff.model, change, staging_live))
+            Some(paint_plan(
+                state,
+                &diff.model,
+                change,
+                staging_live,
+                target.clone(),
+            ))
         }
         _ => None,
     };
@@ -368,11 +375,7 @@ pub fn render_diff(
 
     let side_by_side = state.ui.diff_side_by_side;
     let plan = plan.expect("a settled text diff computed the paint plan");
-    let total_rows = if side_by_side {
-        plan.sbs.len()
-    } else {
-        plan.unified.len()
-    };
+    let total_rows = plan.slots(side_by_side).len();
 
     if side_by_side {
         let width = ui.available_width();
@@ -446,9 +449,45 @@ struct FileRowStats {
     removed: usize,
 }
 
+/// One row of the painted diff. A plan index and a row index are the same
+/// number, which is what lets `show_rows` page the plan directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    /// A row of the display model, and which leg of it this row shows.
+    Display { di: u32, half: Half },
+    /// One unchanged line a reveal opened, `off` lines into its gap. It reports
+    /// the hunk it sits beside because `rows_rect` and `frame_hover` are fed from
+    /// display rows, and without this hovering an opened line would stop aiming
+    /// the current hunk.
+    Revealed { gap: u32, off: u32, hunk: u32 },
+    /// One bar over a gap that still hides lines. The kind is the affordance's
+    /// identity: it picks the glyph, the words and the edge the click opens, so a
+    /// bar cannot say one thing and do another.
+    Bar { gap: u32, bar: BarKind },
+}
+
+/// Unified mode gives each leg of a changed pair its own row; side-by-side gives
+/// the pair one row with two cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Half {
+    Full,
+    Del,
+    Add,
+    Pair,
+}
+
+impl Slot {
+    fn display(di: usize, half: Half) -> Self {
+        Self::Display {
+            di: di as u32,
+            half,
+        }
+    }
+}
+
 struct PaintPlan {
-    sbs: Vec<usize>,
-    unified: Vec<(usize, u8)>,
+    unified: Vec<Slot>,
+    sbs: Vec<Slot>,
     hunk_slots: Vec<HunkSlot>,
     hunk_hidden: Vec<usize>,
     hunk_lines: Vec<usize>,
@@ -457,9 +496,29 @@ struct PaintPlan {
     staging: Vec<PairStaging>,
     hunk_staging: Vec<HunkStaging>,
     staging_live: bool,
+    /// The comparison these rows display, kept so a strip's click can ask for
+    /// the text of the file its gap sits in.
+    comparison: DiffTarget,
+    /// `comparison.key()`, read once per frame: reveal counts are intent for one
+    /// settled comparison and for no other.
+    key: String,
 }
 
 impl PaintPlan {
+    fn slots(&self, side_by_side: bool) -> &[Slot] {
+        if side_by_side {
+            &self.sbs
+        } else {
+            &self.unified
+        }
+    }
+
+    /// A gap row is the same row in both modes: a bar, or one line it opened.
+    fn push_gap_slot(&mut self, slot: Slot) {
+        self.unified.push(slot);
+        self.sbs.push(slot);
+    }
+
     fn file_counts(&self, display: usize) -> (usize, usize) {
         self.file_rows
             .iter()
@@ -490,8 +549,10 @@ fn paint_plan(
     model: &DiffModel,
     change: &Option<ChangeRef>,
     staging_live: bool,
+    comparison: DiffTarget,
 ) -> PaintPlan {
     let hunk_count = model.hunk_count();
+    let key = comparison.key();
     let want_add = matches!(state.ui.diff_pane, DiffPane::New);
     let oracle = if staging_live {
         StagedRows::resolve(state, change)
@@ -501,7 +562,7 @@ fn paint_plan(
     let mut caret: Option<usize> = None;
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
-        unified: Vec::new(),
+        unified: Vec::with_capacity(model.display.len()),
         hunk_slots: vec![HunkSlot::UNSET; hunk_count],
         hunk_hidden: vec![0; hunk_count],
         hunk_lines: vec![0; hunk_count],
@@ -510,6 +571,8 @@ fn paint_plan(
         staging: vec![PairStaging::default(); model.display.len()],
         hunk_staging: vec![HunkStaging::NoAnswer; hunk_count],
         staging_live,
+        comparison,
+        key: key.clone(),
     };
     let mut open: Option<FileRowStats> = None;
     if model.files.len() == 1 {
@@ -525,11 +588,23 @@ fn paint_plan(
         }
     };
     let collapsed = &state.ui.diff_collapsed;
+    // `rows_from` prints a section's `diff --git` line only when the patch has
+    // more than one file, so a single-file pane has no boundary row to open its
+    // one section and the walk starts inside it.
+    let mut walking = (model.files.len() == 1).then_some(0usize);
+    let mut opened = 0usize;
     for (di, disp) in model.display.iter().enumerate() {
         match disp {
             DisplayRow::Full(row) => match row.kind {
                 RowKind::Meta | RowKind::RenameHeader => {
                     if is_file_row(row) {
+                        // A file's trailing gap lays out after its last body row,
+                        // which is the row before the next section opens.
+                        if let Some(done) = walking.take() {
+                            push_gap(&mut plan, model, state, &key, model.gaps().eof_gap(done));
+                        }
+                        walking = Some(opened);
+                        opened += 1;
                         close(&mut plan, &mut open);
                         open = Some(FileRowStats {
                             display: Some(di),
@@ -537,25 +612,32 @@ fn paint_plan(
                             removed: 0,
                         });
                     }
-                    plan.sbs.push(di);
-                    plan.unified.push((di, 0));
+                    plan.sbs.push(Slot::display(di, Half::Full));
+                    plan.unified.push(Slot::display(di, Half::Full));
                 }
                 RowKind::Hunk => {
+                    push_gap(
+                        &mut plan,
+                        model,
+                        state,
+                        &key,
+                        model.gaps().before_hunk(row.hunk),
+                    );
                     if row.hunk < hunk_count {
                         plan.hunk_slots[row.hunk] = HunkSlot {
                             sbs: plan.sbs.len(),
                             unified: plan.unified.len(),
                         };
                     }
-                    plan.sbs.push(di);
-                    plan.unified.push((di, 0));
+                    plan.sbs.push(Slot::display(di, Half::Full));
+                    plan.unified.push(Slot::display(di, Half::Full));
                 }
                 RowKind::Context => {
                     if collapsed.contains(&row.hunk) {
                         plan.hunk_hidden[row.hunk] += 1;
                     } else {
-                        plan.sbs.push(di);
-                        plan.unified.push((di, 0));
+                        plan.sbs.push(Slot::display(di, Half::Full));
+                        plan.unified.push(Slot::display(di, Half::Full));
                     }
                 }
                 RowKind::Del | RowKind::Add => {
@@ -580,12 +662,12 @@ fn paint_plan(
                 if collapsed.contains(&hunk) {
                     plan.hunk_hidden[hunk] += 1;
                 } else {
-                    plan.sbs.push(di);
+                    plan.sbs.push(Slot::display(di, Half::Pair));
                     if d.is_some() {
-                        plan.unified.push((di, 1));
+                        plan.unified.push(Slot::display(di, Half::Del));
                     }
                     if a.is_some() {
-                        plan.unified.push((di, 2));
+                        plan.unified.push(Slot::display(di, Half::Add));
                     }
                 }
                 plan.hunk_lines[hunk] += rows.count();
@@ -614,9 +696,77 @@ fn paint_plan(
             }
         }
     }
+    if let Some(done) = walking {
+        let last = model.gaps().eof_gap(done);
+        push_gap(&mut plan, model, state, &key, last);
+    }
     close(&mut plan, &mut open);
     plan.caret = caret;
     plan
+}
+
+/// Lay one gap out around the frontier its bars own: `[top run][next bar]
+/// [previous bar][bottom run]`.
+///
+/// A bar always sits between what it has opened and what is still hidden, so it
+/// walks away from its hunk as it is tapped rather than ending up inside the run
+/// it owns. The next bar's run grows downward, so the bar follows it; the previous
+/// bar's run grows upward into the hunk below, so the bar leads it. A collapsed bar
+/// owns both runs and sits between them. Nothing can keep a bar's own row still
+/// while also keeping it at the frontier, because `show_rows` derives its window
+/// from a pixel offset measured from the content top, so every row at or below an
+/// insertion index slides wherever the row was inserted.
+fn push_gap(
+    plan: &mut PaintPlan,
+    model: &DiffModel,
+    state: &AppState,
+    key: &str,
+    gap: Option<u32>,
+) {
+    let Some(gap) = gap else { return };
+    let Some(info) = model.gaps().gap(gap) else {
+        return;
+    };
+    let edges = state.ui.reveals.edges(key, gap as usize);
+    let side = state.ui.reveals.side(key, info.file);
+    let shape = gap_shape(info, edges, &side);
+    // The gap's own ends name the hunk an opened line belongs to: an interior or
+    // leading run sits above its `below` hunk, a trailing one below its `above`.
+    let hunk = info.below.or(info.above).unwrap_or_default() as u32;
+    if shape.offers_nothing() {
+        for off in shape.offsets() {
+            plan.push_gap_slot(Slot::Revealed { gap, off, hunk });
+        }
+        return;
+    }
+    for bar in shape.bars() {
+        let (head, tail) = shape.block(bar);
+        let slot = Slot::Bar { gap, bar };
+        match bar {
+            // Its run grows upward into the hunk below, so the bar leads it.
+            BarKind::Previous => {
+                plan.push_gap_slot(slot);
+                push_revealed(plan, gap, hunk, head.chain(tail));
+            }
+            // Its run grows downward away from the hunk above, so the bar follows it.
+            BarKind::Next => {
+                push_revealed(plan, gap, hunk, head.chain(tail));
+                plan.push_gap_slot(slot);
+            }
+            // It owns both runs, so it sits on the frontier between them.
+            BarKind::Collapsed => {
+                push_revealed(plan, gap, hunk, head);
+                plan.push_gap_slot(slot);
+                push_revealed(plan, gap, hunk, tail);
+            }
+        }
+    }
+}
+
+fn push_revealed(plan: &mut PaintPlan, gap: u32, hunk: u32, offsets: impl Iterator<Item = u32>) {
+    for off in offsets {
+        plan.push_gap_slot(Slot::Revealed { gap, off, hunk });
+    }
 }
 
 fn hunk_needs_scroll(ui: &Ui, paint: egui::Id, idx: usize) -> bool {
@@ -821,6 +971,109 @@ fn paint_gutter(
         num_color,
     );
 }
+
+/// One unchanged line's ink inside one cell: its number, a blank sign, its text.
+///
+/// Both render modes and both sources paint through here, so a line git printed
+/// as context and a line the user opened cannot drift apart.
+fn paint_context_row(
+    painter: &egui::Painter,
+    rect: &Rect,
+    num: usize,
+    text: &str,
+    font: &FontId,
+    side_by_side: bool,
+) {
+    let (num_right, sign_x, text_x) = if side_by_side {
+        (
+            rect.left() + NUM_W,
+            rect.left() + NUM_W + 6.0,
+            rect.left() + NUM_W + 20.0,
+        )
+    } else {
+        (
+            rect.left() + SIGN_W + NUM_W,
+            rect.left() + 4.0,
+            rect.left() + TEXT_X,
+        )
+    };
+    let galley = painter.layout_no_wrap(num.to_string(), font.clone(), Palette::INK_3);
+    painter.galley(
+        Pos2::new(
+            num_right - galley.size().x - 6.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        Palette::INK_3,
+    );
+    paint_cell(painter, sign_x, rect, " ", Palette::INK_3, font);
+    paint_cell(painter, text_x, rect, text, Palette::INK, font);
+}
+
+/// One unchanged line in side-by-side: two cells over one text, each numbered
+/// from its own side. Answers whether either takes the pointer.
+fn context_pair(
+    ui: &mut Ui,
+    half: f32,
+    old_no: usize,
+    new_no: usize,
+    text: &str,
+    painter: &egui::Painter,
+    font: &FontId,
+) -> bool {
+    let mut hovered = false;
+    for num in [old_no, new_no] {
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(half, ROW_H), Sense::hover());
+        paint_context_row(painter, &rect, num, text, font, true);
+        hovered |= resp.hovered();
+    }
+    hovered
+}
+
+/// One bar over a gap that still hides lines: a full-width row in both modes,
+/// with the one button of the affordance `bar` names. Its click opens that bar's
+/// edge and admits the read its text comes from, and a click already buys its own
+/// follow-up frame, so nothing here asks for one.
+#[allow(clippy::too_many_arguments)]
+fn strip_row(
+    ui: &mut Ui,
+    state: &mut AppState,
+    model: &DiffModel,
+    plan: &PaintPlan,
+    gap: u32,
+    bar: BarKind,
+    paint: egui::Id,
+    width: f32,
+    font: &FontId,
+    rows_rect: &mut Option<Rect>,
+) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+    *rows_rect = Some(match *rows_rect {
+        Some(union) => union.union(rect),
+        None => rect,
+    });
+    let Some(info) = model.gaps().gap(gap) else {
+        return;
+    };
+    let edges = state.ui.reveals.edges(&plan.key, gap as usize);
+    let ask = state.ui.reveals.side(&plan.key, info.file);
+    let shape = gap_shape(info, edges, &ask);
+    reveal_strip(
+        ui,
+        state,
+        Strip {
+            band: rect,
+            paint,
+            key: &plan.key,
+            comparison: &plan.comparison,
+            font,
+        },
+        gap,
+        info,
+        bar,
+        shape.hidden_left(),
+    );
+}
 #[allow(clippy::too_many_arguments)]
 fn render_unified(
     ui: &mut Ui,
@@ -841,61 +1094,73 @@ fn render_unified(
     if start < end {
         let mut frame_hover: Option<usize> = None;
         let mut rows_rect: Option<Rect> = None;
-        for &(di, member) in &plan.unified[start..end] {
-            match (&model.display[di], member) {
-                (DisplayRow::Full(row), 0) => {
-                    unified_row(
+        for slot in &plan.unified[start..end] {
+            match *slot {
+                Slot::Display { di, half } => {
+                    let row = match (half, &model.display[di as usize]) {
+                        (Half::Full, DisplayRow::Full(row)) => Some(row),
+                        (Half::Del, DisplayRow::Pair(Some(row), _)) => Some(row),
+                        (Half::Add, DisplayRow::Pair(_, Some(row))) => Some(row),
+                        _ => None,
+                    };
+                    if let Some(row) = row {
+                        unified_row(
+                            ui,
+                            state,
+                            di as usize,
+                            row,
+                            width,
+                            &painter,
+                            &font,
+                            paint,
+                            status,
+                            change,
+                            plan,
+                            &mut frame_hover,
+                            &mut rows_rect,
+                        );
+                    }
+                }
+                Slot::Revealed { gap, off, hunk } => {
+                    if let Some(info) = model.gaps().gap(gap) {
+                        let ask = state.ui.reveals.side(&plan.key, info.file);
+                        let text = match &ask {
+                            Ask::Have(side) => side.line(info.new_first + off).unwrap_or_default(),
+                            Ask::None | Ask::Waiting => "",
+                        };
+                        let (rect, resp) =
+                            ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                        rows_rect = Some(match rows_rect {
+                            Some(union) => union.union(rect),
+                            None => rect,
+                        });
+                        paint_context_row(
+                            &painter,
+                            &rect,
+                            (info.new_first + off) as usize,
+                            text,
+                            &font,
+                            false,
+                        );
+                        if resp.hovered() {
+                            frame_hover = Some(hunk as usize);
+                        }
+                    }
+                }
+                Slot::Bar { gap, bar } => {
+                    strip_row(
                         ui,
                         state,
-                        di,
-                        row,
-                        width,
-                        &painter,
-                        &font,
-                        paint,
-                        status,
-                        change,
+                        model,
                         plan,
-                        &mut frame_hover,
+                        gap,
+                        bar,
+                        paint,
+                        width,
+                        &font,
                         &mut rows_rect,
                     );
                 }
-                (DisplayRow::Pair(Some(row), _), 1) => {
-                    unified_row(
-                        ui,
-                        state,
-                        di,
-                        row,
-                        width,
-                        &painter,
-                        &font,
-                        paint,
-                        status,
-                        change,
-                        plan,
-                        &mut frame_hover,
-                        &mut rows_rect,
-                    );
-                }
-                (DisplayRow::Pair(_, Some(row)), 2) => {
-                    unified_row(
-                        ui,
-                        state,
-                        di,
-                        row,
-                        width,
-                        &painter,
-                        &font,
-                        paint,
-                        status,
-                        change,
-                        plan,
-                        &mut frame_hover,
-                        &mut rows_rect,
-                    );
-                }
-
-                _ => {}
             }
         }
         commit_current_hunk(state, ui, rows_rect, frame_hover);
@@ -1038,23 +1303,7 @@ fn unified_row(
     }
     match row.kind {
         RowKind::Context => {
-            paint_gutter(
-                painter,
-                &rect,
-                " ",
-                row.new_no,
-                Palette::INK_3,
-                Palette::INK_3,
-                font,
-            );
-            paint_cell(
-                painter,
-                rect.left() + TEXT_X,
-                &rect,
-                &row.text,
-                Palette::INK,
-                font,
-            );
+            paint_context_row(painter, &rect, row.new_no, &row.text, font, false);
         }
         RowKind::Del => {
             let caret = holds_caret(state, plan, display, RowKind::Del);
@@ -1286,9 +1535,45 @@ fn render_side_by_side(
 
     let end = visible.end.min(plan.sbs.len());
     let start = visible.start.min(end);
-    for &di in &plan.sbs[start..end] {
-        match &model.display[di] {
-            DisplayRow::Full(row) => match row.kind {
+    for slot in &plan.sbs[start..end] {
+        let (di, which) = match *slot {
+            Slot::Display { di, half } => (di, half),
+            Slot::Revealed { gap, off, hunk } => {
+                if let Some(info) = model.gaps().gap(gap) {
+                    let ask = state.ui.reveals.side(&plan.key, info.file);
+                    let text = match &ask {
+                        Ask::Have(side) => side.line(info.new_first + off).unwrap_or_default(),
+                        Ask::None | Ask::Waiting => "",
+                    };
+                    let old_no = (info.old_first + off) as usize;
+                    let new_no = (info.new_first + off) as usize;
+                    ui.horizontal(|ui| {
+                        if context_pair(ui, half, old_no, new_no, text, &painter, &font) {
+                            frame_hover = Some(hunk as usize);
+                        }
+                    });
+                }
+                continue;
+            }
+            Slot::Bar { gap, bar } => {
+                strip_row(
+                    ui,
+                    state,
+                    model,
+                    plan,
+                    gap,
+                    bar,
+                    paint,
+                    width,
+                    &font,
+                    &mut rows_rect,
+                );
+                continue;
+            }
+        };
+        let display = di as usize;
+        match (which, &model.display[display]) {
+            (Half::Full, DisplayRow::Full(row)) => match row.kind {
                 RowKind::Meta | RowKind::RenameHeader | RowKind::Hunk => {
                     let (rect, resp) =
                         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -1304,7 +1589,7 @@ fn render_side_by_side(
                         state,
                         &rect,
                         row,
-                        di,
+                        display,
                         &painter,
                         &font,
                         paint,
@@ -1316,51 +1601,20 @@ fn render_side_by_side(
                 }
                 RowKind::Context => {
                     let hunk = row.hunk;
+                    let (old_no, new_no, text) = (row.old_no, row.new_no, row.text.as_str());
                     ui.horizontal(|ui| {
-                        let old_cell = cell_band(
-                            ui,
-                            half,
-                            &Highlight::Off,
-                            Palette::DIFF_DEL_BG,
-                            false,
-                            row.old_no,
-                            ' ',
-                            &row.text,
-                            Palette::INK,
-                            None,
-                            &painter,
-                            &font,
-                            false,
-                            false,
-                        );
-                        let new_cell = cell_band(
-                            ui,
-                            half,
-                            &Highlight::Off,
-                            Palette::DIFF_ADD_BG,
-                            false,
-                            row.new_no,
-                            ' ',
-                            &row.text,
-                            Palette::INK,
-                            None,
-                            &painter,
-                            &font,
-                            false,
-                            false,
-                        );
-                        if old_cell.hovered() || new_cell.hovered() {
+                        if context_pair(ui, half, old_no, new_no, text, &painter, &font) {
                             frame_hover = Some(hunk);
                         }
                     });
                 }
                 RowKind::Del | RowKind::Add => unreachable!("changed rows are always paired"),
             },
-            DisplayRow::Pair(d, a) => {
+            (Half::Pair, DisplayRow::Pair(d, a)) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
-                let caret_row = plan.caret == Some(di);
-                let del_staged = plan.staged(di, RowKind::Del);
-                let add_staged = plan.staged(di, RowKind::Add);
+                let caret_row = plan.caret == Some(display);
+                let del_staged = plan.staged(display, RowKind::Del);
+                let add_staged = plan.staged(display, RowKind::Add);
                 let (del_band, del_ink) = row_treatment(RowKind::Del, del_staged);
                 let (add_band, add_ink) = row_treatment(RowKind::Add, add_staged);
                 ui.horizontal(|ui| {
@@ -1453,6 +1707,7 @@ fn render_side_by_side(
                     }
                 });
             }
+            _ => {}
         }
     }
     commit_current_hunk(state, ui, rows_rect, frame_hover);

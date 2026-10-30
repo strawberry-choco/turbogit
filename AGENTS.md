@@ -22,6 +22,7 @@ plus a thin root composition root.
   `events`, `root_caches`, `persistence`, `recents`, `diff_data` (plain
   diff-pane types), `diff_model` (the egui-free display model the diff read
   answers with), `diff_load` (the pane's byte sourcing and decode limits),
+  `reveals` (a gap's reveal intent and one file's line-addressable text),
   `log_display` (the held log-window display model and its lane walk), `staged_lines`
   (the per-line staged oracle, and the only place that relates a line of one
   patch to a line of another), and the

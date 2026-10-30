@@ -4,6 +4,7 @@ use turbogit_domain::model::Patch;
 use turbogit_engine_api::GitExecutor;
 
 use crate::events::{DecodedImage, FetchedBlob};
+use crate::reveals::SideText;
 
 /// A byte size at which an image stops being decoded, beyond it the pane
 /// falls back to the binary-change caption, which needs a length, not pixels.
@@ -39,32 +40,66 @@ pub struct PaneSideRequest {
     pub path: String,
 }
 
-pub(crate) fn fetch_side(
+/// What a side leg got: its bytes, or only how long they are. The second form is
+/// the worktree shortcut a binary placeholder needs, so the two are one type
+/// rather than a flag a caller has to remember.
+#[derive(Debug)]
+pub(crate) enum SideBytes {
+    Contents(Vec<u8>),
+    Length(u64),
+}
+
+/// One side's bytes, with `want_content` deciding whether a worktree side is read
+/// at all. A rev and an index side have no cheap length to ask for, so they are
+/// read either way.
+pub(crate) fn side_bytes(
     exec: &dyn GitExecutor,
     side: &PaneSideRequest,
-    decode: bool,
-) -> Option<FetchedBlob> {
+    want_content: bool,
+) -> Option<SideBytes> {
     let PaneSideRequest { root, spec, path } = side;
     let rel = Path::new(path);
     let bytes = match spec {
         SideSpec::Missing => return None,
         SideSpec::Worktree => {
             let full = root.join(rel);
-            if !decode {
-                let len = std::fs::metadata(full).ok()?.len();
-                return Some(FetchedBlob {
-                    byte_len: len,
-                    decoded: None,
-                });
+            if !want_content {
+                return Some(SideBytes::Length(std::fs::metadata(full).ok()?.len()));
             }
             std::fs::read(full).ok()?
         }
         SideSpec::Rev(rev) => exec.show_file_bytes(root, rev, rel).ok()?,
         SideSpec::Index => exec.index_file_bytes(root, rel).ok()?,
     };
-    let byte_len = bytes.len() as u64;
-    let decoded = decode.then(|| decode_image(&bytes)).flatten();
-    Some(FetchedBlob { byte_len, decoded })
+    Some(SideBytes::Contents(bytes))
+}
+
+/// One side's text for a context reveal: the bytes, decoded, or nothing at all.
+/// Undecodable bytes are an answer of "no text" rather than a lossy decode, so a
+/// revealed line is never painted as replacement characters.
+pub(crate) fn side_text(exec: &dyn GitExecutor, side: &PaneSideRequest) -> Option<SideText> {
+    let SideBytes::Contents(bytes) = side_bytes(exec, side, true)? else {
+        return None;
+    };
+    SideText::new(bytes)
+}
+
+pub(crate) fn fetch_side(
+    exec: &dyn GitExecutor,
+    side: &PaneSideRequest,
+    decode: bool,
+) -> Option<FetchedBlob> {
+    match side_bytes(exec, side, decode)? {
+        SideBytes::Length(len) => Some(FetchedBlob {
+            byte_len: len,
+            decoded: None,
+        }),
+        SideBytes::Contents(bytes) => {
+            let byte_len = bytes.len() as u64;
+            let decoded = decode.then(|| decode_image(&bytes)).flatten();
+            Some(FetchedBlob { byte_len, decoded })
+        }
+    }
 }
 
 fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
@@ -172,6 +207,38 @@ mod tests {
             )
             .is_none(),
             "a new or deleted file has one side, not two"
+        );
+    }
+
+    #[test]
+    fn only_a_request_for_content_reads_a_worktree_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("asset.bin"), vec![7u8; 4096]).unwrap();
+        let exec = turbogit_engine::fake::FakeExecutor::new();
+        let side = request(dir.path(), SideSpec::Worktree, "asset.bin");
+        assert!(
+            matches!(
+                side_bytes(&exec, &side, false),
+                Some(SideBytes::Length(4096))
+            ),
+            "a caption wants a length and takes `fs::metadata`, never the bytes"
+        );
+        assert!(
+            matches!(
+                side_bytes(&exec, &side, true),
+                Some(SideBytes::Contents(ref bytes)) if bytes.len() == 4096
+            ),
+            "the context leg is the one that reads"
+        );
+        assert!(side_text(&exec, &side).is_some());
+        assert!(
+            side_bytes(
+                &exec,
+                &request(dir.path(), SideSpec::Missing, "asset.bin"),
+                true
+            )
+            .is_none(),
+            "a side that is not there has no bytes to read"
         );
     }
 

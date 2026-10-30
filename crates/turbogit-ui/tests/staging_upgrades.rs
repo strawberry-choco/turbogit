@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_painted, galley_origin, painted_galleys, painted_text, shell_harness_over_unstyled,
+    assert_not_painted, assert_painted, galley_origin, painted_galleys, painted_text,
+    shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::AppState;
@@ -263,5 +264,63 @@ fn partially_staged_hunk_names_itself_part_in_its_header() {
         vec!["· part".to_owned()],
         "the one hunk on screen holds both states, so it names itself part and \
          nothing else does"
+    );
+}
+
+/// `HunkTarget::Whole` reaches the index through git's own per-file hunk array,
+/// addressed by position. Revealing context inserts rows between two hunks'
+/// headers, so the one coupling it can break is which hunk a header's stage
+/// button names: the same click must produce the same patch either way.
+#[test]
+fn staging_a_hunk_after_revealing_around_it_stages_what_staging_alone_stages() {
+    let quiet_dir = tempfile::tempdir().unwrap();
+    let loud_dir = tempfile::tempdir().unwrap();
+    let quiet = temp_repo(quiet_dir.path(), "reveal-quiet");
+    let loud = temp_repo(loud_dir.path(), "reveal-loud");
+    seed_two_hunk_edit(&quiet);
+    seed_two_hunk_edit(&loud);
+
+    let mut q = harness(std::slice::from_ref(&quiet.path));
+    open_preview(&mut q);
+    let mut l = harness(std::slice::from_ref(&loud.path));
+    open_preview(&mut l);
+
+    assert_painted(&l, "6 unchanged lines hidden");
+    l.get_by_label("Expand lines between hunks 1 and 2").click();
+    l.run();
+    assert!(
+        wait_until(15_000, || {
+            l.run();
+            l.query_by_label("Expand lines between hunks 1 and 2")
+                .is_none()
+        }),
+        "one tap opens the whole 6-line run, so its strip must go, got:\n{}",
+        painted_text(&l).join("\n")
+    );
+    assert_not_painted(&l, "6 unchanged lines hidden");
+    assert!(
+        wait_until(15_000, || {
+            l.run();
+            !l.state().read_pending()
+        }),
+        "the reveal's read must settle before either pane stages"
+    );
+
+    q.get_by_label("Stage hunk 1").click();
+    l.get_by_label("Stage hunk 1").click();
+    assert!(
+        wait_until(15_000, || {
+            q.run();
+            l.run();
+            staged_contains(&quiet, "code.rs") && staged_contains(&loud, "code.rs")
+        }),
+        "both hunks must reach the index, quiet:\n{}\nloud:\n{}",
+        git(&quiet.path, &["diff", "--cached"]),
+        git(&loud.path, &["diff", "--cached"])
+    );
+    assert_eq!(
+        git(&quiet.path, &["diff", "--cached"]),
+        git(&loud.path, &["diff", "--cached"]),
+        "the pane that opened 6 lines of context between its two hunks must stage          exactly what the pane that opened none stages"
     );
 }

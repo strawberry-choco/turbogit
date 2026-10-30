@@ -10,6 +10,7 @@ use crate::diff_load::{PaneSideRequest, SideSpec};
 use crate::diff_model::{DiffValue, FileMeta};
 use crate::events::{AppEvent, FetchedBlob};
 use crate::granular;
+use crate::reveals::SideText;
 use crate::root_caches::StatsView;
 use crate::state::{AppState, BlameTarget, UiState};
 
@@ -28,6 +29,18 @@ pub enum Kind {
     Diff,
     Blame,
     Pane,
+    Context,
+}
+
+impl Kind {
+    /// Kept in step with [`Kind`] by hand; Rust has no variant count. A stale
+    /// value fails as an out-of-bounds index at the first read of the missing
+    /// kind, never as a wrong answer, which is the trade for the array below.
+    pub const COUNT: usize = 4;
+
+    fn index(self) -> usize {
+        self as usize
+    }
 }
 
 #[derive(Default)]
@@ -75,42 +88,26 @@ impl Slot {
 
 #[derive(Default)]
 pub(crate) struct Reads {
-    diff: Slot,
-    blame: Slot,
-    pane: Slot,
+    slots: [Slot; Kind::COUNT],
 }
 
 impl Reads {
     fn slot(&mut self, kind: Kind) -> &mut Slot {
-        match kind {
-            Kind::Diff => &mut self.diff,
-            Kind::Blame => &mut self.blame,
-            Kind::Pane => &mut self.pane,
-        }
+        &mut self.slots[kind.index()]
     }
 
     fn slot_of(&self, kind: Kind) -> &Slot {
-        match kind {
-            Kind::Diff => &self.diff,
-            Kind::Blame => &self.blame,
-            Kind::Pane => &self.pane,
-        }
+        &self.slots[kind.index()]
     }
 
     pub(crate) fn invalidate(&mut self) {
-        self.diff = Slot::default();
-        self.blame = Slot::default();
-        self.pane = Slot::default();
+        for slot in &mut self.slots {
+            *slot = Slot::default();
+        }
     }
 
     pub(crate) fn any_pending(&self) -> bool {
-        [
-            self.diff.in_flight.as_ref(),
-            self.blame.in_flight.as_ref(),
-            self.pane.in_flight.as_ref(),
-        ]
-        .iter()
-        .any(Option::is_some)
+        self.slots.iter().any(|slot| slot.in_flight().is_some())
     }
 }
 
@@ -187,6 +184,26 @@ pub(crate) fn settle_blame(state: &mut AppState, key: String, result: TgResult<V
     settle_single(state, Kind::Blame, &key, result.map(Arc::from), |ui| {
         &mut ui.blame_cache
     });
+}
+
+/// The landing pad is written first and folded into the reveal state second, so
+/// a side that arrives for a comparison nobody is revealing is dropped rather
+/// than adopted, and a failed read leaves no file stuck on `Ask::Waiting`.
+pub(crate) fn settle_context(
+    state: &mut AppState,
+    key: String,
+    comparison: String,
+    file: usize,
+    result: TgResult<Option<Arc<SideText>>>,
+) {
+    settle_single(state, Kind::Context, &key, result, |ui| {
+        &mut ui.context_side
+    });
+    let landed = match &state.ui.context_side {
+        Some((landed, side)) if landed == &key => side.clone(),
+        _ => None,
+    };
+    state.ui.reveals.settle(&comparison, file, landed);
 }
 
 /// unlike the other two kinds.
@@ -328,6 +345,12 @@ impl Keyed for DiffTarget {
         }
         state.ui.diff_current_hunk = 0;
         state.ui.diff_collapsed.clear();
+        // Reveal counts are deliberately not cleared here. A stage is a refresh
+        // and a refresh reaches this fetch, so wiping them would close every
+        // region the user opened for the reason they staged a line; they are
+        // intent keyed to this comparison and clamped by its own gap table, so
+        // the answer settling here keeps them valid and `Reveals` resets only
+        // when the key changes.
 
         if let Some(rel) = self.path.as_ref()
             && granular::status_of(state, &RootId(self.root.clone().into()), rel)
@@ -340,6 +363,11 @@ impl Keyed for DiffTarget {
 
         state.reads.slot(Self::KIND).take(&key);
         let (left, right) = self.sides();
+        // One context leg: `ContextTarget` reads one side's text and answers both
+        // panes with it, and that is only true because nothing here sets
+        // `ignore_whitespace`. A whitespace-ignoring diff makes lines the patch
+        // calls unchanged differ between the sides, so the day an option reaches
+        // this construction, the reveal must read two.
         let opts = DiffOpts {
             left,
             right,
@@ -466,6 +494,82 @@ impl Keyed for PaneTarget {
             let old = crate::diff_load::fetch_side(executor.as_ref(), &old, decode);
             let new = crate::diff_load::fetch_side(executor.as_ref(), &new, decode);
             let _ = tx.send(AppEvent::FileBytesReady { key, old, new });
+        });
+    }
+}
+
+/// One file section's text, the source a revealed context line is read from.
+/// A fourth kind rather than a field on the diff's value, so opening a diff
+/// costs no git work and only a tap reads a file.
+#[derive(Clone, Debug)]
+pub struct ContextTarget {
+    pub comparison: DiffTarget,
+    /// Index into `DiffModel::files`, the same ordinal as `Gap::file`.
+    pub file: usize,
+}
+
+impl ContextTarget {
+    pub fn new(comparison: DiffTarget, file: usize) -> Self {
+        Self { comparison, file }
+    }
+}
+
+impl private::Sealed for ContextTarget {}
+
+impl Keyed for ContextTarget {
+    type Value = Option<Arc<SideText>>;
+
+    const KIND: Kind = Kind::Context;
+
+    fn key(&self) -> String {
+        format!("{}#ctx{}", self.comparison.key(), self.file)
+    }
+
+    fn answer(&self, state: &AppState, key: &str) -> Option<Self::Value> {
+        let (cached, side) = state.ui.context_side.as_ref()?;
+        (cached == key).then(|| side.clone())
+    }
+
+    /// A side that refused to decode is a settled answer of "no text", not a
+    /// failure and not something to ask again.
+    fn settled_empty(&self, state: &AppState, key: &str) -> bool {
+        state
+            .ui
+            .context_side
+            .as_ref()
+            .is_some_and(|(cached, side)| cached == key && side.is_none())
+    }
+
+    fn fetch(&self, state: &mut AppState) {
+        let key = self.key();
+        let Some(value) = state.peek(self.comparison.clone()) else {
+            return;
+        };
+        let Some(meta) = value.model.files.get(self.file) else {
+            return;
+        };
+        let (old, new) = self.comparison.pane_sides(meta);
+        // One side, the new one when it exists: a gap is unchanged lines, so
+        // either side's text answers both panes, and only the new side is at the
+        // path a rename moved.
+        let side = if matches!(new.spec, SideSpec::Missing) {
+            old
+        } else {
+            new
+        };
+        if !state.reads.slot(Self::KIND).take(&key) {
+            return;
+        }
+        let file = self.file;
+        let comparison = self.comparison.key();
+        state.pump_keyed_read(move |executor, tx| {
+            let result = crate::diff_load::side_text(executor.as_ref(), &side).map(Arc::new);
+            let _ = tx.send(AppEvent::ContextReady {
+                key,
+                comparison,
+                file,
+                result: Ok(result),
+            });
         });
     }
 }
@@ -658,6 +762,7 @@ mod tests {
 
     use std::path::Path;
 
+    use crate::reveals::Edge;
     use turbogit_domain::model::RootId;
     use turbogit_engine::fake::FakeExecutor;
     use turbogit_engine_api::GitExecutor;
@@ -822,5 +927,143 @@ mod tests {
         state.drain_events();
         assert!(matches!(state.read(second), Read::Fresh(_)));
         assert!(matches!(state.read(first), Read::Waiting));
+    }
+
+    const TWO_SECTIONS: &str = "diff --git a/one.txt b/one.txt\n\
+         index 1111111..2222222 100644\n\
+         --- a/one.txt\n\
+         +++ b/one.txt\n\
+         @@ -4,3 +4,3 @@\n\
+          four\n\
+         -FIVE\n\
+         +five\n\
+          six\n\
+         diff --git a/two.txt b/two.txt\n\
+         index 3333333..4444444 100644\n\
+         --- a/two.txt\n\
+         +++ b/two.txt\n\
+         @@ -2,3 +2,3 @@\n\
+          two\n\
+         -THREE\n\
+         +three\n\
+          four\n";
+
+    /// A state holding one settled two-file diff, with the read instrument still
+    /// armed so a dispatch is a count rather than a thread.
+    fn state_with_a_settled_diff(dir: &Path) -> AppState {
+        std::fs::write(dir.join("one.txt"), "four\nfive\nsix\n").unwrap();
+        std::fs::write(dir.join("two.txt"), "two\nthree\nfour\n").unwrap();
+        let mut fake = FakeExecutor::new();
+        fake.diffs
+            .insert(dir.to_path_buf(), TWO_SECTIONS.to_owned());
+        let mut state = AppState::for_roots(dir, &[])
+            .with_executor(std::sync::Arc::new(fake) as std::sync::Arc<dyn GitExecutor>);
+        state.hold_reads();
+        let comparison = DiffTarget::new(
+            dir.to_path_buf(),
+            None,
+            None,
+            turbogit_domain::model::DiffPolicies::default(),
+            Some(PathBuf::from("one.txt")),
+        );
+        assert!(matches!(state.read(comparison), Read::Waiting));
+        state.release_held_read(0);
+        state.drain_events();
+        state.hold_reads();
+        state
+    }
+
+    fn comparison_at(dir: &Path) -> DiffTarget {
+        DiffTarget::new(
+            dir.to_path_buf(),
+            None,
+            None,
+            turbogit_domain::model::DiffPolicies::default(),
+            Some(PathBuf::from("one.txt")),
+        )
+    }
+
+    #[test]
+    fn a_context_key_names_one_section_of_one_comparison() {
+        let comparison = target(None, None);
+        let zero = ContextTarget::new(comparison.clone(), 0);
+        let one = ContextTarget::new(comparison.clone(), 1);
+        assert_eq!(
+            zero.key(),
+            format!("{}#ctx0", comparison.key()),
+            "the comparison's own key, suffixed by the section"
+        );
+        assert_ne!(zero.key(), one.key());
+        assert_ne!(
+            zero.key(),
+            ContextTarget::new(target(Some("HEAD~1"), Some("HEAD")), 0).key(),
+            "another pair of sides under the same section is another read"
+        );
+    }
+
+    #[test]
+    fn revealing_costs_no_git_work_until_a_side_is_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_with_a_settled_diff(dir.path());
+        let key = comparison_at(dir.path()).key();
+
+        assert!(state.ui.reveals.tap(&key, 0, Edge::Top, Some(9)));
+        assert!(state.ui.reveals.admit(&key, 0));
+        assert_eq!(state.held_reads(), 0, "intent is state, not a git run");
+        assert!(!state.read_pending(), "and nothing is in flight");
+        assert_eq!(state.ui.reveals.edges(&key, 0), [9, 0]);
+    }
+
+    #[test]
+    fn one_context_fetch_is_admitted_and_the_other_section_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_with_a_settled_diff(dir.path());
+        let comparison = comparison_at(dir.path());
+        let key = comparison.key();
+        let first = ContextTarget::new(comparison.clone(), 0);
+        let second = ContextTarget::new(comparison, 1);
+
+        state.ui.reveals.admit(&key, 0);
+        assert!(matches!(state.read(first.clone()), Read::Waiting));
+        assert!(
+            state.read_pending(),
+            "the fourth kind is what a pending reveal reads as"
+        );
+        state.ui.reveals.admit(&key, 1);
+        assert!(matches!(state.read(second.clone()), Read::Waiting));
+        assert_eq!(
+            state.held_reads(),
+            1,
+            "the second section asked, waited, and dispatched nothing"
+        );
+
+        state.release_held_read(0);
+        state.drain_events();
+        assert!(matches!(state.read(first), Read::Fresh(Some(_))));
+        assert!(matches!(state.read(second.clone()), Read::Waiting));
+        assert_eq!(state.held_reads(), 1, "now it is the other one's turn");
+    }
+
+    #[test]
+    fn peeking_a_context_side_spends_no_git_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_with_a_settled_diff(dir.path());
+        let side = ContextTarget::new(comparison_at(dir.path()), 0);
+
+        assert!(
+            state.peek(side.clone()).is_none(),
+            "a cold pad says nothing"
+        );
+        assert_eq!(state.held_reads(), 0, "and costs nothing");
+
+        state.ui.reveals.admit(&side.comparison.key(), 0);
+        state.read(side.clone());
+        state.release_held_read(0);
+        state.drain_events();
+        assert!(
+            state.peek(side).is_some_and(|side| side.is_some()),
+            "the settled text is what peek hands back"
+        );
+        assert_eq!(state.held_reads(), 0, "and answering it cost no second run");
     }
 }

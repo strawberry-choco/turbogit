@@ -88,6 +88,16 @@ pub enum AppEvent {
         old: Option<FetchedBlob>,
         new: Option<FetchedBlob>,
     },
+    /// One file section's text for a context reveal. `Ok(None)` is an answer of
+    /// "no text to reveal": a side that is missing, unreadable, or not UTF-8.
+    /// `comparison` is the key the reveal counts are kept under, verbatim, so
+    /// folding the answer in never has to take a key apart.
+    ContextReady {
+        key: String,
+        comparison: String,
+        file: usize,
+        result: TgResult<Option<std::sync::Arc<crate::reveals::SideText>>>,
+    },
     AheadBehind {
         root: RootId,
         ahead: usize,

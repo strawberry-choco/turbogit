@@ -797,9 +797,13 @@ pub struct UiState {
     pub diff_cache: Option<(String, std::sync::Arc<crate::diff_model::DiffValue>)>,
     pub diff_side_by_side: bool,
     pub pane_bytes: crate::diff_data::PaneCache,
+    /// One context read's answer, the landing pad `Reveals` folds its own `Arc`
+    /// out of. Never persisted: it is a hand-off, not state the user owns.
+    pub context_side: Option<(String, Option<std::sync::Arc<crate::reveals::SideText>>)>,
     pub pane_generation: u64,
     pub diff_current_hunk: usize,
     pub diff_collapsed: HashSet<usize>,
+    pub reveals: crate::reveals::Reveals,
     pub diff_policies: DiffPolicies,
     pub diff_pane: DiffPane,
     pub diff_options_open: bool,
@@ -1343,6 +1347,7 @@ impl AppState {
         self.reads.invalidate();
         self.ui.blame_cache = None;
         self.ui.pane_bytes.clear();
+        self.ui.context_side = None;
         self.ui.pane_generation += 1;
         granular::prune_on_refresh(self);
         let paths: Vec<std::sync::Arc<Path>> = match &affected {
@@ -2529,6 +2534,14 @@ impl AppState {
                 }
                 AppEvent::FileBytesReady { key, old, new } => {
                     crate::keyed_read::settle_pane(self, key, old, new);
+                }
+                AppEvent::ContextReady {
+                    key,
+                    comparison,
+                    file,
+                    result,
+                } => {
+                    crate::keyed_read::settle_context(self, key, comparison, file, result);
                 }
                 AppEvent::AheadBehind {
                     root,

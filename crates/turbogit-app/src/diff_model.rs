@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use turbogit_domain::model::{
-    DiffHighlighting, DiffPolicies, Patch, PatchHeaderLine, PatchLine, PatchLineKind,
+    DiffHighlighting, DiffPolicies, Patch, PatchHeaderLine, PatchHunk, PatchLine, PatchLineKind,
 };
 use turbogit_services::diff_policy::{self, Chunk};
 use turbogit_services::hunk_stats::HunkSpan;
@@ -158,6 +158,241 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
     rows
 }
 
+/// The context run at one end of a hunk: the unchanged lines it prints before
+/// its first change, or after its last.
+fn context_run(hunk: &PatchHunk, leading: bool) -> usize {
+    let is_context = |line: &&PatchLine| line.kind == PatchLineKind::Context;
+    let lines = hunk.lines.iter();
+    if leading {
+        lines.take_while(is_context).count()
+    } else {
+        lines.rev().take_while(is_context).count()
+    }
+}
+
+/// The width the patch was made at, read off the patch itself. A hard-coded 3
+/// would be wrong for `git diff -U0`, which prints no context anywhere, and would
+/// then declare every file's tail provably empty.
+fn context_radius(patch: &Patch) -> usize {
+    patch
+        .files
+        .iter()
+        .flat_map(|file| &file.hunks)
+        .map(|hunk| context_run(hunk, true).max(context_run(hunk, false)))
+        .max()
+        .unwrap_or_default()
+}
+
+/// One run of unchanged lines the patch did not print, inside one file section.
+/// A run that hides nothing is never in the table, so "an affordance exists" and
+/// "lines are hidden" are one fact rather than a check the UI can forget.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Gap {
+    /// Index into [`DiffModel::files`], so `DiffTarget::pane_sides` can name the
+    /// side this run belongs to.
+    pub file: usize,
+    /// Hunk whose body ends the top edge; `None` for a leading run.
+    pub above: Option<usize>,
+    /// Hunk whose header starts the bottom edge; `None` at end of file.
+    pub below: Option<usize>,
+    /// 1-based first hidden line on the old side.
+    pub old_first: u32,
+    /// 1-based first hidden line on the new side.
+    pub new_first: u32,
+    pub hidden: Hidden,
+}
+
+/// `Run` is decided by the headers alone. `ToEof` is a run that ends at the
+/// file's end, a length only the file's own text knows, which is the single case
+/// where an affordance can precede its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hidden {
+    Run(u32),
+    ToEof,
+}
+
+/// One entry per gap, plus the two lanes that place it. An interior or leading
+/// gap is emitted only at its `below` hunk's header; only a file's trailing gap
+/// is emitted after that file's last body row, so no gap is ever laid out twice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GapTable {
+    pub gaps: Vec<Gap>,
+    before_hunk: Vec<Option<u32>>,
+    eof_gap: Vec<Option<u32>>,
+}
+
+impl GapTable {
+    /// The gap ordinal that lays out before this hunk's header row, in the same
+    /// 0-based, runs-across-files space as [`Row::hunk`].
+    pub fn before_hunk(&self, hunk: usize) -> Option<u32> {
+        self.before_hunk.get(hunk).copied().flatten()
+    }
+
+    /// The gap ordinal that lays out after this file's last body row.
+    pub fn eof_gap(&self, file: usize) -> Option<u32> {
+        self.eof_gap.get(file).copied().flatten()
+    }
+
+    pub fn gap(&self, gap: u32) -> Option<&Gap> {
+        self.gaps.get(gap as usize)
+    }
+
+    fn push_for_hunk(&mut self, hunk: usize, gap: Option<Gap>) {
+        let ord = match gap {
+            None => None,
+            Some(gap) => {
+                let ord = self.gaps.len() as u32;
+                self.gaps.push(gap);
+                Some(ord)
+            }
+        };
+        if self.before_hunk.len() <= hunk {
+            self.before_hunk.resize(hunk + 1, None);
+        }
+        self.before_hunk[hunk] = ord;
+    }
+
+    fn push_for_file(&mut self, file: usize, gap: Option<Gap>) {
+        let ord = match gap {
+            None => None,
+            Some(gap) => {
+                let ord = self.gaps.len() as u32;
+                self.gaps.push(gap);
+                Some(ord)
+            }
+        };
+        if self.eof_gap.len() <= file {
+            self.eof_gap.resize(file + 1, None);
+        }
+        self.eof_gap[file] = ord;
+    }
+}
+
+/// How many lines a side hides above the hunk that starts at `start`, whose
+/// `count` may be zero. git's count-omitted or explicit `0` spells the start as
+/// an *anchor* — the unchanged line the change sits after, which the hunk does
+/// not print either — so the run above a zero-count side is `start` lines, not
+/// `start - 1`. `@@ -5,0 +6 @@` hides old lines 1 to 5.
+fn hidden_above(start: usize, count: usize) -> u32 {
+    let above = if count == 0 {
+        start
+    } else {
+        start.saturating_sub(1)
+    };
+    u32::try_from(above).unwrap_or(u32::MAX)
+}
+
+/// The first line a side hides below a hunk: the line after its last printed
+/// line, or after its anchor when it prints none.
+fn first_below(start: usize, count: usize) -> u32 {
+    u32::try_from(start + count.max(1)).unwrap_or(u32::MAX)
+}
+
+fn span(hunk: &PatchHunk, old: bool) -> (usize, usize) {
+    if old {
+        (hunk.old_start, hunk.old_count)
+    } else {
+        (hunk.new_start, hunk.new_count)
+    }
+}
+
+/// How many lines one side hides between two consecutive hunks of one file. Both
+/// sides answer this the same way for a diff git printed, because everything
+/// between two hunks is unchanged lines.
+fn hidden_between(prev: &PatchHunk, next: &PatchHunk, old: bool) -> u32 {
+    let (prev_start, prev_count) = span(prev, old);
+    let (next_start, _) = span(next, old);
+    u32::try_from(next_start.saturating_sub(prev_start + prev_count)).unwrap_or(u32::MAX)
+}
+
+/// A run above a file's first hunk, or `None` when it hides nothing or the two
+/// sides do not agree.
+fn leading_gap(file: usize, below: usize, hunk: &PatchHunk) -> Option<Gap> {
+    let old = hidden_above(hunk.old_start, hunk.old_count);
+    let new = hidden_above(hunk.new_start, hunk.new_count);
+    // Two disagreeing counts mean the run is not the same lines on both sides, so
+    // it cannot be painted as paired context: the gap is dropped, not clamped to
+    // the smaller, because a half-truth about which lines are hidden is worse
+    // than no affordance.
+    (old == new && old > 0).then_some(Gap {
+        file,
+        above: None,
+        below: Some(below),
+        old_first: 1,
+        new_first: 1,
+        hidden: Hidden::Run(old),
+    })
+}
+
+/// A run between two consecutive hunks of one file, or `None` when it hides
+/// nothing or the two sides do not agree.
+fn interior_gap(
+    file: usize,
+    above: usize,
+    below: usize,
+    prev: &PatchHunk,
+    next: &PatchHunk,
+) -> Option<Gap> {
+    let old = hidden_between(prev, next, true);
+    let new = hidden_between(prev, next, false);
+    (old == new && old > 0).then_some(Gap {
+        file,
+        above: Some(above),
+        below: Some(below),
+        old_first: first_below(prev.old_start, prev.old_count),
+        new_first: first_below(prev.new_start, prev.new_count),
+        hidden: Hidden::Run(old),
+    })
+}
+
+/// The run below a file's last hunk. Its length is not in the patch, so it is
+/// `ToEof` — except when the hunk's trailing context is shorter than the radius,
+/// which proves git had reached the file's end and printed everything.
+fn eof_gap(file: usize, above: usize, last: &PatchHunk, radius: usize) -> Option<Gap> {
+    let trailing = context_run(last, false);
+    (trailing >= radius).then_some(Gap {
+        file,
+        above: Some(above),
+        below: None,
+        old_first: first_below(last.old_start, last.old_count),
+        new_first: first_below(last.new_start, last.new_count),
+        hidden: Hidden::ToEof,
+    })
+}
+
+/// The runs of unchanged lines this patch leaves unprinted. Geometry comes from
+/// the hunk spans and never from the printed rows: `rows_from` resets its
+/// `old_no`/`new_no` counters per hunk but not per file, so between two sections
+/// of a multi-file patch the header rows carry the *previous* file's numbers, and
+/// a gap derived from them would sit in the wrong file at the wrong line.
+pub fn gap_table(patch: &Patch) -> GapTable {
+    let mut table = GapTable::default();
+    let radius = context_radius(patch);
+    let mut hunk = 0usize;
+    for (file, section) in patch.files.iter().enumerate() {
+        table.push_for_file(file, None);
+        // A creation, a deletion and a combined (`diff --cc`) view have no
+        // unchanged lines to reveal: one side is `/dev/null`, or the section
+        // compares one path against two parents at once.
+        let revealable = !section.new_file() && !section.deleted_file() && !section.combined;
+        let mut prev: Option<(usize, &PatchHunk)> = None;
+        for next in &section.hunks {
+            let gap = match (revealable, prev) {
+                (true, None) => leading_gap(file, hunk, next),
+                (true, Some((above, prev))) => interior_gap(file, above, hunk, prev, next),
+                _ => None,
+            };
+            table.push_for_hunk(hunk, gap);
+            prev = Some((hunk, next));
+            hunk += 1;
+        }
+        if let (true, Some((above, last))) = (revealable, prev) {
+            table.push_for_file(file, eof_gap(file, above, last, radius));
+        }
+    }
+    table
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileMeta {
     pub old_path: Option<String>,
@@ -241,11 +476,18 @@ pub struct DiffModel {
     pub hunk_first_display: Vec<u32>,
     pub files: Vec<FileMeta>,
     pub rename_header: Option<String>,
+    gap_table: GapTable,
 }
 
 impl DiffModel {
     pub fn hunk_count(&self) -> usize {
         self.hunk_first_display.len()
+    }
+
+    /// The unprinted runs, addressed by the lanes that lay them out. Derived from
+    /// the patch's hunk spans beside `rows_from`, never from `display`.
+    pub fn gaps(&self) -> &GapTable {
+        &self.gap_table
     }
 
     pub fn pure_rename(&self) -> bool {
@@ -417,7 +659,12 @@ fn flush_changed_run(
     display.extend(pair_run(dels, adds, policies.highlighting));
 }
 
-fn build_model(rows: Vec<Row>, files: Vec<FileMeta>, policies: DiffPolicies) -> DiffModel {
+fn build_model(
+    rows: Vec<Row>,
+    files: Vec<FileMeta>,
+    policies: DiffPolicies,
+    gap_table: GapTable,
+) -> DiffModel {
     let mut display = Vec::new();
     let mut hunk_first_display = Vec::new();
 
@@ -456,6 +703,7 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>, policies: DiffPolicies) -> 
         hunk_first_display,
         files,
         rename_header,
+        gap_table,
     }
 }
 
@@ -473,8 +721,11 @@ impl DiffValue {
     /// policies change is which rows the viewer counts as different and how each
     /// difference is highlighted, never the bytes partial staging composes from.
     pub(crate) fn build(patch: Patch, policies: DiffPolicies) -> Arc<Self> {
+        let rows = rows_from(&patch);
+        let files = files_from(&patch);
+        let gaps = gap_table(&patch);
         Arc::new(Self {
-            model: build_model(rows_from(&patch), files_from(&patch), policies),
+            model: build_model(rows, files, policies, gaps),
             patch,
         })
     }
@@ -498,6 +749,47 @@ mod tests {
 
     fn scan_files(text: &str) -> Vec<FileMeta> {
         files_from(&patch(text))
+    }
+
+    /// One whole production path, exactly as `DiffValue::build` runs it, so a
+    /// test can put the gap pass beside the row pass and compare the rows against
+    /// the fingerprint taken before the table existed.
+    fn built(text: &str) -> DiffModel {
+        let p = patch(text);
+        build_model(
+            rows_from(&p),
+            files_from(&p),
+            DiffPolicies::default(),
+            gap_table(&p),
+        )
+    }
+
+    /// `(kind, hunk, old_no, new_no, text)` for every row, pairs flattened in
+    /// del-then-add order: the shape a painter sees.
+    fn fingerprint(model: &DiffModel) -> Vec<String> {
+        let row = |r: &Row| {
+            format!(
+                "{:?} {} {} {} {}",
+                r.kind, r.hunk, r.old_no, r.new_no, r.text
+            )
+        };
+        model
+            .display
+            .iter()
+            .map(|disp| match disp {
+                DisplayRow::Full(r) => row(r),
+                DisplayRow::Pair(del, add) => {
+                    let mut parts = Vec::new();
+                    if let Some(r) = del {
+                        parts.push(row(r));
+                    }
+                    if let Some(r) = add {
+                        parts.push(row(r));
+                    }
+                    parts.join(" | ")
+                }
+            })
+            .collect()
     }
 
     const RENAME_WITH_SIMILARITY: &str = "diff --git a/src/old.rs b/src/new.rs\n\
@@ -545,7 +837,7 @@ mod tests {
                     similarity index 100%\n\
                     rename from old.rs\n\
                     rename to new.rs\n";
-        let model = build_model(parse(text), scan_files(text), DiffPolicies::default());
+        let model = built(text);
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
@@ -579,11 +871,7 @@ mod tests {
 
     #[test]
     fn diff_rename_header_keeps_hunk_navigation_aligned() {
-        let model = build_model(
-            parse(RENAME_WITH_SIMILARITY),
-            scan_files(RENAME_WITH_SIMILARITY),
-            DiffPolicies::default(),
-        );
+        let model = built(RENAME_WITH_SIMILARITY);
         assert_eq!(model.hunk_count(), 1);
         assert_eq!(model.hunk_first_display[0], 1);
     }
@@ -693,6 +981,52 @@ mod tests {
             scan_files("nothing at all\n").is_empty(),
             "no section, no file"
         );
+    }
+
+    #[test]
+    fn the_gap_pass_leaves_the_display_rows_untouched() {
+        let shapes = [
+            RENAME_WITH_SIMILARITY,
+            "diff --git a/one.txt b/one.txt\n\
+             index 1111111..2222222 100644\n\
+             --- a/one.txt\n\
+             +++ b/one.txt\n\
+             @@ -5,3 +5,3 @@\n\
+              five\n\
+             -six\n\
+             +SIX\n\
+              seven\n\
+             diff --git a/two.txt b/two.txt\n\
+             index 3333333..4444444 100644\n\
+             --- a/two.txt\n\
+             +++ b/two.txt\n\
+             @@ -3,0 +4 @@\n\
+             +inserted\n\
+             @@ -7,0 +8 @@\n\
+             +also\n",
+        ];
+        for text in shapes {
+            let p = patch(text);
+            let build = |gaps: GapTable| {
+                fingerprint(&build_model(
+                    rows_from(&p),
+                    files_from(&p),
+                    DiffPolicies::default(),
+                    gaps,
+                ))
+            };
+            let with = build(gap_table(&p));
+            let without = build(GapTable::default());
+            assert_eq!(
+                with, without,
+                "the gap pass may add a table and nothing else:\n{text}"
+            );
+            assert_eq!(
+                built(text).gaps(),
+                &gap_table(&p),
+                "the model carries the one table its patch implies: {text}"
+            );
+        }
     }
 
     #[test]

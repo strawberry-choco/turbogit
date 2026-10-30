@@ -1426,3 +1426,670 @@ fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
         "the row the label now calls staged wears the staged band under it"
     );
 }
+
+/// 60 lines with one line split in two at 15 and another replaced at 45. Git
+/// answers `-U3` with `@@ -12,7 +12,8 @@` and `@@ -42,7 +43,7 @@` — measured, not
+/// derived — so the patch leaves three runs unprinted: 11 lines above the first
+/// hunk, 23 between the hunks, 12 below the last. The split pushes the two sides
+/// apart, so the middle run numbers 19-41 old against 20-42 new.
+fn repo_context_gaps() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let base: Vec<String> = (1..=60).map(|i| format!("l{i:02}")).collect();
+    write_file(&repo, "wide.txt", &format!("{}\n", base.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base;
+    edited[14] = "X15a".to_string();
+    edited.insert(15, "X15b".to_string());
+    edited[45] = "X45".to_string();
+    write_file(&repo, "wide.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+/// Tall enough that the whole of the fixture's diff is on screen at once: a
+/// reveal that opens 23 lines must not have to scroll to be checked.
+fn gap_harness(repo: &Path) -> Harness<'static, AppState> {
+    let state = AppState::new(repo.to_path_buf());
+    shell_harness_over(state, egui::vec2(1008.0, 1800.0))
+}
+
+fn open_gaps(h: &mut Harness<'static, AppState>, repo: &Path) {
+    settle(h);
+    open_preview(h, repo, &repo.join("wide.txt"));
+    let headers: Vec<String> = painted_hunk_headers(h);
+    assert_eq!(
+        headers,
+        ["@@ -12,7 +12,8 @@ l11", "@@ -42,7 +43,7 @@ l41"],
+        "the fixture's premise: both hunks' headers are painted, so both gaps are \
+         on screen"
+    );
+}
+
+/// A real press-and-release at `pos`, the way egui sees a mouse click.
+fn click_at(harness: &mut Harness<'_, AppState>, pos: egui::Pos2) {
+    harness.hover_at(pos);
+    harness.step();
+    harness.drag_at(pos);
+    harness.step();
+    harness.drop_at(pos);
+    settle(harness);
+}
+
+/// A revealed line and its gutter number must be on the same row: a line opened
+/// with the wrong base paints the right text in the wrong place.
+#[track_caller]
+fn assert_row_numbered(h: &Harness<'_, AppState>, text: &str, number: &str) {
+    let at = galley_origin(h, text).unwrap_or_else(|| panic!("`{text}` painted"));
+    let num =
+        galley_origin(h, number).unwrap_or_else(|| panic!("gutter number `{number}` painted"));
+    assert!(
+        (at.y - num.y).abs() < 4.0 && num.x < at.x,
+        "`{text}` sits at {at:?} while its gutter `{number}` is at {num:?}"
+    );
+}
+
+/// The gap bars on screen, each with its button's row, top row first. `Expand
+/// log` is the log window's own control, so the family is named by its three
+/// verbs rather than by the word `Expand`.
+fn gap_bars(h: &Harness<'_, AppState>) -> Vec<(String, Rect)> {
+    let mut bars: Vec<(String, Rect)> = h
+        .root()
+        .children_recursive()
+        .filter_map(|node| {
+            let label = node.accesskit_node().label()?;
+            let offered = [
+                "Expand next lines",
+                "Expand previous lines",
+                "Expand lines between",
+            ]
+            .iter()
+            .any(|start| label.starts_with(start));
+            offered.then(|| (label, node.rect()))
+        })
+        .collect();
+    bars.sort_by(|a, b| a.1.center().y.total_cmp(&b.1.center().y));
+    bars
+}
+
+/// The labels of the gap bars on screen, top row first.
+fn bar_labels(h: &Harness<'_, AppState>) -> Vec<String> {
+    gap_bars(h).into_iter().map(|(label, _)| label).collect()
+}
+
+/// The gutter numbers painted strictly between two rows, in the order their rows
+/// paint. A revealed line's number is what a wrong block order corrupts first.
+#[track_caller]
+fn numbers_between(h: &Harness<'_, AppState>, from_y: f32, to_y: f32) -> Vec<usize> {
+    let mut rows: Vec<(f32, usize)> = painted_galleys(h)
+        .into_iter()
+        .filter(|g| !g.text.is_empty() && g.text.chars().all(|c| c.is_ascii_digit()))
+        .map(|g| {
+            (
+                g.rect.center().y,
+                g.text.parse::<usize>().expect("a gutter of digits"),
+            )
+        })
+        .filter(|(y, _)| *y > from_y + 4.0 && *y < to_y - 4.0)
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.dedup_by(|a, b| a.0 == b.0);
+    rows.into_iter().map(|(_, number)| number).collect()
+}
+
+#[test]
+fn a_bar_names_what_its_gap_hides_and_a_tap_opens_the_lines_it_promised() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    open_gaps(&mut h, &repo);
+
+    for caption in ["11 unchanged lines hidden", "23 unchanged lines hidden"] {
+        assert_painted(&h, caption);
+    }
+    assert_eq!(
+        bar_labels(&h),
+        [
+            "Expand previous lines at the top of the file",
+            "Expand next lines below hunk 1",
+            "Expand previous lines above hunk 2",
+            "Expand next lines at the end of the file",
+        ],
+        "one bar per affordance, top row first; painted:\n{}",
+        painted_text(&h).join("\n")
+    );
+    assert_not_painted(&h, "l32");
+
+    h.get_by_label("Expand previous lines above hunk 2").click();
+    settle(&mut h);
+
+    for offset in 0..10u32 {
+        let line = 32 + offset;
+        assert_row_numbered(&h, &format!("l{line:02}"), &(line + 1).to_string());
+    }
+    assert_not_painted(&h, "l31");
+    assert_painted(&h, "13 unchanged lines hidden");
+}
+
+/// The centre of the row a painted string sits on, so row distance can be
+/// measured rather than assumed from a constant the test would rather not own.
+#[track_caller]
+fn row_centre(h: &Harness<'_, AppState>, text: &str) -> f32 {
+    painted_galleys(h)
+        .into_iter()
+        .find(|galley| galley.text == text)
+        .unwrap_or_else(|| panic!("`{text}` painted"))
+        .rect
+        .center()
+        .y
+}
+
+#[test]
+fn a_long_gap_offers_one_single_button_bar_at_each_of_its_edges() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    open_gaps(&mut h, &repo);
+
+    let interior: Vec<(String, Rect)> = gap_bars(&h)
+        .into_iter()
+        .filter(|(label, _)| label.contains("hunk"))
+        .collect();
+    // Two bars that share a widget id publish one accessibility node, so this set
+    // is also what pins the bars to different id verbs.
+    assert_eq!(
+        interior
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Expand next lines below hunk 1",
+            "Expand previous lines above hunk 2",
+        ],
+        "the run between the hunks is offered twice, once per edge, and its two bars \
+         name different hunks"
+    );
+    let next = interior[0].1;
+    let previous = interior[1].1;
+    let mut centres: Vec<f32> = gap_bars(&h)
+        .into_iter()
+        .map(|(_, rect)| rect.center().y)
+        .collect();
+    centres.dedup_by(|a, b| (*a - *b).abs() < 4.0);
+    assert_eq!(
+        centres.len(),
+        4,
+        "one button per bar: no row of this pane carries two expand buttons"
+    );
+
+    let pitch = row_centre(&h, "l18") - row_centre(&h, "l17");
+    let lower_header = "@@ -42,7 +43,7 @@ l41";
+    let one_row_apart = |above: f32, below: f32| (above - below - pitch).abs() < pitch / 2.0;
+    assert!(
+        one_row_apart(next.center().y, row_centre(&h, "l18")),
+        "the next bar is the row after hunk 1's last body line, not the strip at the \
+         gap's top edge it replaced: {next:?}"
+    );
+    assert!(
+        one_row_apart(previous.center().y, next.center().y),
+        "the two bars are separate rows one pitch apart, the next one above: {next:?} \
+         against {previous:?}"
+    );
+    assert!(
+        one_row_apart(row_centre(&h, lower_header), previous.center().y),
+        "the previous bar touches the block it owns, which is still empty, so it sits on \
+         the row above the lower hunk's header: {previous:?}"
+    );
+}
+
+#[test]
+fn opening_a_gaps_both_edges_empties_it_and_the_strip_goes_with_it() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    open_gaps(&mut h, &repo);
+
+    h.get_by_label("Expand previous lines above hunk 2").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label("Expand previous lines above hunk 2")
+            .is_some(),
+        "ten of the run's 23 lines opened, so 13 are still hidden and both bars stay"
+    );
+    assert_painted(&h, "13 unchanged lines hidden");
+
+    h.get_by_label("Expand next lines below hunk 1").click();
+    settle(&mut h);
+    assert_row_numbered(&h, "l19", "20");
+    assert_row_numbered(&h, "l41", "42");
+    assert_painted(&h, "3 unchanged lines hidden");
+    assert_eq!(
+        bar_labels(&h),
+        [
+            "Expand previous lines at the top of the file",
+            "Expand lines between hunks 1 and 2",
+            "Expand next lines at the end of the file",
+        ],
+        "three lines left is one step from empty, so the gap's two bars became one"
+    );
+    let collapsed = h.get_by_label("Expand lines between hunks 1 and 2").rect();
+    assert_eq!(
+        numbers_between(&h, row_centre(&h, "l18"), collapsed.center().y),
+        (20..=29).collect::<Vec<_>>(),
+        "the collapsed bar sits below the run it opened from the top edge"
+    );
+    assert_eq!(
+        numbers_between(
+            &h,
+            collapsed.center().y,
+            row_centre(&h, "@@ -42,7 +43,7 @@ l41")
+        ),
+        (33..=42).collect::<Vec<_>>(),
+        "and above the run the suppressed bar handed it, so one ascending reading still \
+         reaches the lower hunk while the three lines left hidden paint nothing"
+    );
+
+    h.get_by_label("Expand lines between hunks 1 and 2").click();
+    settle(&mut h);
+    for away in [
+        "Expand lines between hunks 1 and 2",
+        "Expand next lines below hunk 1",
+        "Expand previous lines above hunk 2",
+    ] {
+        assert!(
+            h.query_by_label(away).is_none(),
+            "a gap with nothing left hidden offers no bar, and `{away}` still answers \
+             to a label"
+        );
+    }
+    assert_not_painted(&h, "23 unchanged lines hidden");
+    assert_not_painted(&h, "13 unchanged lines hidden");
+    for line in 19..=41 {
+        assert_painted(&h, &format!("l{line:02}"));
+    }
+    for offset in 0..23u32 {
+        assert_row_numbered(&h, &format!("l{}", 19 + offset), &(20 + offset).to_string());
+    }
+}
+
+#[test]
+fn a_revealed_line_carries_no_stage_target_and_a_click_on_it_moves_no_index() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    open_gaps(&mut h, &repo);
+    h.get_by_label("Expand previous lines above hunk 2").click();
+    settle(&mut h);
+
+    for state in ["staged", "unstaged"] {
+        assert!(
+            h.query_by_label(&format!("l35 ({state})")).is_none(),
+            "an opened line is context, so nothing may name it `{state}`"
+        );
+    }
+    let at = galley_origin(&h, "l35").expect("the opened line painted");
+    click_at(&mut h, egui::Pos2::new(at.x + 40.0, at.y + 4.0));
+
+    assert_eq!(
+        git(&repo, &["diff", "--cached", "--name-only"]).trim(),
+        "",
+        "clicking an opened line must not touch the index"
+    );
+    assert_row_numbered(&h, "l35", "36");
+}
+
+/// The number painted immediately left of `at` on its own row, which is the
+/// gutter of the cell that holds `at`.
+#[track_caller]
+fn gutter_left_of(h: &Harness<'_, AppState>, at: Pos2) -> String {
+    painted_galleys(h)
+        .into_iter()
+        .filter(|g| {
+            (g.pos.y - at.y).abs() < 4.0
+                && g.pos.x < at.x
+                && !g.text.is_empty()
+                && g.text.chars().all(|c| c.is_ascii_digit())
+        })
+        .max_by(|a, b| a.pos.x.total_cmp(&b.pos.x))
+        .map(|g| g.text)
+        .unwrap_or_else(|| panic!("no gutter number on the row at {at:?}"))
+}
+
+#[test]
+fn side_by_side_opens_a_gap_as_one_row_of_two_cells_each_numbered_by_its_own_side() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    h.state_mut().ui.diff_side_by_side = true;
+    open_gaps(&mut h, &repo);
+    assert_not_painted(&h, "l32");
+
+    h.get_by_label("Expand previous lines above hunk 2").click();
+    settle(&mut h);
+
+    let cells: Vec<Pos2> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text == "l32")
+        .map(|g| g.pos)
+        .collect();
+    assert_eq!(
+        cells.len(),
+        2,
+        "an opened line is one row whose two cells both hold it"
+    );
+    assert!(cells[0].x < cells[1].x, "the cells keep their order");
+    assert_eq!(
+        gutter_left_of(&h, cells[0]),
+        "32",
+        "the left cell numbers the old side"
+    );
+    assert_eq!(
+        gutter_left_of(&h, cells[1]),
+        "33",
+        "the right cell numbers the new side, which the split at line 15 moved one \
+         apart"
+    );
+}
+
+/// 18 lines with one replacement at 15. Git prints `@@ -12,7 +12,7 @@`, so the
+/// last hunk's trailing context reaches the patch's context radius and the run
+/// below it is not provably empty from the patch — while the file, in fact, ends
+/// at that hunk's last line.
+fn repo_short_tail() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let base: Vec<String> = (1..=18).map(|i| format!("t{i:02}")).collect();
+    write_file(&repo, "tail.txt", &format!("{}\n", base.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base;
+    edited[14] = "X15".to_string();
+    write_file(&repo, "tail.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+#[test]
+fn a_tail_that_holds_nothing_shows_its_strip_once_and_then_never_again() {
+    let (_tmp, repo) = repo_short_tail();
+    let mut h = gap_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("tail.txt"));
+    assert_eq!(
+        painted_hunk_headers(&h),
+        ["@@ -12,7 +12,7 @@ t11"],
+        "the fixture's premise: one hunk whose trailing context is a full radius"
+    );
+    assert_painted(&h, "Unchanged lines hidden");
+    assert_not_painted(&h, "Reading the file…");
+    let end = "Expand next lines at the end of the file";
+    assert!(
+        h.query_by_label(end).is_some(),
+        "the bar exists before it can prove it is needed, because only the file \
+         knows its own length"
+    );
+    assert_painted(&h, "t18");
+
+    h.get_by_label(end).click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label(end).is_none(),
+        "one tap answered 0 lines hidden, so the dead affordance is gone"
+    );
+    assert_not_painted(&h, "Unchanged lines hidden");
+    assert_painted(&h, "t18");
+}
+
+#[test]
+fn a_tail_reports_unknown_until_its_file_lands_and_a_number_after() {
+    let (_tmp, repo) = repo_context_gaps();
+    let mut h = gap_harness(&repo);
+    open_gaps(&mut h, &repo);
+    assert_painted(&h, "Unchanged lines hidden");
+    assert_not_painted(&h, "l49");
+
+    let end = "Expand next lines at the end of the file";
+    h.get_by_label(end).click();
+    settle(&mut h);
+    for offset in 0..10u32 {
+        assert_row_numbered(&h, &format!("l{}", 49 + offset), &(50 + offset).to_string());
+    }
+    assert_painted(&h, "2 unchanged lines hidden");
+    assert!(
+        h.query_by_label(end).is_some(),
+        "a run at a file's end keeps its one bar however little it has left to open"
+    );
+
+    h.get_by_label(end).click();
+    settle(&mut h);
+    assert_row_numbered(&h, "l59", "60");
+    assert_row_numbered(&h, "l60", "61");
+    assert!(
+        h.query_by_label(end).is_none(),
+        "the run to the end of the file is open, so `{end}` is gone"
+    );
+    assert_not_painted(&h, "Unchanged lines hidden");
+}
+
+/// Two committed files of 20 lines each, one replacement at line 12 in both, so
+/// every section carries its own leading run of 8 and its own tail of 5.
+fn repo_two_file_gaps() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let make = |c: char, n: &str| -> String {
+        format!(
+            "{}\n",
+            (1..=20)
+                .map(|i| format!("{c}{i:02}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+        .replace(&format!("{c}12"), n)
+    };
+    write_file(&repo, "one.txt", &make('a', "alpha"));
+    write_file(&repo, "two.txt", &make('b', "bravo"));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    write_file(&repo, "one.txt", &make('a', "ALPHA"));
+    write_file(&repo, "two.txt", &make('b', "BRAVO"));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c2"]);
+    (tmp, repo)
+}
+
+#[test]
+fn every_section_of_a_multi_file_patch_carries_its_own_strips() {
+    fn tails(h: &Harness<'_, AppState>) -> Vec<Rect> {
+        let mut rows: Vec<Rect> = h
+            .query_all_by_label("Expand next lines at the end of the file")
+            .map(|node| node.rect())
+            .collect();
+        rows.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+        rows
+    }
+
+    let (_tmp, repo) = repo_two_file_gaps();
+    let mut h = commit_diff_harness(&repo);
+    // Tall enough that both sections' bars and the five opened rows all fit: a
+    // clipped row is absent from the tree for a reason that is not the feature.
+    h.set_size(egui::vec2(1008.0, 1800.0));
+    settle(&mut h);
+    let captions = |h: &Harness<'_, AppState>, words: &str| {
+        painted_text(h).into_iter().filter(|t| t == words).count()
+    };
+    assert_eq!(
+        captions(&h, "8 unchanged lines hidden"),
+        2,
+        "one leading bar per section, painted:\n{}",
+        painted_text(&h).join("\n")
+    );
+    assert_eq!(
+        captions(&h, "Unchanged lines hidden"),
+        2,
+        "two tails, each sized only by its own file's text, and neither has been asked yet"
+    );
+    assert_not_painted(&h, "a16");
+    assert_not_painted(&h, "b16");
+    // A bar at a file's edge is named for the file rather than for a hunk, so both
+    // sections answer to the same words and the one to press is found by its row.
+    assert_eq!(tails(&h).len(), 2, "one tail bar per section");
+
+    let first_tail = tails(&h)[0];
+    click_at(&mut h, first_tail.center());
+
+    for line in 16..=20 {
+        assert_painted(&h, &format!("a{line}"));
+    }
+    assert_not_painted(&h, "b16");
+    assert_eq!(
+        captions(&h, "8 unchanged lines hidden"),
+        2,
+        "the other section's bars are its own"
+    );
+    assert_eq!(
+        tails(&h).len(),
+        1,
+        "one section's tail opened to the end of its file, and the other is still closed"
+    );
+    assert_eq!(
+        h.query_all_by_label("Expand previous lines at the top of the file")
+            .count(),
+        2,
+        "neither leading bar moved when its neighbour's tail opened"
+    );
+}
+
+/// 30 lines with one replacement at 8 and another at 23. Git answers `-U3` with
+/// `@@ -5,7 +5,7 @@` and `@@ -20,7 +20,7 @@` — measured, not derived — so the run
+/// between the hunks is 8 lines: less than one reveal step, which is what makes
+/// this gap collapse to a single bar.
+fn repo_short_interior_gap() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let base: Vec<String> = (1..=30).map(|i| format!("t{i:02}")).collect();
+    write_file(&repo, "tight.txt", &format!("{}\n", base.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base;
+    edited[7] = "E8".to_string();
+    edited[22] = "E23".to_string();
+    write_file(&repo, "tight.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+#[test]
+fn a_short_interior_gap_offers_one_bar_that_finishes_it_in_one_tap() {
+    let (_tmp, repo) = repo_short_interior_gap();
+    let mut h = gap_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("tight.txt"));
+    assert_eq!(
+        painted_hunk_headers(&h),
+        ["@@ -5,7 +5,7 @@ t04", "@@ -20,7 +20,7 @@ t19"],
+        "the fixture's premise: a run of 8 lines between the two hunks"
+    );
+    assert_eq!(
+        bar_labels(&h),
+        [
+            "Expand previous lines at the top of the file",
+            "Expand lines between hunks 1 and 2",
+            "Expand next lines at the end of the file",
+        ],
+        "a gap one step from empty names its whole run instead of an edge, and offers \
+         it once"
+    );
+    assert_painted(&h, "8 unchanged lines hidden");
+    assert_not_painted(&h, "t12");
+
+    h.get_by_label("Expand lines between hunks 1 and 2").click();
+    settle(&mut h);
+
+    assert!(
+        h.query_by_label("Expand lines between hunks 1 and 2")
+            .is_none(),
+        "one tap opened all 8 lines, so the bar is gone"
+    );
+    assert_not_painted(&h, "8 unchanged lines hidden");
+    for line in 12..=19 {
+        assert_row_numbered(&h, &format!("t{line:02}"), &line.to_string());
+    }
+}
+
+/// 100 lines with one replacement at 8 and another at 90. Git answers `-U3` with
+/// `@@ -5,7 +5,7 @@` and `@@ -87,7 +87,7 @@`, so the run between them is 75 lines:
+/// long enough that both bars can own a block at once and a previous bar still has
+/// lines left to open after two taps.
+fn repo_long_interior_gap() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let base: Vec<String> = (1..=100).map(|i| format!("g{i:02}")).collect();
+    write_file(&repo, "tall.txt", &format!("{}\n", base.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base;
+    edited[7] = "E8".to_string();
+    edited[89] = "E90".to_string();
+    write_file(&repo, "tall.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+#[test]
+fn a_previous_bar_keeps_its_row_and_its_lines_keep_reading_into_the_hunk_below() {
+    let (_tmp, repo) = repo_long_interior_gap();
+    // Taller than the other gap fixtures: this test ends with 40 opened rows in one
+    // gap, and a row scrolled out of the pane is missing from the tree for a reason
+    // that is not the feature.
+    let mut h = shell_harness_over(
+        AppState::new(repo.to_path_buf()),
+        egui::vec2(1008.0, 2200.0),
+    );
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("tall.txt"));
+    assert_eq!(
+        painted_hunk_headers(&h),
+        ["@@ -5,7 +5,7 @@ g04", "@@ -87,7 +87,7 @@ g86"],
+        "the fixture's premise: a run of 75 lines between the two hunks"
+    );
+
+    let header_text = "@@ -87,7 +87,7 @@ g86";
+    let previous = "Expand previous lines above hunk 2";
+
+    h.get_by_label("Expand next lines below hunk 1").click();
+    settle(&mut h);
+    let next = h.get_by_label("Expand next lines below hunk 1").rect();
+    let placed = h.get_by_label(previous).rect();
+    let header = row_centre(&h, header_text);
+    assert_eq!(
+        numbers_between(&h, row_centre(&h, "g11"), next.center().y),
+        (12..=21).collect::<Vec<_>>(),
+        "the next bar sits at the frontier of the run it opened, so the ten lines are \
+         above it and not below it"
+    );
+    assert_eq!(
+        numbers_between(&h, next.center().y, placed.center().y),
+        Vec::<usize>::new(),
+        "the still-hidden middle paints nothing, so the two bars are consecutive rows"
+    );
+    assert_eq!(
+        numbers_between(&h, placed.center().y, header),
+        Vec::<usize>::new(),
+        "the previous bar sits between that block and the lower hunk's header, with \
+         nothing of its own open yet"
+    );
+
+    h.get_by_label(previous).click();
+    settle(&mut h);
+    let first = h.get_by_label(previous).rect();
+    assert!(
+        (first.center().y - placed.center().y).abs() < 1.0,
+        "the bar that was tapped stayed on its own row while its block grew: {placed:?} \
+         against {first:?}"
+    );
+    assert_eq!(
+        numbers_between(&h, placed.center().y, row_centre(&h, header_text)),
+        (77..=86).collect::<Vec<_>>(),
+        "ten lines opened from the bottom edge read ascending into the lower hunk"
+    );
+
+    h.get_by_label(previous).click();
+    settle(&mut h);
+    assert!(
+        (h.get_by_label(previous).rect().center().y - placed.center().y).abs() < 1.0,
+        "and the second tap moved it no further"
+    );
+    assert_eq!(
+        numbers_between(&h, placed.center().y, row_centre(&h, header_text)),
+        (57..=86).collect::<Vec<_>>(),
+        "the second tap put its twenty lines *above* the block it already had, so the \
+         run still ends on the line the lower hunk's header follows"
+    );
+}

@@ -279,6 +279,19 @@ diff format. The unit of granular review; selectable as a whole or narrowed
 to individual lines within it.
 _Avoid_: chunk
 
+**Context gap**:
+A run of unchanged lines a diff did not print: above a file's first hunk,
+between two consecutive hunks of one file, or below its last. Never a run
+spanning two files. The unit a reveal acts on, and a gap with nothing left
+unprinted has no affordance at all.
+_Avoid_: hidden region, collapsed context, fold
+
+**Reveal**:
+To show more of one context gap. A gap's top and bottom edges open
+independently, and a revealed line is context, never a change: it carries
+line numbers on both sides, is not stageable, and enters no patch.
+_Avoid_: expand (that is a hunk's own hide/show), load more
+
 **Partial staging**:
 Staging or unstaging a subset of a file's changes, by hunk or by line,
 instead of whole files. Covers both directions (stage and unstage);

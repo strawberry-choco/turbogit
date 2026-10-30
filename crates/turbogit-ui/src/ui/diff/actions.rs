@@ -1,14 +1,15 @@
-use super::model::{DisplayRow, RowKind, mono_font};
+use super::model::{BarKind, DisplayRow, Gap, Hidden, RowKind, TEXT_X, mono_font};
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Color32, CornerRadius, Popup, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, WidgetInfo,
-    WidgetType,
+    Color32, CornerRadius, FontId, Popup, Pos2, Rect, Response, RichText, Sense, Ui, Vec2,
+    WidgetInfo, WidgetType,
 };
 use turbogit_app::granular;
-use turbogit_app::keyed_read::DiffTarget;
+use turbogit_app::keyed_read::{ContextTarget, DiffTarget};
+use turbogit_app::reveals::Ask;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, ChangeStatus};
 
@@ -312,6 +313,166 @@ pub(super) fn hunk_header_extras(
         }
     }
     response.on_hover_text(tooltip);
+}
+
+/// What one bar paints into: the row it fills, the ids its button hangs from,
+/// and the comparison its click asks a read of.
+pub(super) struct Strip<'a> {
+    pub(super) band: Rect,
+    pub(super) paint: egui::Id,
+    pub(super) key: &'a str,
+    pub(super) comparison: &'a DiffTarget,
+    pub(super) font: &'a FontId,
+}
+
+/// One bar over a context gap: what the gap still hides, and the one edge this
+/// bar's one button opens.
+pub(super) fn reveal_strip(
+    ui: &mut Ui,
+    state: &mut AppState,
+    strip: Strip<'_>,
+    gap: u32,
+    info: &Gap,
+    kind: BarKind,
+    hidden_left: Option<u32>,
+) {
+    const BTN: f32 = 18.0;
+    const PAD_X: f32 = 6.0;
+    let Strip {
+        band,
+        paint,
+        key,
+        comparison,
+        font,
+    } = strip;
+
+    ui.painter()
+        .rect_filled(band, CornerRadius::ZERO, Palette::SURFACE);
+    let caption = match (hidden_left, state.ui.reveals.side(key, info.file)) {
+        (Some(n), _) => components::counted(
+            n as usize,
+            "unchanged line hidden",
+            "unchanged lines hidden",
+        ),
+        // Only the file's own text can size a run that ends at the file's end. Nothing is being
+        // read until a tap asks for it, so an untouched tail says what is unknown, not what is
+        // in flight.
+        (None, Ask::Waiting) => "Reading the file…".to_owned(),
+        (None, _) => "Unchanged lines hidden".to_owned(),
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(caption, font.clone(), Palette::INK_3);
+    ui.painter().galley(
+        Pos2::new(
+            band.left() + TEXT_X,
+            band.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        Palette::INK_3,
+    );
+
+    let base_id = ui.id().with(("diff-gutter", paint));
+    let response = strip_button(
+        ui,
+        Rect::from_min_size(
+            Pos2::new(band.left() + PAD_X, band.center().y - BTN / 2.0),
+            Vec2::splat(BTN),
+        ),
+        base_id.with((bar_verb(kind), gap)),
+        kind,
+        &bar_label(kind, info),
+    );
+    if response.clicked() {
+        open_edge(state, key, comparison, info, gap, kind);
+    }
+}
+
+/// The id verb this bar's button owns. The two bars of one gap must differ here,
+/// or egui merges their pressed states and one lights up when the other is hit.
+fn bar_verb(kind: BarKind) -> &'static str {
+    match kind {
+        BarKind::Next => "expand-next",
+        BarKind::Previous => "expand-previous",
+        BarKind::Collapsed => "expand-between",
+    }
+}
+
+/// The glyph that names which edge this bar opens: down for the run that grows
+/// away from the hunk above, up for the run that grows into the hunk below. A
+/// collapsed bar is one `Edge::Top` tap, so it wears the down chevron too.
+fn bar_glyph(kind: BarKind) -> Icon {
+    match kind {
+        BarKind::Next | BarKind::Collapsed => Icon::CHEVRON_DOWN,
+        BarKind::Previous => Icon::CHEVRON_UP,
+    }
+}
+
+fn strip_button(ui: &mut Ui, rect: Rect, id: egui::Id, kind: BarKind, label: &str) -> Response {
+    widgets::ghost_icon_button(ui, rect, id, label, true, |ui, rect, state| {
+        let ink = widgets::ButtonVariant::Ghost.text(state);
+        icons::centered_icon(ui, bar_glyph(kind), rect.center(), 12.0, ink);
+    })
+}
+
+/// The bar's own words: the hunk its block reads out of, or, where no hunk borders
+/// that side of the gap, the edge of the file it reads out of.
+fn bar_label(kind: BarKind, info: &Gap) -> String {
+    // On a multi-file patch the ordinal printed here spans files, because
+    // `Row::hunk` does, while `HunkTarget::Whole` indexes one file's own hunks.
+    // Naming it is safe: staging controls are inert on such a pane, so nothing
+    // reads the number this label shows.
+    // `bars_for` puts a next bar only where a hunk borders the gap above and a
+    // previous bar only where one borders it below, so the file-edge arms a
+    // direction cannot reach are spelled anyway and this stays total.
+    match (kind, info.above, info.below) {
+        (BarKind::Next, Some(hunk), Some(_)) => {
+            format!("Expand next lines below hunk {}", hunk + 1)
+        }
+        (BarKind::Next, _, None) => "Expand next lines at the end of the file".to_owned(),
+        (BarKind::Next, None, Some(_)) => "Expand next lines at the top of the file".to_owned(),
+        (BarKind::Previous, Some(_), Some(hunk)) => {
+            format!("Expand previous lines above hunk {}", hunk + 1)
+        }
+        (BarKind::Previous, None, _) => "Expand previous lines at the top of the file".to_owned(),
+        (BarKind::Previous, Some(_), None) => {
+            "Expand previous lines at the end of the file".to_owned()
+        }
+        // Only an interior gap collapses, so one arm names both hunks; the others
+        // keep the file-edge wording of the single bar a leading or trailing run
+        // gets instead.
+        (BarKind::Collapsed, Some(above), Some(below)) => {
+            format!("Expand lines between hunks {} and {}", above + 1, below + 1)
+        }
+        (BarKind::Collapsed, _, None) => "Expand next lines at the end of the file".to_owned(),
+        (BarKind::Collapsed, None, Some(_)) => {
+            "Expand previous lines at the top of the file".to_owned()
+        }
+    }
+}
+
+/// One click on a bar: open its edge, owe its file's text, and ask for it.
+///
+/// No repaint is requested, because a click already buys its own follow-up frame,
+/// and per-frame painting reads the counts and the text that landed rather than
+/// reaching for a read, so no frame dispatches git work on its own.
+fn open_edge(
+    state: &mut AppState,
+    key: &str,
+    comparison: &DiffTarget,
+    info: &Gap,
+    gap: u32,
+    kind: BarKind,
+) {
+    let hidden = match info.hidden {
+        Hidden::Run(n) => Some(n),
+        Hidden::ToEof => None,
+    };
+    if !state.ui.reveals.tap(key, gap as usize, kind.edge(), hidden) {
+        return;
+    }
+    state.ui.reveals.admit(key, info.file);
+    state.read(ContextTarget::new(comparison.clone(), info.file));
 }
 
 /// Aim the current hunk (CONTEXT.md "Current hunk") at the row under the
