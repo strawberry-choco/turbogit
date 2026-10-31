@@ -48,8 +48,14 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
         }
         _ => return,
     };
+    // `dialog_footer` spreads its buttons over the whole remaining region, so an
+    // unseeded height latches onto egui's default outer 420 and holds it;
+    // `.resizable(false)` is not the lever, egui overrides that flag internally.
+    // A near-minimal seed makes the first frame measure the content.
     egui::Window::new(title)
         .open(&mut open)
+        .resizable(false)
+        .default_height(32.0)
         .show(&ctx, |ui| match dialog {
             Dialog::NewBranch => new_branch(ui, state),
             Dialog::Merge => merge(ui, state),

@@ -1020,3 +1020,97 @@ fn every_dialog_separates_its_body_from_its_actions_with_the_footer_rule() {
         }
     }
 }
+
+#[test]
+fn no_dialog_frame_holds_a_dead_band_of_empty_window_below_its_actions() {
+    use egui_kittest::kittest::Queryable as _;
+
+    // Every dialog that paints the shared footer rule from plain state.
+    let cases: [Dialog; 10] = [
+        Dialog::NewBranch,
+        Dialog::Merge,
+        Dialog::Rebase,
+        Dialog::Tag,
+        Dialog::Shelve,
+        Dialog::Stash,
+        Dialog::RenameBranch,
+        Dialog::CompareBranches,
+        Dialog::CherryPickTarget,
+        Dialog::ImportPatches,
+    ];
+
+    for dialog in cases {
+        let (_tmp, repo) = project();
+        let mut state = AppState::for_roots(_tmp.path(), &[repo]);
+        state.ui.dlg.rebase_onto = "main".to_string();
+        state.ui.dlg.rebase_mode = turbogit_domain::model::RebaseMode::Standard;
+        state.ui.dlg.compare_left = "main".to_string();
+        state.ui.dlg.compare_right = "feature".to_string();
+        state.ui.dlg.rename_branch_name = "old".to_string();
+        state.ui.dialog = Some(dialog);
+        let mut h = project_harness(state);
+        settle(&mut h);
+
+        let rules: Vec<Rect> = filled_rects(&h)
+            .into_iter()
+            .filter(|(rect, color)| {
+                *color == Palette::RULE_FOOTER && (rect.height() - 1.0).abs() < 0.01
+            })
+            .map(|(rect, _)| rect)
+            .collect();
+        assert_eq!(
+            rules.len(),
+            1,
+            "the {dialog:?} dialog paints exactly one `RULE_FOOTER` hairline, the \
+             same one the footer-rule test locates; the frame painted {rules:?}"
+        );
+        let rule = rules[0];
+        let chrome = strokes(&h)
+            .into_iter()
+            .filter(|(rect, color, width)| {
+                *color == Palette::LINE
+                    && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
+                    && rect.contains(rule.center())
+            })
+            .map(|(rect, _, _)| rect)
+            .min_by(|a, b| {
+                (a.width() * a.height())
+                    .partial_cmp(&(b.width() * b.height()))
+                    .expect("finite rects")
+            })
+            .unwrap_or_else(|| {
+                panic!("the {dialog:?} dialog floats, so its footer rule is inside its frame")
+            });
+
+        let actions: Vec<Rect> = h
+            .get_all_by_role(egui::accesskit::Role::Button)
+            .map(|n| n.rect())
+            .filter(|r| r.top() >= rule.bottom() - 1.0 && chrome.contains_rect(*r))
+            .collect();
+        assert!(
+            !actions.is_empty(),
+            "the {dialog:?} dialog's action slot sits below its footer rule \
+             {rule:?} inside its frame {chrome:?}; no button rect matched"
+        );
+        let action_bottom = actions.iter().fold(f32::MIN, |acc, r| acc.max(r.bottom()));
+
+        // The band below the buttons is the window's own bottom margin plus its
+        // 1px stroke; a wider band means the frame still carries egui's fixed
+        // default height the content never claimed.
+        assert!(
+            (0.0..=24.0).contains(&(chrome.bottom() - action_bottom)),
+            "the {dialog:?} dialog's frame hugs its content: the distance from \
+             the bottom of the lowest action button to the frame's bottom edge is \
+             the window's inner padding, got {:.1}px of dead band below \
+             {actions:?} against frame {chrome:?}",
+            chrome.bottom() - action_bottom
+        );
+        assert!(
+            (0.0..=48.0).contains(&(action_bottom - rule.bottom())),
+            "the {dialog:?} dialog's action slot is one button row, not a \
+             stretched region: the lowest button bottom sits {:.1}px below the \
+             footer rule {rule:?} against frame {chrome:?}",
+            action_bottom - rule.bottom()
+        );
+    }
+}
