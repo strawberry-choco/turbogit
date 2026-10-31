@@ -617,6 +617,22 @@ points of the boundary are visible only from the role contract:
   action: a primary-ink sentence *plus* a primary button), not a report that
   there is nothing.
 
+- **`completion_field` is a field and its list as one role, in
+  `ui/widgets/suggest.rs`.** It owns the anchor arithmetic, the layering above the
+  enclosing `egui::Window`, the row geometry and ink (worn from the menu row, so it
+  adds no stroke site), the first-paint focus take, the whole-buffer select-all, and
+  the focus lock that keeps `Escape` in the field and holds `Tab` there only while the
+  list is on screen. It owns no candidate policy and reads no application state (rule
+  2): which candidates exist, whether the list shows, and what every key means belong
+  to the caller, which is `dialogs::new_branch` reducing through
+  `turbogit_app::new_branch`. Two alternatives were rejected at its definition.
+  `menu_host::host_menu` is a context menu's dismiss contract, any outside click and
+  any `Escape` closing it, which is not a completion's. An in-flow list inside the
+  `Window` was rejected on the cost it hides: the dialog's height jumps twice per word
+  and every row below the field moves under the pointer. `bulk_preflight.rs` still
+  hand-rolls its own branch-name field and is the known sibling not yet moved onto this
+  role.
+
 Feature surfaces may compose these roles, but a feature surface must not
 silently redefine their geometry or colors with local literals.
 

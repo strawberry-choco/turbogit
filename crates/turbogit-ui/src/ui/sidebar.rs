@@ -18,7 +18,7 @@ use crate::theme::{Palette, two_space_indent};
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::smart_rules::SmartGroupRule;
-use turbogit_app::state::{AppState, Dialog, Toast};
+use turbogit_app::state::{AppState, NewBranchBase, Toast};
 use turbogit_domain::model::{DisplayName, forward_slash_path};
 
 pub const SIDEBAR_WIDTH: f32 = 280.0;
@@ -177,7 +177,7 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     branch
         .widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "New branch for selection"));
     if branch.clicked() {
-        state.ui.dialog = Some(Dialog::NewBranch);
+        state.open_new_branch(NewBranchBase::Head, true, None);
     }
     let pull = widgets::compact_button(&mut right, "Pull");
     pull.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Pull selection"));

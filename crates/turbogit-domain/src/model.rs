@@ -179,6 +179,55 @@ impl Upstream {
     }
 }
 
+/// A branch named the way git can be handed it: a local branch by its own name,
+/// a remote one by `<remote>/<name>`, which is NOT its `name`. A row under a
+/// remote carries both halves separately, so the only sound way to build one is
+/// from the row itself; `From<&Branch>` is that way, and a hand-written name
+/// cannot carry a remote it does not mention.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchSpec {
+    pub name: String,
+    /// `None` for a local branch. `Some("origin")` for a row under a remote.
+    /// `kind` is deliberately not carried: `remote.is_some()` already says it,
+    /// and two fields would be two places to keep in step.
+    pub remote: Option<String>,
+}
+
+impl BranchSpec {
+    pub fn local(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            remote: None,
+        }
+    }
+
+    pub fn remote(remote: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            remote: Some(remote.into()),
+        }
+    }
+
+    /// The one spelling both the start-point argv and the stating row read.
+    /// `refs/remotes/<remote>/<name>` is addressable as `<remote>/<name>`, and a
+    /// local ref is addressable as its own name.
+    pub fn git_ref(&self) -> String {
+        match &self.remote {
+            Some(remote) => format!("{remote}/{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
+impl From<&Branch> for BranchSpec {
+    fn from(branch: &Branch) -> Self {
+        Self {
+            name: branch.name.clone(),
+            remote: branch.remote.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Branch {
     pub name: String,

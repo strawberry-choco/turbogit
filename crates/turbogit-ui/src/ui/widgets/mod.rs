@@ -6,6 +6,7 @@ mod inputs;
 mod menu;
 pub mod menu_host;
 mod rows;
+mod suggest;
 mod tabs;
 mod text;
 
@@ -36,6 +37,9 @@ pub use menu::{
 };
 pub use menu_host::{MenuId, target_of};
 pub use rows::paint_row;
+pub use suggest::{
+    Candidate, CompletionFieldProps, CompletionReply, claimed_text, completion_field,
+};
 pub use tabs::{TAB_ITEM_HEIGHT, TAB_STRIP_HEIGHT, TabItem, tab_view};
 pub use text::{SHORT_COMMIT_REF_CHARS, empty_state, paint_centered_text, short_commit_ref};
 

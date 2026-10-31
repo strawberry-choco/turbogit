@@ -935,12 +935,12 @@ mod surface {
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::NewBranch));
         assert_eq!(
-            st.ui.dlg.new_branch_base,
+            st.ui.dlg.new_branch.start,
             turbogit_app::state::NewBranchBase::Commit(seed.c1.clone()),
             "the base is the commit that was clicked, not the tip"
         );
         assert!(
-            !st.ui.dlg.new_branch_checkout,
+            !st.ui.dlg.new_branch.checkout,
             "creating a branch does not move me"
         );
         assert_eq!(menu_target(&harness), None, "and the menu closed");

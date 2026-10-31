@@ -1,6 +1,7 @@
 use crate::events::{AppEvent, LogBatchMode};
 use crate::fetch_admission::InflightFetch;
 use crate::granular;
+use crate::new_branch::NewBranchSession;
 use crate::operation::Operation;
 use crate::root_caches::{
     Affected, LogBatchSettle, LogRead, LogScope, RootCaches, log_batch_plan as window_batch_plan,
@@ -49,18 +50,35 @@ pub const LOG_BATCH_SIZE: usize = 50;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NewBranchBase {
+    /// No name to state: HEAD is where it starts, which is a detached head or a
+    /// repository with nothing selected.
     #[default]
-    Unset,
-    Branch(String),
+    Head,
+    /// A branch row the invoking action was pointed at. Built from the row, so a
+    /// remote row cannot be handed over as its bare name.
+    Branch(BranchSpec),
+    /// A commit the Log was pointed at.
     Commit(CommitId),
 }
 
 impl NewBranchBase {
-    pub fn start_point(&self) -> Option<&str> {
+    pub fn start_point(&self) -> Option<String> {
         match self {
-            Self::Unset => None,
-            Self::Branch(name) => Some(name.as_str()),
-            Self::Commit(id) => Some(id.as_str()),
+            Self::Head => None,
+            Self::Branch(spec) => Some(spec.git_ref()),
+            Self::Commit(id) => Some(id.clone()),
+        }
+    }
+
+    /// The stating row's one-word answer to "which branch is this", decided here
+    /// so the dialog never guesses. `None` means state nothing but the value.
+    pub fn qualifier(&self, current: Option<&str>) -> Option<&'static str> {
+        match self {
+            Self::Head => None,
+            Self::Commit(_) => None,
+            Self::Branch(spec) if spec.remote.is_some() => Some("remote"),
+            Self::Branch(spec) if current == Some(spec.name.as_str()) => Some("current"),
+            Self::Branch(_) => None,
         }
     }
 }
@@ -113,10 +131,7 @@ pub struct DialogState {
     pub rebase_old_base_check: Option<(String, bool)>,
     pub rebase_preview: Option<Vec<turbogit_domain::model::RebasePlanEntry>>,
     pub rebase_preview_key: Option<String>,
-    pub new_branch_name: String,
-    pub new_branch_checkout: bool,
-    pub new_branch_base: NewBranchBase,
-    pub new_branch_base_picker_open: bool,
+    pub new_branch: NewBranchSession,
     pub rename_branch_root: Option<RootId>,
     pub rename_branch_name: String,
     pub rename_branch_new: String,
@@ -1918,12 +1933,32 @@ impl AppState {
         self.cherry_reforecast();
     }
 
+    /// Open the New Branch dialog. The whole session is replaced, never patched,
+    /// so an invocation cannot inherit a character or a start point from the last
+    /// one. This is the only production path that sets `Dialog::NewBranch`.
     pub fn open_new_branch(&mut self, base: NewBranchBase, checkout: bool, name: Option<String>) {
-        let dlg = &mut self.ui.dlg;
-        dlg.new_branch_name = name.unwrap_or_default();
-        dlg.new_branch_base = base;
-        dlg.new_branch_base_picker_open = false;
-        dlg.new_branch_checkout = checkout;
+        let root = self.selected_root.clone();
+        let current = root
+            .as_ref()
+            .and_then(|id| self.multi.by_id(id))
+            .and_then(|r| r.current_branch.clone());
+        // `Head` is answered here, where the repository is still a fact about the
+        // invocation, and stays `Head` only when there is no name to state.
+        let start = match base {
+            NewBranchBase::Head => current.clone().map_or(NewBranchBase::Head, |name| {
+                NewBranchBase::Branch(BranchSpec::local(name))
+            }),
+            other => other,
+        };
+        let generation = self.ui.dlg.new_branch.generation + 1;
+        // The pre-fill is the branch the invocation was pointed at, so right-clicking
+        // `feature/pdv-2.7.62-global` offers its own name rather than the one that
+        // happens to be checked out. `Head` resolved above into the current branch.
+        let prefill = name.or_else(|| match &start {
+            NewBranchBase::Branch(spec) => Some(spec.name.clone()),
+            NewBranchBase::Commit(_) | NewBranchBase::Head => current.clone(),
+        });
+        self.ui.dlg.new_branch = NewBranchSession::open(generation, root, prefill, start, checkout);
         self.ui.dialog = Some(Dialog::NewBranch);
     }
 

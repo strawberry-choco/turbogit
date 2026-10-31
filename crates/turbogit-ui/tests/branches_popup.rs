@@ -216,10 +216,8 @@ fn new_branch_flow_creates_and_checks_out() {
     );
 
     {
-        let name_field = harness
-            .get_all_by_role(egui::accesskit::Role::TextInput)
-            .find(|n| n.accesskit_node().label().is_none())
-            .expect("dialog Name input queryable");
+        let name_field =
+            harness.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name");
         name_field.focus();
         name_field.type_text("issue14-x");
     }

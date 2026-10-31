@@ -758,11 +758,17 @@ pub(crate) mod surface {
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::NewBranch));
         assert_eq!(
-            st.ui.dlg.new_branch_base,
-            turbogit_app::state::NewBranchBase::Branch("feature-a".into())
+            st.ui.dlg.new_branch.start,
+            turbogit_app::state::NewBranchBase::Branch(turbogit_domain::model::BranchSpec::local(
+                "feature-a"
+            ))
         );
-        assert_eq!(st.ui.dlg.new_branch_name, "");
-        assert!(st.ui.dlg.new_branch_checkout);
+        assert_eq!(
+            st.ui.dlg.new_branch.name, "feature-a",
+            "the pre-fill is the row the action was pointed at, so the name and the \
+             start point arrive together"
+        );
+        assert!(st.ui.dlg.new_branch.checkout);
         assert_eq!(context_menu_target(&harness), None);
     }
 

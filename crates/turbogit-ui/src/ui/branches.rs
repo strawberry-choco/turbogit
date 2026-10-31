@@ -5,7 +5,7 @@ use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
 use turbogit_app::sync_service::PushScope;
-use turbogit_domain::model::{Branch, BranchKind, RootId, Upstream};
+use turbogit_domain::model::{Branch, BranchKind, BranchSpec, RootId, Upstream};
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
 use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
@@ -98,7 +98,13 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         &state.ui.branches_view,
     );
 
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // The same stand-down `handle_keys` keeps while a dialog or a confirm is open.
+    // Without it one `Escape` folds the New Branch list and also clears this
+    // surface's filter and selection behind the window.
+    if state.ui.dialog.is_none()
+        && state.ui.confirm.is_none()
+        && ui.input(|i| i.key_pressed(egui::Key::Escape))
+    {
         if state.ui.branches_settings_open {
             state.ui.branches_settings_open = false;
         } else if !state.ui.branches_filter.trim().is_empty() {
@@ -263,7 +269,7 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     );
     actions_ui.add_space(PAD_STRIP);
     if kit_button(&mut actions_ui, KitButton::Primary, "New Branch").clicked() {
-        state.open_new_branch(NewBranchBase::Unset, true, None);
+        state.open_new_branch(NewBranchBase::Head, true, None);
     }
     if state.multi.roots.len() > 1 {
         actions_ui.add_space(PAD_STRIP);
@@ -549,7 +555,7 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
         }
         TreeEvent::CreateBranchRequested { name } => {
             let name = if name.is_empty() { None } else { Some(name) };
-            state.open_new_branch(NewBranchBase::Unset, true, name);
+            state.open_new_branch(NewBranchBase::Head, true, name);
         }
         TreeEvent::ClearFilterRequested => {
             state.ui.branches_filter.clear();
@@ -660,7 +666,7 @@ fn apply_branch_action(
         }
         BranchMenuAction::Checkout => checkout_branch(state, root, branch),
         BranchMenuAction::NewBranchFrom => {
-            state.open_new_branch(NewBranchBase::Branch(branch.name.clone()), true, None);
+            state.open_new_branch(NewBranchBase::Branch(BranchSpec::from(branch)), true, None);
         }
         BranchMenuAction::CheckoutAndPull => {
             state.dispatch_pull("Checkout and pull", root.clone(), Some(branch.name.clone()));

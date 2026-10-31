@@ -56,10 +56,11 @@
 //! behaviour under a constraint the design never had.
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::shell_harness_over;
-use turbogit_app::state::{AppState, Dialog};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase};
 use turbogit_domain::model::{ChangeRef, RootId, Submodule, SubmoduleState, Worktree};
 
 const CAPTURE_SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
@@ -428,6 +429,21 @@ fn acceptance_matrix_screenshots() {
     h.state_mut().ui.settings_open = true;
     settle(&mut h);
     snapshot(&mut h, "08-settings-modal");
+
+    // Last on this harness: the name field takes focus and installs a focus-lock
+    // filter, and a page painted after it would inherit that interaction state.
+    h.state_mut().ui.settings_open = false;
+    settle(&mut h);
+    h.state_mut()
+        .open_new_branch(NewBranchBase::Head, true, None);
+    settle(&mut h);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name")
+        .focus();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name")
+        .type_text("feat");
+    settle(&mut h);
+    snapshot(&mut h, "11-new-branch-dialog");
+    h.state_mut().ui.dialog = None;
     results.extend_harness(&mut h);
     drop(h);
 

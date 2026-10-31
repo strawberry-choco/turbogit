@@ -1,4 +1,6 @@
 use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
+use turbogit_app::branch_names::{Prefix, completing};
+use turbogit_app::new_branch::{DialogReply, NameFrame, NameKeys, show_list};
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
@@ -14,7 +16,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
     let ctx = ui.ctx().clone();
     let mut open = true;
     let title = match dialog {
-        Dialog::NewBranch => "New Branch".to_string(),
+        Dialog::NewBranch => "Create New Branch".to_string(),
         Dialog::Merge => format!(
             "Merge into {}",
             current_branch_name(state).unwrap_or_else(|| "…".to_string())
@@ -132,107 +134,191 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn new_branch(ui: &mut Ui, state: &mut AppState) {
-    if state.ui.dlg.new_branch_base == NewBranchBase::Unset
-        && let Some(cur) = current_branch_name(state)
-    {
-        state.ui.dlg.new_branch_base = NewBranchBase::Branch(cur);
+    let ctx = ui.ctx().clone();
+    // Salted by the session's generation, so the previous invocation's caret, undo
+    // history and text offset belong to a widget that no longer exists.
+    let field_id = egui::Id::new("new_branch_name").with(state.ui.dlg.new_branch.generation);
+    let live = widgets::claimed_text(&ctx, field_id, &state.ui.dlg.new_branch.name);
+    let prefixes = name_completions(state, live.as_deref().unwrap_or_default());
+    let showing = show_list(live.as_deref(), &prefixes, &state.ui.dlg.new_branch.suggest);
+    let armed = state.ui.dlg.new_branch.suggest.armed.clone();
+    // Folded is the reducer's answer, not the widget's: handing it the live text
+    // would repaint the list the reader just dismissed.
+    let display_live = showing.then_some(live.as_deref()).flatten();
+    // While the list is on screen the vertical arrows belong to it. A single-line
+    // `TextEdit` moves its caret to the row's ends on Up/Down, so the arrows are read
+    // here and taken out of the queue before the field adds itself: otherwise arming a
+    // row silently drags the caret and the next keystroke lands at the wrong offset.
+    let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+    let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+    if showing {
+        if up {
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+        }
+        if down {
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+        }
     }
+    let counts: Vec<String> = prefixes.iter().map(|p| p.branches.to_string()).collect();
+    let candidates: Vec<widgets::Candidate<'_>> = prefixes
+        .iter()
+        .zip(&counts)
+        .map(|(prefix, count)| widgets::Candidate {
+            text: prefix.text.as_str(),
+            note: Some(count.as_str()),
+        })
+        .collect();
+
     ui.label("Name:");
-    ui.text_edit_singleline(&mut state.ui.dlg.new_branch_name);
+    let field = widgets::completion_field(
+        ui,
+        widgets::CompletionFieldProps {
+            id: field_id,
+            label: "Branch name",
+            text: &mut state.ui.dlg.new_branch.name,
+            width: NAME_FIELD_WIDTH,
+            candidates: &candidates,
+            live_text: display_live,
+            armed: armed.as_deref(),
+            tab_is_mine: showing,
+            select_on_focus: true,
+        },
+    );
+
     ui.label("Start from:");
     ui.horizontal(|ui| {
         new_branch_base_value(ui, state);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::compact_button(ui, "Change…").clicked() {
-                state.ui.dlg.new_branch_base_picker_open =
-                    !state.ui.dlg.new_branch_base_picker_open;
-            }
-        });
     });
-    if state.ui.dlg.new_branch_base_picker_open {
-        let branches: Vec<String> = state
-            .selected_root
-            .as_ref()
-            .and_then(|id| state.multi.by_id(id))
-            .map(|r| {
-                r.branches
-                    .iter()
-                    .filter(|b| b.kind == BranchKind::Local)
-                    .map(|b| b.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for b in branches {
-            if ui
-                .selectable_label(
-                    state.ui.dlg.new_branch_base == NewBranchBase::Branch(b.clone()),
-                    &b,
-                )
-                .clicked()
-            {
-                state.ui.dlg.new_branch_base = NewBranchBase::Branch(b);
-                state.ui.dlg.new_branch_base_picker_open = false;
-            }
-        }
-    }
     ui.checkbox(
-        &mut state.ui.dlg.new_branch_checkout,
+        &mut state.ui.dlg.new_branch.checkout,
         "Switch to the new branch now",
     );
+
+    let blank_name = state.ui.dlg.new_branch.name.trim().is_empty();
+    let mut create_clicked = false;
+    let mut cancel_clicked = false;
     widgets::dialog_footer(ui, |ui| {
-        if widgets::compact_button(ui, "Cancel").clicked() {
-            close(state);
+        let create = ui
+            .scope(|ui| {
+                if blank_name {
+                    ui.disable();
+                }
+                widgets::compact_primary_button(ui, "Create")
+            })
+            .inner
+            .on_disabled_hover_text("Name the branch first");
+        if create.clicked() {
+            create_clicked = true;
         }
-        if widgets::compact_button(ui, "Create").clicked() {
-            let root = state.selected_root.clone();
-            let name = state.ui.dlg.new_branch_name.clone();
-            let start = state
-                .ui
-                .dlg
-                .new_branch_base
-                .start_point()
-                .map(str::to_owned);
-            let co = state.ui.dlg.new_branch_checkout;
-            state.ui.branches_tree.scroll_to = Some(name.clone());
-            // `scroll_to` is consumed the frame it resolves, so the reveal has to lift the fold too.
-            if let Some(root) = &root {
-                state.ui.branches_tree.collapsed_repos.remove(root);
-            }
-            if let Some(root) = root {
-                state.dispatch(shell_writes::branch::create(
-                    &root,
-                    &name,
-                    start.as_deref(),
-                    co,
-                ));
-            }
-            close(state);
+        if widgets::compact_button(ui, "Cancel").clicked() {
+            cancel_clicked = true;
         }
     });
+
+    let keys = NameKeys {
+        up,
+        down,
+        tab: ui.input(|i| i.key_pressed(egui::Key::Tab)),
+        enter: ui.input(|i| i.key_pressed(egui::Key::Enter)),
+        escape: ui.input(|i| i.key_pressed(egui::Key::Escape)),
+    };
+    let frame = NameFrame {
+        live_text: live.as_deref(),
+        candidates: &prefixes,
+        keys,
+        create_clicked,
+        cancel_clicked,
+        clicked_candidate: field.clicked.as_deref(),
+    };
+    let reply = state.ui.dlg.new_branch.reduce(&frame);
+    // The dialog took the key, so nothing else will repaint it: an arm, a fold or a
+    // pruned row changes no widget's own value.
+    if keys.up || keys.down || keys.tab || keys.enter || keys.escape {
+        ctx.request_repaint();
+    }
+    match reply {
+        DialogReply::Nothing => {}
+        DialogReply::Create => create_named_branch(state),
+        DialogReply::Close => close(state),
+    }
+}
+
+/// How many families the name field offers at most. Ranked shallow-first, so a cut
+/// drops the deepest families and never the one the reader is typing into.
+const NAME_COMPLETIONS: usize = 8;
+
+/// The name field's width, which the completion list copies. Every other text field
+/// in this file claims 320.0 from the window's own content width.
+const NAME_FIELD_WIDTH: f32 = 320.0;
+
+/// The prefix table for this frame's text, read from the session's own root: the
+/// repository the invoking action was pointed at, not whichever one is selected now.
+fn name_completions(state: &AppState, typed: &str) -> Vec<Prefix> {
+    let root = match &state.ui.dlg.new_branch.root {
+        Some(root) => root,
+        None => return Vec::new(),
+    };
+    match state.multi.by_id(root) {
+        Some(repo) => completing(&repo.branches, typed, NAME_COMPLETIONS),
+        None => Vec::new(),
+    }
+}
+
+fn create_named_branch(state: &mut AppState) {
+    let root = state.ui.dlg.new_branch.root.clone();
+    let name = state.ui.dlg.new_branch.name.trim().to_owned();
+    let start = state.ui.dlg.new_branch.start.start_point();
+    let checkout = state.ui.dlg.new_branch.checkout;
+    state.ui.branches_tree.scroll_to = Some(name.clone());
+    // `scroll_to` is consumed the frame it resolves, so the reveal has to lift the fold too.
+    if let Some(root) = &root {
+        state.ui.branches_tree.collapsed_repos.remove(root);
+    }
+    if let Some(root) = root {
+        state.dispatch(shell_writes::branch::create(
+            &root,
+            &name,
+            start.as_deref(),
+            checkout,
+        ));
+    }
+    close(state);
 }
 
 fn new_branch_base_value(ui: &mut Ui, state: &AppState) {
-    let base = &state.ui.dlg.new_branch_base;
-    let NewBranchBase::Commit(id) = base else {
-        if let NewBranchBase::Branch(name) = base {
-            ui.label(name);
+    let current = current_branch_name(state);
+    let qualifier = state.ui.dlg.new_branch.start.qualifier(current.as_deref());
+    match &state.ui.dlg.new_branch.start {
+        NewBranchBase::Head => {
+            ui.label("HEAD");
         }
-        return;
-    };
-    icon(ui, Icon::GIT_COMMIT, 14.0, Palette::BRAND);
-    ui.label(
-        RichText::new(widgets::short_commit_ref(id))
-            .font(data_font(TYPE_BODY))
-            .color(Palette::INK),
-    );
-    if let Some(subject) = commit_subject(state, id) {
-        ui.add(
-            egui::Label::new(
-                RichText::new(subject)
-                    .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            )
-            .truncate(),
+        NewBranchBase::Branch(spec) => {
+            ui.label(spec.git_ref());
+        }
+        NewBranchBase::Commit(id) => {
+            icon(ui, Icon::GIT_COMMIT, 14.0, Palette::BRAND);
+            ui.label(
+                RichText::new(widgets::short_commit_ref(id))
+                    .font(data_font(TYPE_BODY))
+                    .color(Palette::INK),
+            );
+            if let Some(subject) = commit_subject(state, id) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(subject)
+                            .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
+                            .color(Palette::INK_3),
+                    )
+                    .truncate(),
+                );
+            }
+        }
+    }
+    if let Some(qualifier) = qualifier {
+        ui.label(
+            RichText::new(format!("({qualifier})"))
+                .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
+                .color(Palette::INK_3),
         );
     }
 }

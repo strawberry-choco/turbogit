@@ -817,7 +817,11 @@ fn new_branch_dialog_footer_preserves_order_minimum_targets_and_divider() {
 
     let create = h.get_by_label("Create");
     let cancel = h.get_by_label("Cancel");
-    assert!(create.rect().left() < cancel.rect().left());
+    assert!(
+        cancel.rect().left() < create.rect().left(),
+        "the affirmative is rightmost, as the reference dialog puts it and as the push \
+         dialog already does"
+    );
     assert!(create.rect().height() >= 28.0);
     assert!(cancel.rect().height() >= 28.0);
     assert!(
@@ -841,12 +845,19 @@ fn new_branch_is_prominent_and_defaults_base_to_current_with_switch_on() {
     );
 
     assert_eq!(
-        harness.state().ui.dlg.new_branch_base,
-        turbogit_app::state::NewBranchBase::Branch("main".into()),
+        harness.state().ui.dlg.new_branch.start,
+        turbogit_app::state::NewBranchBase::Branch(turbogit_domain::model::BranchSpec::local(
+            "main"
+        )),
         "base defaults to the current branch"
     );
+    assert_eq!(
+        harness.state().ui.dlg.new_branch.name,
+        "main",
+        "and the name field is pre-filled with it"
+    );
     assert!(
-        harness.state().ui.dlg.new_branch_checkout,
+        harness.state().ui.dlg.new_branch.checkout,
         "switch-now defaults to yes"
     );
     assert_painted(&harness, "Switch to the new branch now");
@@ -886,10 +897,8 @@ fn creating_a_branch_honours_the_switch_decision_it_was_given() {
             settle_quiet(&mut harness);
         }
         {
-            let field = harness
-                .get_all_by_role(egui::accesskit::Role::TextInput)
-                .find(|n| n.accesskit_node().label().is_none())
-                .expect("dialog Name input queryable");
+            let field =
+                harness.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name");
             field.focus();
             field.type_text(case.name);
         }
@@ -928,10 +937,7 @@ fn creating_a_branch_reveals_it_through_a_folded_repository() {
     harness.get_by_label("New Branch").click();
     settle_quiet(&mut harness);
     {
-        let field = harness
-            .get_all_by_role(egui::accesskit::Role::TextInput)
-            .find(|n| n.accesskit_node().label().is_none())
-            .expect("dialog Name input queryable");
+        let field = harness.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name");
         field.focus();
         field.type_text("past-the-fold");
     }

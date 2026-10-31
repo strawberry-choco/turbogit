@@ -10,7 +10,7 @@ use test_support::harness::{
     painted_galleys, right_click_row, settle_quiet, shell_harness_over,
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
-use turbogit_app::state::{AppState, Dialog, NewBranchBase, Tab};
+use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -118,14 +118,6 @@ fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     );
     settle_quiet(&mut harness);
     harness
-}
-
-fn picker_row<'h>(harness: &'h Harness<'_, AppState>, branch: &'h str) -> egui_kittest::Node<'h> {
-    harness
-        .query_all_by_label(branch)
-        .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
-        .min_by_key(|n| n.rect().left() as i32)
-        .unwrap_or_else(|| panic!("the picker's {branch:?} row"))
 }
 
 fn short(id: &str) -> String {
@@ -286,7 +278,7 @@ fn new_branch_from_the_menu_creates_the_branch_at_the_right_clicked_commit() {
         "the action must open the new-branch dialog"
     );
 
-    harness.state_mut().ui.dlg.new_branch_name = "from-the-log".into();
+    harness.state_mut().ui.dlg.new_branch.name = "from-the-log".into();
     settle_quiet(&mut harness);
     harness.get_by_label("Create").click();
     wait_for(&mut harness, |s| {
@@ -316,7 +308,7 @@ fn cancelling_the_new_branch_dialog_from_the_menu_creates_nothing() {
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
     settle_quiet(&mut harness);
-    harness.state_mut().ui.dlg.new_branch_name = "should-never-exist".into();
+    harness.state_mut().ui.dlg.new_branch.name = "should-never-exist".into();
     settle_quiet(&mut harness);
 
     harness.get_by_label("Cancel").click();
@@ -355,57 +347,14 @@ fn the_start_from_row_reads_a_commit_as_a_short_reference_and_its_subject() {
         .into_iter()
         .find(|g| g.text == "alpha: first commit" && g.color == Palette::INK_3)
         .expect("the commit's subject rides beside the reference, in the muted ink");
-    let change = harness.get_by_label("Change…").rect();
+    let content_right = harness.get_by_label("Create").rect().max.x;
     assert!(
-        subject.rect.max.x <= change.min.x,
-        "and the subject must not run under the button that changes the base: \
-         subject ends at {:?}, Change… starts at {:?}",
-        subject.rect.max,
-        change.min
+        subject.rect.max.x <= content_right,
+        "the stating row is truncated to the dialog's own content width, so a \
+         long subject cannot reach past it: subject ends at {:?}, content right \
+         edge is {content_right:?}",
+        subject.rect.max.x
     );
-}
-
-#[test]
-fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
-    let seed = seeded_repo();
-    let mut harness = log_harness(&seed);
-    right_click_row(&mut harness, &row_label(&seed.c1, "alpha: first commit"));
-    click_menu_item(&mut harness, "Copy hash", "New branch");
-    settle_quiet(&mut harness);
-
-    harness.get_by_label("Change…").click();
-    settle_quiet(&mut harness);
-    assert_eq!(
-        harness.state().ui.dlg.new_branch_base,
-        NewBranchBase::Commit(seed.c1.clone()),
-        "opening the picker does not drop the commit the log named"
-    );
-    assert_painted(&harness, &short(&seed.c1));
-    assert!(
-        painted_galleys(&harness)
-            .iter()
-            .any(|g| g.text == "alpha: first commit" && g.color == Palette::INK_3),
-        "subject included: the base stays readable while the picker is open"
-    );
-
-    picker_row(&harness, "feature").click();
-    settle_quiet(&mut harness);
-    assert_eq!(
-        harness.state().ui.dlg.new_branch_base,
-        NewBranchBase::Branch("feature".into()),
-        "a picked branch becomes the base"
-    );
-    assert!(
-        !harness.state().ui.dlg.new_branch_base_picker_open,
-        "and the picker closes, as picking from a list does"
-    );
-    assert!(
-        !painted_galleys(&harness)
-            .iter()
-            .any(|g| g.text == "alpha: first commit" && g.color == Palette::INK_3),
-        "the commit is no longer the base, so its subject leaves the row"
-    );
-    assert_painted(&harness, "feature");
 }
 
 fn count_of(dir: &Path, rev: &str) -> usize {

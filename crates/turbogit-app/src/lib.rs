@@ -1,9 +1,9 @@
 pub use turbogit_engine::resolve_git_version;
 
 pub use turbogit_services::{
-    bulk_ops, bulk_run, cherry_across, conflict, diff_engine, history_editor, integrate_service,
-    patch_apply, patch_create, remote_service, reselection, shelve_stash, sync_service,
-    tag_service,
+    branch_names, bulk_ops, bulk_run, cherry_across, conflict, diff_engine, history_editor,
+    integrate_service, patch_apply, patch_create, remote_service, reselection, shelve_stash,
+    sync_service, tag_service,
 };
 
 pub use turbogit_engine_api::OwnedOperation;
@@ -25,6 +25,7 @@ pub mod granular;
 pub mod keyed_read;
 pub mod log_display;
 pub mod log_states;
+pub mod new_branch;
 pub mod operation;
 pub mod persistence;
 pub mod pinned_views;

@@ -5,7 +5,7 @@ use turbogit_app::granular;
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, PatchSource, Tab, Toast};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, PatchSource, Tab, Toast};
 use turbogit_domain::model::DisplayName;
 
 use crate::ui::widgets;
@@ -152,7 +152,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
         }
         Action::Push => state.ui.dialog = Some(Dialog::Push),
         Action::Branches => state.ui.branches_popup = true,
-        Action::NewBranch => state.ui.dialog = Some(Dialog::NewBranch),
+        Action::NewBranch => state.open_new_branch(NewBranchBase::Head, true, None),
         Action::Merge => state.ui.dialog = Some(Dialog::Merge),
         Action::Rebase => state.ui.dialog = Some(Dialog::Rebase),
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),
