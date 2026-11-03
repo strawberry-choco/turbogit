@@ -303,6 +303,37 @@ fn current_workspace_row_is_marked_and_inert() {
 }
 
 #[test]
+fn row_metadata_reaches_the_accessibility_tree() {
+    let scratch = tempfile::tempdir().unwrap();
+    let live = seed_repo(scratch.path(), "live");
+    let (ws, _, _) = seed_workspace(scratch.path());
+    let beta = seed_repo(scratch.path(), "beta");
+    let mut fx = fixture_at_with_recents(
+        live,
+        &[
+            recent(&ws, "ws", RecentKind::Workspace, Some(2)),
+            recent(&beta, "beta", RecentKind::Project, None),
+        ],
+    );
+    settle(&mut fx.harness);
+
+    open_picker(&mut fx);
+
+    // A row's repo count is painted in its trailing slot and "current" is painted
+    // as a group caption, so neither reaches the tree unless the name carries it.
+    // A row with nothing extra keeps its bare name, which is what keeps every
+    // other suite's `query_by_label` unambiguous.
+    let labels = button_labels(&fx.harness);
+    for expected in ["live · current", "ws · 2 repos", "beta"] {
+        assert!(
+            labels.iter().any(|label| label == expected),
+            "the picker must name its rows' metadata, not only paint it: \
+             missing {expected:?} in {labels:?}"
+        );
+    }
+}
+
+#[test]
 fn open_project_entry_goes_through_the_picker_seam() {
     static PICKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     use std::sync::atomic::Ordering::SeqCst;
@@ -515,7 +546,8 @@ fn clicking_the_sidebar_header_opens_the_picker() {
 
     assert_painted(&fx.harness, "ws");
     assert_painted(&fx.harness, "2 repos");
-    assert_painted(&fx.harness, "current");
+    assert_painted(&fx.harness, "CURRENT");
+    assert_painted(&fx.harness, "RECENT");
     assert_painted(&fx.harness, "Open Project…");
     assert_painted(&fx.harness, "Attach Workspace Root…");
 }

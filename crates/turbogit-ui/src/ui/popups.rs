@@ -8,6 +8,8 @@ use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PatchSource, Tab, Toast};
 use turbogit_domain::model::DisplayName;
 
+use crate::ui::components;
+use crate::ui::icons::Icon;
 use crate::ui::widgets;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -361,85 +363,151 @@ fn workspace_rows(state: &AppState) -> Vec<WorkspaceRow> {
     rows
 }
 
-pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
-    let ctx = ui.ctx().clone();
-    // egui's own dropdown idiom (containers/popup.rs): a click outside only
-    // dismisses once the surface was visible on the PREVIOUS frame, so the
-    // trigger click that opens the picker cannot also close it this frame.
-    let was_open_id = egui::Id::new("turbogit_workspace_picker_was_open");
-    if !state.ui.workspace_picker_open {
-        ctx.memory_mut(|m| m.data.insert_temp(was_open_id, false));
-        return;
-    }
-    let was_open_last_frame = ctx.memory(|m| m.data.get_temp::<bool>(was_open_id) == Some(true));
-    ctx.memory_mut(|m| m.data.insert_temp(was_open_id, true));
+/// What one answer from the picker means for the shell.
+enum WorkspaceMenuAction {
+    /// The row that answered is the workspace already open, so the picker closes
+    /// and nothing re-dispatches.
+    Stay,
+    Enter(RecentProject),
+    OpenProject,
+    AttachRoot,
+}
 
+fn workspace_menu(ui: &mut Ui, rows: &[WorkspaceRow]) -> Option<WorkspaceMenuAction> {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.set_min_width(296.0);
+    ui.set_max_width(320.0);
+
+    let mut picked = None;
+    widgets::group_title(ui, "Current");
+    for (idx, row) in rows.iter().enumerate() {
+        let is_current = row.is_current;
+        let count = if row.recent.kind == RecentKind::Workspace {
+            row.recent
+                .repo_count
+                .map(|n| components::counted(n, "repo", "repos"))
+        } else {
+            None
+        };
+        let full_path = row.recent.path.display().to_string();
+        // The current row skips the path column: the rail header it hangs under
+        // already states where this workspace is.
+        let path = (!is_current).then_some(full_path.as_str());
+        // `menu_item` puts `label` in the accessibility tree and paints `shortcut`
+        // beside it, and the "current" caption is paint only, so the name has to
+        // carry the fact for a reader that cannot see the caption.
+        let open_mark = if is_current { " · current" } else { "" };
+        let accessible = match &count {
+            Some(count) => format!("{} · {count}{open_mark}", row.recent.name),
+            None => format!("{}{open_mark}", row.recent.name),
+        };
+        let response = widgets::menu_item(
+            ui,
+            widgets::MenuItemProps {
+                icon: Icon::FOLDER_GIT,
+                label: &row.recent.name,
+                data: path,
+                shortcut: count.as_deref(),
+                state: widgets::MenuItemState::enabled(),
+                kind: widgets::MenuItemKind::Default,
+            },
+        )
+        .on_hover_text(full_path);
+        // The closure is stored as `Fn`, not consumed once, so it clones rather
+        // than moves.
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, is_current, accessible.clone())
+        });
+        if response.clicked() {
+            picked = Some(if is_current {
+                WorkspaceMenuAction::Stay
+            } else {
+                WorkspaceMenuAction::Enter(row.recent.clone())
+            });
+        }
+        // The reference's project widget heads each half of its list with a
+        // caption, so the open workspace is named by its group rather than
+        // marked inside its own row.
+        if is_current && idx + 1 < rows.len() {
+            widgets::menu_rule(ui);
+            widgets::group_title(ui, "Recent");
+        }
+    }
+
+    widgets::menu_rule(ui);
+    for (icon, label, action) in [
+        (
+            Icon::FOLDER_OPEN,
+            "Open Project…",
+            WorkspaceMenuAction::OpenProject,
+        ),
+        (
+            Icon::PLUS,
+            "Attach Workspace Root…",
+            WorkspaceMenuAction::AttachRoot,
+        ),
+    ] {
+        if widgets::menu_item(
+            ui,
+            widgets::MenuItemProps {
+                icon,
+                label,
+                data: None,
+                shortcut: None,
+                state: widgets::MenuItemState::enabled(),
+                kind: widgets::MenuItemKind::Default,
+            },
+        )
+        .clicked()
+        {
+            picked = Some(action);
+        }
+    }
+    picked
+}
+
+pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
     if state.show_welcome() {
         state.ui.workspace_picker_open = false;
+    }
+    if !state.ui.workspace_picker_open {
         return;
     }
-
-    let pos = state
+    // The palette route has no trigger rect to hang under, so it aims at the
+    // corner of the rail the header occupies.
+    let anchor = state
         .ui
         .workspace_picker_anchor
-        .map(|(x, y)| Pos2::new(x, y))
-        .unwrap_or_else(|| Pos2::new(160.0, 4.0));
-    let rows = workspace_rows(state);
+        .map_or(Pos2::new(160.0, 4.0), |(x, y)| Pos2::new(x, y));
+    let menu = widgets::MenuId::new("workspace_picker", "");
+    widgets::menu_host::note_anchor(ui, menu, anchor);
 
-    let mut open = true;
-    let window = egui::Window::new("Switch Workspace")
-        .open(&mut open)
-        .fixed_pos(pos)
-        .title_bar(false)
-        .resizable(false)
-        .min_width(260.0)
-        .show(&ctx, |ui| {
-            if rows.is_empty() {
-                widgets::empty_state(ui, "No recent workspaces");
-            }
-            ui.spacing_mut().item_spacing.y = crate::theme::DENSITY_LIST_GAP;
-            for row in &rows {
-                let mut label = row.recent.name.clone();
-                if row.recent.kind == RecentKind::Workspace
-                    && let Some(n) = row.recent.repo_count
-                {
-                    label.push_str(&format!("  ·  {n} repos"));
-                }
-                if row.is_current {
-                    label.push_str("  ·  current");
-                }
-                let resp = ui
-                    .button(label)
-                    .on_hover_text(row.recent.path.display().to_string());
-                if resp.clicked() {
-                    if !row.is_current {
-                        state.open_recent(&row.recent);
-                    }
-                    state.ui.workspace_picker_open = false;
-                }
-            }
-            ui.separator();
-            if ui.button("Open Project…").clicked() {
-                state.ui.workspace_picker_open = false;
-                if let Some(dir) = super::welcome::pick_dir_public(state, "Open Project") {
-                    state.open_project(&dir);
-                }
-            }
-            if ui.button("Attach Workspace Root…").clicked() {
-                state.ui.workspace_picker_open = false;
-                if let Some(dir) = super::welcome::pick_dir_public(state, "Attach Workspace Root") {
-                    state.attach_workspace(&dir);
-                }
-            }
-        });
-    if !open {
+    let rows = workspace_rows(state);
+    let mut dismiss = false;
+    let picked =
+        widgets::menu_host::host_menu(ui, menu, true, &mut dismiss, |ui| workspace_menu(ui, &rows))
+            .flatten();
+
+    if dismiss {
         state.ui.workspace_picker_open = false;
-    }
-    let Some(window) = window else {
         return;
-    };
-    let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-    if escaped || (was_open_last_frame && window.response.clicked_elsewhere()) {
-        state.ui.workspace_picker_open = false;
+    }
+    match picked {
+        None => {}
+        Some(WorkspaceMenuAction::Stay) => state.ui.workspace_picker_open = false,
+        Some(WorkspaceMenuAction::Enter(recent)) => {
+            state.ui.workspace_picker_open = false;
+            state.open_recent(&recent);
+        }
+        Some(WorkspaceMenuAction::OpenProject) => {
+            if let Some(dir) = super::welcome::pick_dir_public(state, "Open Project") {
+                state.open_project(&dir);
+            }
+        }
+        Some(WorkspaceMenuAction::AttachRoot) => {
+            if let Some(dir) = super::welcome::pick_dir_public(state, "Attach Workspace Root") {
+                state.attach_workspace(&dir);
+            }
+        }
     }
 }

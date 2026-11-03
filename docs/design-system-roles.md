@@ -542,9 +542,11 @@ Two families inside that follow-up are already settled and must not be swept:
   `interact_size.y = 16.0`, and a full-width 1px rule, with its own 6px reserved
   band and 6px item spacing on either side, fights that compression. It is a
   candidate for removal rather than for a named role, and that call belongs to
-  the follow-up. The same file's second `ui.separator()` (`ui/popups.rs:438`,
-  under the workspace picker) separates the recents list from its two
-  open-folder actions and is a plain modal-body divider.
+  the follow-up. The same file's second `ui.separator()`, which ruled the recents
+  list off from the workspace picker's two open-folder actions, is **gone**: that
+  surface is now a hosted menu (`widgets::menu_host::host_menu` over
+  `widgets::menu_item` and `widgets::menu_rule`), so its dividers carry the
+  structural role and it is no longer part of the sweep.
 
 ## General controls, inputs, and containers
 

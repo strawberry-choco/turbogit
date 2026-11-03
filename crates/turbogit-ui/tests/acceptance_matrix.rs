@@ -19,7 +19,7 @@
 //! UPDATE_SNAPSHOTS=force cargo test -p turbogit-ui --test acceptance_matrix
 //! ```
 //!
-//! which repaints all eleven PNGs and leaves the previous ones beside them as
+//! which repaints all twelve PNGs and leaves the previous ones beside them as
 //! `{name}.old.png` for review (gitignored; the pair is what a reviewer compares
 //! before committing). `force` is the only value this suite documents, see the
 //! note on [`acceptance_matrix_screenshots`] for why `UPDATE_SNAPSHOTS=1` is not
@@ -60,6 +60,7 @@ use egui_kittest::kittest::Queryable as _;
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::shell_harness_over;
+use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::state::{AppState, Dialog, NewBranchBase};
 use turbogit_domain::model::{ChangeRef, RootId, Submodule, SubmoduleState, Worktree};
 
@@ -273,6 +274,32 @@ fn context_repo() -> PathBuf {
     repo
 }
 
+/// The recents the workspace picker and the Welcome card are captured against.
+///
+/// Written rather than loaded, and with `~`-rooted paths: the picker's rows paint
+/// what this holds, so a real config dir would photograph this machine's projects
+/// and `snapshot` would (correctly) refuse the frame for painting `$HOME`.
+fn capture_recents() -> Vec<RecentProject> {
+    [
+        (
+            "~/dev/platform",
+            "platform",
+            RecentKind::Workspace,
+            Some(3usize),
+        ),
+        ("~/design/exports", "exports", RecentKind::Project, None),
+    ]
+    .into_iter()
+    .map(|(path, name, kind, repo_count)| RecentProject {
+        path: PathBuf::from(path),
+        name: name.to_string(),
+        last_opened: 1_756_684_800_000,
+        kind,
+        repo_count,
+    })
+    .collect()
+}
+
 fn seed_worktree_and_submodule_panes(state: &mut AppState) {
     let root = state.selected_root.clone().expect("a focused root");
     let worktrees: Vec<Worktree> = [
@@ -474,6 +501,26 @@ fn acceptance_matrix_screenshots() {
     h.state_mut().ui.tab = turbogit_app::state::Tab::Submodules;
     settle(&mut h);
     snapshot(&mut h, "10-submodules");
+    results.extend_harness(&mut h);
+    drop(h);
+
+    // The picker is captured on its own harness, and not merely for tidiness. It
+    // opens an `egui::Window`, and a window with no explicit position is placed
+    // against the ones already open, so showing and dismissing the picker earlier
+    // in this process moves the Settings dialog. Measured 2026-11-03: the shared
+    // harness cost `08-settings-modal` 702 251 differing px against its 0 px
+    // budget. That coupling is a fact about the shell, not about this page.
+    let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
+    state.ui.recent_projects = capture_recents();
+    state.ui.workspace_picker_open = true;
+    state.ui.workspace_picker_anchor = Some((12.0, 34.0));
+    let mut h = harness(state);
+    settle(&mut h);
+    assert!(
+        h.state().ui.workspace_picker_open,
+        "the picker must still be open at capture, a shot of a dismissed popup is a page picture"
+    );
+    snapshot(&mut h, "12-workspace-picker");
     results.extend_harness(&mut h);
     drop(h);
 }
