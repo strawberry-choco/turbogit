@@ -3,8 +3,8 @@ use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::git_seed::{self, git, repo_with_one_commit};
 use test_support::harness::{
-    assert_painted, filled_rects, galley_origin, painted_galleys, painted_text, settle,
-    shell_harness, shell_harness_over,
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
+    settle, shell_harness, shell_harness_over,
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
@@ -577,9 +577,11 @@ fn ctrl_shift_k_opens_the_push_dialog() {
     harness.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::K);
     settle(&mut harness);
     assert_eq!(harness.state().ui.dialog, Some(Dialog::Push));
-    assert_painted(&harness, "PUSH SCOPE");
-    assert_painted(&harness, "This repo");
+    assert_painted(&harness, "Push Commits");
+    assert_painted(&harness, "REPOSITORIES");
     assert_painted(&harness, "Force push (--force-with-lease)");
+    assert_painted(&harness, "Run Git hooks");
+    assert_not_painted(&harness, "PUSH SCOPE");
 }
 #[test]
 fn ctrl_t_rescans_without_disturbing_shell_state() {

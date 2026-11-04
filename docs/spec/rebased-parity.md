@@ -490,9 +490,22 @@ too case-sensitive to catch an uppercase micro-header), and §8.4 gap 12 for the
 **UI.** Three actions for push, `Vcs.Push` (dialog), `Vcs.Push.Simple`,
 `Vcs.Push.Force`, and whether the dialog appears is a *setting*. The Push Commits
 dialog: repository list (**only the current repository selected by default**),
-commit list with per-commit checkboxes, right-hand preview, target panel with
+~~commit list with per-commit checkboxes~~ **commit list, corrected below**,
+right-hand preview, target panel with
 **five named states** (`New`, `New & Upstream`, `Set upstream`, `Upstream`,
 `Empty repository`) plus inline `Define remote`. Counters on the widget.
+
+**Correction (2026-11-03): the reference's commit list has no checkboxes.**
+`CommitNode` extends `DefaultMutableTreeNode`, not `CheckedTreeNode`, and
+`PushController.getSelectedPushSpecs` passes an empty commits container, so
+ticking a repository row is the *only* push filter and the whole outgoing range of
+each checked repository travels; commit selection drives the right-hand preview.
+The range cut lives in the Log as `Git.PushUpToCommit` = `Push All up to Here…`,
+five lines below the sentence this cell was read from (§B,
+`08-remotes-sync.md:48-52` against `:67-70`). The false reading is kept visible
+here rather than quietly rewritten, because `ADR-0032` was framed against it and
+the parity rewrite it justified shipped per-commit checkboxes that measured as
+unable to reduce a push.
 
 **UX.** The three verbs are ranked by safety in the docs themselves: fetch "does
 not affect your local development environment, this is a safe way to get an
@@ -503,8 +516,13 @@ was rejected`, so the product distinguishes "the remote refused" from "your leas
 is stale".
 
 **The three-layer force-push safety model is the best safety design in the
-product:** (1) it is a dropdown item, so plain Push is the default; (2) it is
-*absent* on a protected branch, not warned about; (3) underneath it is
+product:** (1) it is a dropdown item, so plain Push is the default; (2) ~~it is
+*absent* on a protected branch, not warned about~~ **correction (2026-11-03): it
+stays visible and disabled**, with a tooltip naming the protected-branches
+setting, and plain `Push` is never disabled for protection. The product doc says
+"only available if the current branch is not listed in the Protected branches
+field", which this cell read as removal; the shipped control is gated in place, so
+the user can see the affordance they are being refused and where to change it; (3) underneath it is
 `--force-with-lease`.
 
 **Flow.** A successful update **navigates by default**, the `Update Info` tab
@@ -828,20 +846,20 @@ intentionally not pursued.
 |---|---|---|
 | Fetch / Pull / Update as three ranked verbs | `Operation::Fetch`; update path; pull via `Vcs.UpdateProject` | **has** |
 | Widget incoming/outgoing counters | ahead/behind in the repo header | **has** |
-| Push dialog: repo list, commit list, preview, target panel | `Dialog::Push`, scope, banner, outgoing tree, changed-files preview, subset warning, Remote/Branch, 4 options | **has**, richer |
-| **Only the current repository selected by default** | PUSH SCOPE segmented control defaulting to ThisRepo | **has** |
+| Push dialog: repo list, commit list, preview, target panel | `Dialog::Push` over `push_session::PushSession`: one row per repository whose checkbox is the only push filter, the inline `local → remote : branch` with its `PushTargetState` badge and obstacle label, a commit list that selects the preview and carries no checkboxes, a changed-files pane deduped by path, `Run Git hooks`, a three-state `Push tags`, `Force push` | **has**, richer. Rewritten 2026-11-03 per `ADR-0032`; the scope control, the protected-branch banner, the target panel and the subset warning are gone, and their jobs are on the row |
+| **Only the current repository selected by default** | ~~PUSH SCOPE segmented control defaulting to ThisRepo~~ `PushSession::open` consents the row matching `selected_root` and leaves every other row off (`push_session.rs`) | **has** — and now for the right reason. The old cell was false as written: `PushScope::default()` is `All`, so four of five open paths consented every registered root |
 | Inline `Define remote` | `Define remote` link + `Add Remote` in the `Dialog::Push` target half (`ui/push_dialog.rs`); `Dialog::ManageRemotes` for the full list | **has 2026-10-07**: ticket 14 (`6a6aa3b`), a repository with no remote gets the link in place of the Remote field; it opens Name/URL (`origin` prefilled) with `Add Remote`/`Cancel`, keeps git's failure inline as `Could not add remote: …`, and on success the new name takes the Remote field so the push continues without a trip to `ManageRemotes` |
-| `Edit all targets` link; per-commit `Push All up to Here…` | per-commit checkboxes in the outgoing tree | **has** |
-| `Push tags: All \| Current Branch` | `--tags` / `--follow-tags` | **partial**, the two-way scope is one checkbox |
-| Push as a **dropdown**: Push / Force push | `--force` option | **partial** |
-| **Force absent on a protected branch** | protected-branch blocking in `Dialog::Push` | **has** |
+| `Edit all targets` link; per-commit `Push All up to Here…` | ~~per-commit checkboxes in the outgoing tree~~ neither. Targets print on every row but are not yet click-to-edit, so the mirror link has nothing to mirror; the commit rows carry no checkboxes, and the range cut is a Log verb | **absent**, both halves, 2026-11-03. The old **has** was doubly wrong: the reference's commit rows have no checkboxes, and TurboGit's could not reduce a push (a probe over the verbatim `subset_push_state` found 0 of 7 reachable tick patterns that did). `Push All up to Here…` becomes a `commit_menu.rs` item in its own change, unblocked by giving `outgoing_commits` a sorting mode |
+| `Push tags: All \| Current Branch` | `PushTags::{None, All, Follow}` on the port, painted as a three-state pair | **has** — `Follow` reaches `--follow-tags` at the engine, so the third segment is not decoration |
+| Push as a **dropdown**: Push / Force push | `--force` option, still a checkbox | **partial**, unchanged. The split primary is deferred; what landed instead is where protection bites |
+| **Force ~~absent~~ disabled on a protected branch** (corrected 2026-11-03: the shipped product keeps the item visible and refuses it in place) | `push()` refuses force per root (`sync_service.rs`), the row names the refusal, and plain `Push` stays live | **has**, on a different mechanism than the ADR claimed. The dialog no longer disables the whole primary button, which is what `push_dialog.rs:535`'s old test pinned |
 | `Push Rejected` dialog: repos, remember, Rebase/Merge | remediation banner | **partial** |
 | **Six distinct rejection notifications, 4 with next actions** | `sync_service::classify_push_failure` → six `PushOutcome` classes, painted by `ui/push_rejected.rs` | ~~**, ** **missing**, highest-value gap here~~ **has 2026-10-07**: ticket 13 (`798db84`), one title and body per class, with a next step on exactly the four classes that can honour one (`Update and retry` / `Fetch and retry` / `Resolve conflicts`); `UpdateUnresolved` and `UpdateErrored` stay message-only |
 | `Force-with-lease` rejected as its own message | `PushOutcome::LeaseRejected` | ~~**, ** **missing**~~ **has 2026-10-07**: ticket 13 (`798db84`), classified on git's `(stale info)` detail and worded as a stale lease, not a failed push |
 | `Auto-update if push … was rejected` writing back to settings | `VcsSettings::auto_update_on_push_rejected` | ~~**, ** **missing**~~ **has 2026-10-07**: ticket 13 (`798db84`), set by the Push dialog's remember checkbox, reversible in Settings → Update, off by default |
 | **Update opens the `Update Info` tab automatically** | `log_window` after a fetch | **partial**, not established as automatic |
 | Update strategy: Merge / Rebase / Reset to Remote | rebase mode mapping | **partial**. Reset-to-remote not evidenced |
-| Per-root **skip reasons** (`no tracked branch`, `detached HEAD`) | `Operation::Fetch { roots }` per-root report | **partial**, the reasons are missing |
+| Per-root **skip reasons** (`no tracked branch`, `detached HEAD`) | push path: `push_session::Obstacle::{NoRemote, EmptyRepository, Detached, UnlistedFirstPush}`, painted per row and carried as `PushPlan::blocked` so a consented-but-unpushable row is named rather than dropped; `push_targets` refuses an empty branch by name. fetch path: unchanged | **has** on push, **partial** on fetch. `push_roots` used to answer `Ok(())` for a root with no branch, which reported a push of nothing as a success |
 | `Git Remotes` dialog, two URL columns | `Dialog::ManageRemotes`, list, add, edit URLs, rename, remove, set upstream, multi-root apply | **has**, richer |
 | Remove-remote confirmation | `PendingConfirm` | **has** |
 | `Vcs.Push.Simple` (push with no dialog) | `ui/push_control.rs::push_without_dialog`, the one-click verb in the VCS popup's push row | **has 2026-10-07**: ticket 14 (`6a6aa3b`), `sync_service::direct_push_target` resolves it behind four gates (multi-root, a checked root subset, a protected branch, no remote at all); outside those gates the verb is **absent** rather than disabled, the palette route opens the dialog instead of a silent no-op, and the request is the panel's own `PushRequest` shape, so a rejection classifies like one from the dialog |

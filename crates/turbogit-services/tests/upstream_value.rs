@@ -4,6 +4,7 @@ use turbogit_domain::model::{
     Branch, BranchKind, MultiRootManager, Remote, Root, RootId, RootStatus, Upstream, VcsSettings,
 };
 use turbogit_engine::fake::{Call, FakeExecutor};
+use turbogit_engine_api::PushTags;
 use turbogit_services::{bulk_ops, sync_service};
 
 fn up(remote: &str, branch: &str) -> Upstream {
@@ -100,7 +101,16 @@ fn push_dry_run_push_and_bulk_push_all_agree_on_the_remote() {
     let settings = VcsSettings::default();
 
     let roots = [&root];
-    sync_service::push_roots(&v, &roots, &settings, false, false, false, false, None);
+    sync_service::push_roots(
+        &v,
+        &roots,
+        &settings,
+        false,
+        PushTags::None,
+        false,
+        false,
+        None,
+    );
     sync_service::push_dry_run_roots(&v, &roots, false, None);
     bulk_ops::run_bulk(
         &v,

@@ -1,6 +1,6 @@
 use egui::Ui;
 use turbogit_app::operation::PushRequest;
-use turbogit_app::state::{AppState, Dialog};
+use turbogit_app::state::AppState;
 use turbogit_app::sync_service::{self, DirectPushTarget};
 
 use crate::ui::popups::Action;
@@ -31,14 +31,14 @@ pub fn popup_row(ui: &mut Ui, state: &mut AppState) {
             .on_hover_text("Preview and choose the target first")
             .clicked()
         {
-            state.ui.dialog = Some(Dialog::Push);
+            state.open_push();
         }
     });
 }
 
 pub fn push_without_dialog(state: &mut AppState) -> bool {
     let Some(target) = direct_target(state) else {
-        state.ui.dialog = Some(Dialog::Push);
+        state.open_push();
         return false;
     };
     let mut request =

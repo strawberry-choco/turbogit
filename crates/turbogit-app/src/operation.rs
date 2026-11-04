@@ -6,7 +6,7 @@ use turbogit_domain::model::{
     Change, CleanTreeMethod, CommitId, DisplayName, MergeOpts, RebaseOpts, RebasePlanEntry, Root,
     RootId, UpdateMethod, VcsSettings,
 };
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, PushTags};
 use turbogit_services::integrate_service::OwnedOperation;
 
 use crate::root_caches::Affected;
@@ -102,6 +102,34 @@ mod tests {
             "merge has no --skip, and the table must not offer one",
         );
     }
+
+    #[test]
+    fn a_skipped_row_is_named_beside_a_failure_and_fails_nothing_on_its_own() {
+        use crate::push_session::Obstacle;
+        let alpha = RootId(PathBuf::from("/repo/alpha").into());
+        let beta = RootId(PathBuf::from("/repo/beta").into());
+        let skipped = [(beta.clone(), Obstacle::Detached)];
+
+        let pushed = batch_result(vec![(alpha.clone(), Ok(()))], &skipped);
+        assert!(
+            pushed.is_ok(),
+            "a row that was skipped is not a row that failed: {pushed:?}"
+        );
+
+        let refused = batch_result(
+            vec![(alpha, Err(TgError::Other("non-fast-forward".into())))],
+            &skipped,
+        );
+        let message = refused
+            .expect_err("the refused root still fails the batch")
+            .to_string();
+        assert!(message.contains("alpha: non-fast-forward"), "{message}");
+        assert!(
+            message.contains("beta — detached HEAD"),
+            "the consented row that never reached git is named beside it: {message}"
+        );
+        assert_eq!(skip_sentence(&skipped), "beta — detached HEAD");
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +166,10 @@ pub enum PushTargets {
         branch: String,
     },
     Scope(Vec<Root>),
+    /// Every target already resolved to the triple git is handed, so a batch can
+    /// carry a per-root remote, a per-root upstream, and a branch that is not
+    /// `current_branch`. A batch of one is the same thing as a single push.
+    Batch(Vec<turbogit_services::sync_service::PushTarget>),
 }
 
 #[derive(Clone, Debug)]
@@ -156,10 +188,17 @@ pub struct RecoveryPlan {
 pub struct PushRequest {
     pub targets: PushTargets,
     pub force: bool,
-    pub tags: bool,
+    pub tags: PushTags,
     pub no_verify: bool,
     pub set_upstream: bool,
     pub selected_oldest: Option<String>,
+    /// Consent rows that never reach git, each with the reason it refused. The
+    /// reference's rule for these is **skip and name, do not fail** — the same
+    /// theory of failure `docs/spec/rebased-parity.md` §4.6 records for the sync
+    /// family and deliberately does NOT unify with the branch-rollback family,
+    /// where one failed root fails the run. So a row here adds a sentence to the
+    /// outcome and changes nothing about the batch's success or its order.
+    pub skipped: Vec<(RootId, crate::push_session::Obstacle)>,
     pub settings: VcsSettings,
 }
 
@@ -179,14 +218,22 @@ impl PushRequest {
         Self::for_targets(PushTargets::Scope(roots), settings)
     }
 
+    pub fn batch(
+        targets: Vec<turbogit_services::sync_service::PushTarget>,
+        settings: &VcsSettings,
+    ) -> Self {
+        Self::for_targets(PushTargets::Batch(targets), settings)
+    }
+
     fn for_targets(targets: PushTargets, settings: &VcsSettings) -> Self {
         Self {
             targets,
             force: false,
-            tags: false,
+            tags: PushTags::default(),
             no_verify: false,
             set_upstream: false,
             selected_oldest: None,
+            skipped: Vec::new(),
             settings: settings.clone(),
         }
     }
@@ -195,6 +242,7 @@ impl PushRequest {
         match &self.targets {
             PushTargets::Single { root, .. } => vec![root.clone()],
             PushTargets::Scope(roots) => roots.iter().map(|r| r.id.clone()).collect(),
+            PushTargets::Batch(targets) => targets.iter().map(|t| t.root.clone()).collect(),
         }
     }
 }
@@ -309,6 +357,40 @@ pub enum Operation {
         affected: Affected,
         work: Work,
     },
+}
+
+/// One failed batch is one error naming every root that refused, so a partial
+/// push reports what did not land instead of stopping at the first refusal.
+/// `skipped` rows are appended to that sentence when there is one, and add
+/// nothing when there is not: §4.6's skip theory says a row that could not be
+/// pushed is named, never a reason the batch itself fails.
+fn batch_result(
+    results: Vec<(RootId, TgResult<()>)>,
+    skipped: &[(RootId, crate::push_session::Obstacle)],
+) -> TgResult<()> {
+    let failures: Vec<String> = results
+        .into_iter()
+        .filter_map(|(id, result)| result.err().map(|e| format!("{}: {e}", id.name())))
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        let mut message = format!("push failed — {}", failures.join("; "));
+        if !skipped.is_empty() {
+            message.push_str(&format!("; skipped {}", skip_sentence(skipped)));
+        }
+        Err(TgError::Other(message))
+    }
+}
+
+/// `<name> — <reason>`, one per row, joined. The words are the obstacle's own,
+/// so the outcome and the dialog row say the same thing about the same row.
+pub fn skip_sentence(skipped: &[(RootId, crate::push_session::Obstacle)]) -> String {
+    skipped
+        .iter()
+        .map(|(id, obstacle)| format!("{} — {}", id.name(), obstacle.label()))
+        .collect::<Vec<String>>()
+        .join("; ")
 }
 
 impl Operation {
@@ -559,6 +641,13 @@ impl Operation {
                 request, recover, ..
             } => match (&request.targets, recover) {
                 (PushTargets::Single { root, .. }, None) => Affected::Root(root.clone()),
+                // A batch of one touched exactly one repository, and naming it
+                // is what keeps the settlement from invalidating every cache in
+                // the workspace over a single push.
+                (PushTargets::Batch(targets), None) => match targets.as_slice() {
+                    [one] => Affected::Root(one.root.clone()),
+                    _ => Affected::All,
+                },
                 _ => Affected::All,
             },
             Self::Custom { affected, .. } => affected.clone(),
@@ -758,6 +847,7 @@ impl Operation {
                     no_verify,
                     set_upstream,
                     selected_oldest,
+                    skipped,
                     settings,
                 } = request;
                 if let Some(plan) = recover {
@@ -802,29 +892,33 @@ impl Operation {
                     ),
                     PushTargets::Scope(roots) => {
                         let refs: Vec<&Root> = roots.iter().collect();
-                        let results = turbogit_services::sync_service::push_roots(
-                            vcs,
-                            &refs,
-                            &settings,
-                            force,
-                            tags,
-                            no_verify,
-                            set_upstream,
-                            selected_oldest.as_deref(),
-                        );
-                        let failures: Vec<String> = results
-                            .into_iter()
-                            .filter_map(|(id, r)| r.err().map(|e| format!("{}: {e}", id.name())))
-                            .collect();
-                        if failures.is_empty() {
-                            Ok(())
-                        } else {
-                            Err(TgError::Other(format!(
-                                "push failed — {}",
-                                failures.join("; ")
-                            )))
-                        }
+                        batch_result(
+                            turbogit_services::sync_service::push_roots(
+                                vcs,
+                                &refs,
+                                &settings,
+                                force,
+                                tags,
+                                no_verify,
+                                set_upstream,
+                                selected_oldest.as_deref(),
+                            ),
+                            &skipped,
+                        )
                     }
+                    PushTargets::Batch(targets) => batch_result(
+                        turbogit_services::sync_service::push_targets(
+                            vcs,
+                            &targets,
+                            &settings,
+                            turbogit_services::sync_service::PushOptions {
+                                force,
+                                tags,
+                                no_verify,
+                            },
+                        ),
+                        &skipped,
+                    ),
                 }
             }
             Self::Resolve { root, owner, verb } => {

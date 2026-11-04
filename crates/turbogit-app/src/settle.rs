@@ -8,8 +8,7 @@ use crate::granular;
 use crate::operation::{OpKind, PushRequest};
 use crate::root_caches::Affected;
 use crate::state::{
-    AppState, BranchDeleteUndo, BranchDivergence, Dialog, DivergentRoot, PushRejection, Toast,
-    ToastKind,
+    AppState, BranchDeleteUndo, BranchDivergence, DivergentRoot, PushRejection, Toast, ToastKind,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,6 +234,11 @@ fn guard_refusals(view: &crate::bulk_run_view::BulkRunView) -> Vec<(String, Stri
 }
 
 fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, affected: &Affected) {
+    // Read before the request is cleared: a row the user consented that git
+    // never received belongs in the sentence this push reports, not in a second
+    // toast, which would only replace the first.
+    let with_skips = skipped_push_label(state, rules, label);
+    let label = with_skips.as_deref().unwrap_or(label);
     report_success(state, label);
     clear_push_in_flight(state);
     refresh_affected(state, affected);
@@ -255,7 +259,7 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
 fn open_push_dialog_owed(state: &mut AppState, rules: RuleSet, affected: &Affected) {
     if rules.open_push_dialog && state.ui.commit_push_dialog_pending.as_ref() == affected.root() {
         state.ui.commit_push_dialog_pending = None;
-        state.ui.dialog = Some(Dialog::Push);
+        state.open_push();
     }
 }
 
@@ -335,6 +339,20 @@ fn report_success(state: &mut AppState, label: &str) {
 
 fn clear_push_in_flight(state: &mut AppState) {
     state.ui.push_in_flight = None;
+}
+
+/// The push's own success sentence, widened to name every consented row that
+/// was skipped rather than pushed. §4.6's skip theory: the row is told, the run
+/// is not failed, and `PushOutcome` keeps its six rejection meanings untouched.
+fn skipped_push_label(state: &AppState, rules: RuleSet, label: &str) -> Option<String> {
+    let request = state.ui.push_in_flight.as_ref()?;
+    if !rules.push_rejection || request.skipped.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{label} · skipped {}",
+        crate::operation::skip_sentence(&request.skipped)
+    ))
 }
 
 fn refresh_affected(state: &mut AppState, affected: &Affected) {
@@ -593,6 +611,10 @@ fn push_target_names(state: &AppState, request: &PushRequest) -> (String, String
     use crate::operation::PushTargets;
     match &request.targets {
         PushTargets::Single { remote, branch, .. } => (remote.clone(), branch.clone()),
+        PushTargets::Batch(targets) => match targets.first() {
+            Some(one) => (one.remote.clone(), one.branch.clone()),
+            None => (String::new(), String::new()),
+        },
         PushTargets::Scope(roots) => {
             let named = state
                 .multi

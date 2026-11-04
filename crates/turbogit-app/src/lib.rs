@@ -6,7 +6,7 @@ pub use turbogit_services::{
     sync_service, tag_service,
 };
 
-pub use turbogit_engine_api::OwnedOperation;
+pub use turbogit_engine_api::{OwnedOperation, PushTags};
 
 pub mod activity;
 pub mod apply_patch;
@@ -30,6 +30,7 @@ pub mod operation;
 pub mod persistence;
 pub mod pinned_views;
 pub mod polling;
+pub mod push_session;
 pub mod recents;
 pub mod reveals;
 pub mod root_caches;

@@ -892,10 +892,17 @@ pub(crate) mod surface {
         click_menu_item(&mut harness, MENU_SENTINEL, "Push");
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::Push));
-        assert_eq!(st.ui.dlg.push_branch, "plain-b");
-        assert_eq!(
-            st.ui.dlg.push_scope,
-            turbogit_services::sync_service::PushScope::ThisRepo
+        let row = st
+            .ui
+            .dlg
+            .push
+            .rows
+            .iter()
+            .find(|row| row.branch.value() == Some("plain-b"))
+            .expect("the clicked branch must land on its own row, not on HEAD's");
+        assert!(
+            row.consented,
+            "the branch-menu verb must consent the row it pointed at"
         );
     }
 

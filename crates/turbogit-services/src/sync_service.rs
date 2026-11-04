@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, PushTags};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SubsetPushState {
@@ -351,6 +351,42 @@ pub struct DirectPushTarget {
     pub set_upstream: bool,
 }
 
+/// The push-executing sibling of [`DirectPushTarget`], for a batch whose
+/// targets the user has seen and may have edited. Same four fields on purpose:
+/// a dialog row states the target it holds and the batch executes that same
+/// value, so a row's text and its payload cannot drift into describing two
+/// different pushes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushTarget {
+    pub root: RootId,
+    pub remote: String,
+    pub branch: String,
+    pub set_upstream: bool,
+}
+
+/// The one resolution of a root's push triple. `DirectPushTarget` and
+/// [`PushTarget`] are the same answer in two types, and a second spelling of
+/// this would be free to disagree with the first — which is exactly how a
+/// dialog comes to print one target and push another.
+fn resolve_push_target(root: &Root, branch: &str) -> PushTarget {
+    PushTarget {
+        root: root.id.clone(),
+        remote: push_remote(root),
+        branch: branch.to_owned(),
+        // git's own `push.default = simple` refuses a first push of an
+        // untracked branch, so the upstream is recorded exactly when there is
+        // nothing to record it against.
+        set_upstream: tracked_upstream(root).is_none(),
+    }
+}
+
+/// The target a push of `root` would run before anyone edits it. One resolver
+/// for both the row's printed target and the batch's payload, which is what the
+/// invisible per-root derivation used to be.
+pub fn seed_push_target(root: &Root) -> PushTarget {
+    resolve_push_target(root, root.current_branch.as_deref().unwrap_or_default())
+}
+
 /// The target of the no-dialog push, or `None` when the push MUST go through
 /// the dialog.
 ///
@@ -384,14 +420,12 @@ pub fn direct_push_target(
     if is_protected(settings, branch) {
         return None;
     }
+    let resolved = resolve_push_target(root, branch);
     Some(DirectPushTarget {
-        root: root.id.clone(),
-        remote: push_remote(root),
-        branch: branch.clone(),
-        // git's own `push.default = simple` refuses a first push of an
-        // untracked branch, so the fast path records the upstream exactly when
-        // there is nothing to record it against.
-        set_upstream: tracked_upstream(root).is_none(),
+        root: resolved.root,
+        remote: resolved.remote,
+        branch: resolved.branch,
+        set_upstream: resolved.set_upstream,
     })
 }
 
@@ -484,7 +518,7 @@ pub fn push(
     remote: &str,
     branch: &str,
     force: bool,
-    tags: bool,
+    tags: PushTags,
     no_verify: bool,
     set_upstream: bool,
     selected_oldest: Option<&str>,
@@ -514,7 +548,7 @@ pub fn push_all_forced(
     mgr: &MultiRootManager,
     settings: &VcsSettings,
     force: bool,
-    tags: bool,
+    tags: PushTags,
     no_verify: bool,
     set_upstream: bool,
     selected_oldest: Option<&str>,
@@ -538,7 +572,7 @@ pub fn push_roots(
     roots: &[&Root],
     settings: &VcsSettings,
     force: bool,
-    tags: bool,
+    tags: PushTags,
     no_verify: bool,
     set_upstream: bool,
     selected_oldest: Option<&str>,
@@ -559,18 +593,119 @@ pub fn push_roots(
                     selected_oldest,
                     settings,
                 ),
-                None => Ok(()),
+                None => Err(TgError::Other(format!(
+                    // A root with no HEAD branch pushed nothing, and reporting
+                    // it as success is the defect the reference names instead:
+                    // its batch says `detached HEAD` rather than saying nothing.
+                    "'{}' has no branch to push (detached HEAD)",
+                    root.id.name()
+                ))),
             };
             (root.id.clone(), result)
         })
         .collect()
 }
+
+/// The flags a batch applies to every target in it. `set_upstream` is
+/// deliberately absent: it is a fact of the target, not of the batch, and a
+/// batch-level flag would silently rewrite what each row says it will do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PushOptions {
+    pub force: bool,
+    pub tags: PushTags,
+    pub no_verify: bool,
+}
+
+/// Execute already-resolved targets, one answer per target in the order given.
+/// Each target carries its own `set_upstream`, so a batch can push a tracked
+/// branch and a first push in the same click.
+pub fn push_targets(
+    vcs: &dyn GitExecutor,
+    targets: &[PushTarget],
+    settings: &VcsSettings,
+    options: PushOptions,
+) -> Vec<(RootId, TgResult<()>)> {
+    targets
+        .iter()
+        .map(|target| {
+            (
+                target.root.clone(),
+                push_one(vcs, target, settings, options),
+            )
+        })
+        .collect()
+}
+
+fn push_one(
+    vcs: &dyn GitExecutor,
+    target: &PushTarget,
+    settings: &VcsSettings,
+    options: PushOptions,
+) -> TgResult<()> {
+    if target.branch.trim().is_empty() {
+        // A target with no branch to name is not a push that succeeded: the old
+        // batch path answered `Ok(())` here, which is how a repository that
+        // pushed nothing came to be reported as pushed.
+        return Err(TgError::Other(format!(
+            "'{}' has no branch to push",
+            target.root.name()
+        )));
+    }
+    push(
+        vcs,
+        target.root.as_path(),
+        &target.remote,
+        &target.branch,
+        options.force,
+        options.tags,
+        options.no_verify,
+        target.set_upstream,
+        // Nothing narrows the refspec: ticking a repository row is the only
+        // push filter, and no row carries a commit cutoff.
+        None,
+        settings,
+    )
+}
+
+/// Dry-run exactly the targets the `Push` button would send. `GitExecutor::push_dry_run`
+/// carries no tags, no `--no-verify` and no upstream, so this preview describes the
+/// ref move and nothing else; `force` is the only option the two verbs share.
+pub fn dry_run_targets(
+    vcs: &dyn GitExecutor,
+    targets: &[&PushTarget],
+    force: bool,
+) -> Vec<(String, TgResult<String>)> {
+    targets
+        .iter()
+        .map(|target| {
+            let result = if target.branch.trim().is_empty() {
+                Err(TgError::Other(format!(
+                    "'{}' has no branch to push",
+                    target.root.name()
+                )))
+            } else {
+                vcs.push_dry_run(target.root.as_path(), &target.remote, &target.branch, force)
+            };
+            (target.remote.clone(), result)
+        })
+        .collect()
+}
+
 pub fn push_all(
     vcs: &dyn GitExecutor,
     mgr: &MultiRootManager,
     settings: &VcsSettings,
 ) -> Vec<(RootId, TgResult<()>)> {
-    push_all_forced(vcs, mgr, settings, false, false, false, false, None)
+    push_all_forced(
+        vcs,
+        mgr,
+        settings,
+        false,
+        PushTags::None,
+        false,
+        false,
+        None,
+    )
 }
 pub fn outgoing_per_root(
     vcs: &dyn GitExecutor,
@@ -951,7 +1086,16 @@ mod tests {
         let root = PathBuf::from("/repo");
 
         let blocked = push(
-            &engine, &root, "origin", "main", true, false, false, false, None, &s,
+            &engine,
+            &root,
+            "origin",
+            "main",
+            true,
+            PushTags::None,
+            false,
+            false,
+            None,
+            &s,
         );
         assert!(blocked.is_err(), "force-push to protected branch must fail");
         assert!(
@@ -960,7 +1104,16 @@ mod tests {
         );
 
         let normal = push(
-            &engine, &root, "origin", "feature", false, false, false, false, None, &s,
+            &engine,
+            &root,
+            "origin",
+            "feature",
+            false,
+            PushTags::None,
+            false,
+            false,
+            None,
+            &s,
         );
         assert!(normal.is_ok());
         let calls = engine.calls.lock().unwrap();
@@ -971,11 +1124,207 @@ mod tests {
                 remote: "origin".into(),
                 branch: "feature".into(),
                 force: false,
-                tags: false,
+                tags: PushTags::None,
                 no_verify: false,
                 set_upstream: false,
                 selected_oldest: None,
             }]
+        );
+    }
+
+    #[test]
+    fn the_row_seed_and_the_fast_path_resolve_one_target() {
+        let tracked = target_root(&["origin"], &["origin/feat"], true, true);
+        let untracked = target_root(&["origin"], &[], true, false);
+        assert_eq!(
+            seed_push_target(&tracked),
+            PushTarget {
+                root: tracked.id.clone(),
+                remote: "origin".into(),
+                branch: "feat".into(),
+                set_upstream: false,
+            }
+        );
+        assert_eq!(
+            seed_push_target(&untracked),
+            PushTarget {
+                root: untracked.id.clone(),
+                remote: "origin".into(),
+                branch: "feat".into(),
+                set_upstream: true,
+            }
+        );
+        // The two types are the same resolution, so the no-dialog verb and a
+        // dialog row cannot print different pushes for one repository.
+        let direct = direct_push_target(
+            std::slice::from_ref(&tracked),
+            Some(&selected_id(&tracked)),
+            &HashSet::new(),
+            &settings_with(&["master"]),
+        )
+        .expect("unprotected tracked root");
+        assert_eq!(
+            direct,
+            DirectPushTarget {
+                root: tracked.id.clone(),
+                remote: "origin".into(),
+                branch: "feat".into(),
+                set_upstream: false,
+            }
+        );
+        let seeded = seed_push_target(&tracked);
+        assert_eq!(seeded.remote, direct.remote);
+        assert_eq!(seeded.branch, direct.branch);
+        assert_eq!(seeded.set_upstream, direct.set_upstream);
+    }
+
+    #[test]
+    fn a_detached_root_seeds_an_empty_branch_rather_than_a_lie() {
+        let detached = Root {
+            current_branch: None,
+            ..target_root(&["origin"], &[], true, true)
+        };
+        let seeded = seed_push_target(&detached);
+        assert_eq!(seeded.remote, "origin");
+        assert!(
+            seeded.branch.is_empty(),
+            "no HEAD branch means no branch to state, not a guessed one"
+        );
+    }
+
+    #[test]
+    fn a_batch_hands_each_target_its_own_upstream_flag_and_no_cutoff() {
+        let engine = FakeExecutor::new();
+        let tracked = PushTarget {
+            root: RootId(PathBuf::from("/a").into()),
+            remote: "origin".into(),
+            branch: "feat".into(),
+            set_upstream: true,
+        };
+        let results = push_targets(
+            &engine,
+            std::slice::from_ref(&tracked),
+            &settings_with(&["main"]),
+            PushOptions {
+                force: false,
+                tags: PushTags::All,
+                no_verify: true,
+            },
+        );
+        assert!(results[0].1.is_ok());
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [Call::Push {
+                root: PathBuf::from("/a"),
+                remote: "origin".into(),
+                branch: "feat".into(),
+                force: false,
+                tags: PushTags::All,
+                no_verify: true,
+                set_upstream: true,
+                selected_oldest: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn one_protected_target_fails_itself_and_not_the_batch_around_it() {
+        let engine = FakeExecutor::new();
+        let good = PushTarget {
+            root: RootId(PathBuf::from("/a").into()),
+            remote: "origin".into(),
+            branch: "feat".into(),
+            set_upstream: false,
+        };
+        let protected = PushTarget {
+            root: RootId(PathBuf::from("/b").into()),
+            branch: "main".into(),
+            ..good.clone()
+        };
+        let results = push_targets(
+            &engine,
+            &[good.clone(), protected.clone()],
+            &settings_with(&["main"]),
+            PushOptions {
+                force: true,
+                tags: PushTags::None,
+                no_verify: false,
+            },
+        );
+        assert!(results[0].1.is_ok(), "the unprotected row still pushes");
+        assert!(results[1].1.is_err(), "force to a protected branch");
+    }
+
+    #[test]
+    fn a_target_with_no_branch_is_named_as_refused_not_reported_pushed() {
+        let engine = FakeExecutor::new();
+        let branchless = PushTarget {
+            root: RootId(PathBuf::from("/a").into()),
+            remote: "origin".into(),
+            branch: String::new(),
+            set_upstream: false,
+        };
+        let results = push_targets(
+            &engine,
+            std::slice::from_ref(&branchless),
+            &settings_with(&[]),
+            PushOptions::default(),
+        );
+        let err = results[0].1.as_ref().expect_err("no branch is a refusal");
+        assert!(
+            err.to_string().contains("'a'"),
+            "the refusal names the repository: {err}"
+        );
+        assert!(
+            engine.calls.lock().unwrap().is_empty(),
+            "a refused target must not reach git"
+        );
+
+        let reports = dry_run_targets(&engine, &[&branchless], false);
+        assert!(reports[0].1.is_err(), "the preview refuses too");
+        assert!(engine.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_dry_run_previews_the_targets_it_is_handed() {
+        let engine = FakeExecutor::new();
+        let first = PushTarget {
+            root: RootId(PathBuf::from("/a").into()),
+            remote: "origin".into(),
+            branch: "feat".into(),
+            set_upstream: false,
+        };
+        let second = PushTarget {
+            root: RootId(PathBuf::from("/b").into()),
+            remote: "mirror".into(),
+            ..first.clone()
+        };
+        let reports = dry_run_targets(&engine, &[&first, &second], true);
+        assert_eq!(
+            reports
+                .iter()
+                .map(|(remote, _)| remote.clone())
+                .collect::<Vec<String>>(),
+            vec!["origin".to_string(), "mirror".to_string()]
+        );
+        assert!(reports.iter().all(|(_, report)| report.is_ok()));
+        let calls = engine.calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            [
+                Call::PushDryRun {
+                    root: PathBuf::from("/a"),
+                    remote: "origin".into(),
+                    branch: "feat".into(),
+                    force: true,
+                },
+                Call::PushDryRun {
+                    root: PathBuf::from("/b"),
+                    remote: "mirror".into(),
+                    branch: "feat".into(),
+                    force: true,
+                },
+            ]
         );
     }
 }

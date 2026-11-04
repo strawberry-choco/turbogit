@@ -35,7 +35,7 @@ pub struct OutgoingRoot {
     pub commits: Result<Vec<Commit>, String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PushPreview {
     pub commits: usize,
     pub remotes: usize,
@@ -92,6 +92,9 @@ pub enum PatchSource {
 
 #[derive(Default)]
 pub struct DialogState {
+    /// The row model the Push dialog is built from: one row per registered
+    /// root, replaced whole on open.
+    pub push: crate::push_session::PushSession,
     pub push_remote: String,
     pub push_branch: String,
     pub push_define_remote: bool,
@@ -1457,6 +1460,143 @@ impl AppState {
         self.ui.push_in_flight = Some(request);
         self.ui.push_rejection = None;
         self.dispatch(op);
+    }
+
+    /// Open the Push dialog with one row per registered root, in registration
+    /// order, and only the row the app is pointed at consented. The listings are
+    /// taken here, once: they are the promise the button then has to keep, so a
+    /// later read that found more commits would push ones nobody ticked.
+    pub fn open_push(&mut self) {
+        let selected = self.selected_root.clone();
+        let rows = self.push_rows(selected.as_ref(), None);
+        let focus = selected
+            .clone()
+            .map_or(crate::push_session::Focus::AllRoots, |id| {
+                crate::push_session::Focus::Root(id)
+            });
+        let generation = self.ui.dlg.push.generation + 1;
+        self.ui.dlg.push = crate::push_session::PushSession::open(generation, rows, Some(focus));
+        self.ui.dialog = Some(Dialog::Push);
+    }
+
+    /// Open the Push dialog for the branch a row was clicked on. That branch is
+    /// not HEAD's, and the batch path which re-derives every root's branch from
+    /// `current_branch` drops it, so this verb carries it into the row's own
+    /// field and consents that row.
+    pub fn open_push_for_branch(&mut self, root: &RootId, branch: &str) {
+        let selected = self.selected_root.clone();
+        let rows = self.push_rows(selected.as_ref(), Some((root, branch)));
+        let generation = self.ui.dlg.push.generation + 1;
+        self.ui.dlg.push = crate::push_session::PushSession::open(
+            generation,
+            rows,
+            Some(crate::push_session::Focus::Root(root.clone())),
+        );
+        self.ui.dialog = Some(Dialog::Push);
+    }
+
+    /// One row per registered root. `branch` is the root-and-branch an invoking
+    /// action pointed the dialog at, when there was one: that row is consented
+    /// alongside the selected root's.
+    fn push_rows(
+        &self,
+        selected: Option<&RootId>,
+        branch: Option<(&RootId, &str)>,
+    ) -> Vec<crate::push_session::PushRow> {
+        let outgoing = self.outgoing_per_root();
+        self.multi
+            .roots
+            .iter()
+            .map(|root| {
+                let seed = match branch {
+                    Some((id, name)) if id == &root.id => Some(name),
+                    _ => None,
+                };
+                let consented = seed.is_some() || selected == Some(&root.id);
+                let ids = match seed {
+                    Some(name) => self.ids_for_branch(root, name),
+                    None => outgoing
+                        .iter()
+                        .find(|(id, _)| id == &root.id)
+                        .map_or(Ok(Vec::new()), |(_, ids)| ids.clone()),
+                };
+                crate::push_session::build_row(
+                    root,
+                    consented,
+                    seed,
+                    ids.map(|ids| self.described(&root.id, &ids, seed)),
+                )
+            })
+            .collect()
+    }
+
+    /// The outgoing range of a branch that is not HEAD's. Only that branch's own
+    /// upstream bounds it, and reading HEAD's would list one branch while
+    /// pushing another.
+    fn ids_for_branch(&self, root: &Root, branch: &str) -> Result<Vec<CommitId>, String> {
+        let upstream = root
+            .branches
+            .iter()
+            .find(|b| b.kind == BranchKind::Local && b.name == branch)
+            .and_then(|b| b.tracking.as_ref())
+            .map(|t| t.git_ref());
+        match upstream {
+            Some(git_ref) => self
+                .executor
+                .outgoing_commits(root.id.as_path(), branch, &git_ref)
+                .map_err(|e| e.to_string()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The listed ids joined against the log of `from` (HEAD's, when the row
+    /// pushes HEAD) so a row has a subject to print and an author to dim. A
+    /// commit the log does not carry keeps its id alone.
+    fn described(&self, root: &RootId, ids: &[CommitId], from: Option<&str>) -> Vec<Commit> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        // The log is read from the branch the row pushes: a branch that is not
+        // HEAD's is not in HEAD's history, and joining it there would list the
+        // right commits with nothing to say about them.
+        let log = match from {
+            None => self.full_log(root),
+            Some(branch) => self
+                .executor
+                .log(
+                    root.as_path(),
+                    &LogOpts {
+                        branch: Some(branch.to_string()),
+                        ..LogOpts::default()
+                    },
+                )
+                .unwrap_or_default(),
+        };
+        ids.iter()
+            .map(|id| {
+                log.iter()
+                    .find(|commit| &commit.id == id)
+                    .cloned()
+                    .unwrap_or_else(|| Commit {
+                        id: id.clone(),
+                        parents: Vec::new(),
+                        author: Signature {
+                            name: String::new(),
+                            email: String::new(),
+                            time: 0,
+                        },
+                        committer: Signature {
+                            name: String::new(),
+                            email: String::new(),
+                            time: 0,
+                        },
+                        message: String::new(),
+                        time: 0,
+                        root: root.clone(),
+                        signature: SignatureState::Unsigned,
+                    })
+            })
+            .collect()
     }
 
     pub fn dispatch_commit(

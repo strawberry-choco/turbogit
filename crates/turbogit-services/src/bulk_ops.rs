@@ -412,7 +412,16 @@ fn push_root(
         .ok_or_else(|| TgError::Other("no current branch to push".into()))?;
     let remote = super::sync_service::push_remote(root);
     super::sync_service::push(
-        vcs, &root.path, &remote, branch, false, false, false, false, None, settings,
+        vcs,
+        &root.path,
+        &remote,
+        branch,
+        false,
+        turbogit_engine_api::PushTags::None,
+        false,
+        false,
+        None,
+        settings,
     )
 }
 

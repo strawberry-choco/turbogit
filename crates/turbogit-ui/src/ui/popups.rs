@@ -152,7 +152,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::PushSimple => {
             super::push_control::push_without_dialog(state);
         }
-        Action::Push => state.ui.dialog = Some(Dialog::Push),
+        Action::Push => state.open_push(),
         Action::Branches => state.ui.branches_popup = true,
         Action::NewBranch => state.open_new_branch(NewBranchBase::Head, true, None),
         Action::Merge => state.ui.dialog = Some(Dialog::Merge),

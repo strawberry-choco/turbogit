@@ -8,7 +8,7 @@ use super::icons::Icon;
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::{Affected, LogRead};
-use turbogit_app::state::{AppState, Dialog, Tab};
+use turbogit_app::state::{AppState, Tab};
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 /// Minimum work-area width at which the workspace sidebar renders
 /// (issue #05): below it the log's minimum pane sizes cannot hold.
@@ -154,7 +154,7 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         switch_tab(state, Tab::Commit);
     }
     if ks.push {
-        state.ui.dialog = Some(Dialog::Push);
+        state.open_push();
     }
     if ks.refresh {
         state.refresh(Affected::All);

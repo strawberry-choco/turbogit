@@ -3,8 +3,7 @@ use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 use turbogit_app::operation::Operation;
 use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::shell_writes;
-use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
-use turbogit_app::sync_service::PushScope;
+use turbogit_app::state::{AppState, NewBranchBase, PendingConfirm, Toast};
 use turbogit_domain::model::{Branch, BranchKind, BranchSpec, RootId, Upstream};
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
@@ -675,22 +674,7 @@ fn apply_branch_action(
             state.dispatch_pull("Pull", root.clone(), None);
         }
         BranchMenuAction::Push => {
-            let remote = branch
-                .tracking
-                .as_ref()
-                .map(|t| t.remote.clone())
-                .or_else(|| {
-                    state
-                        .multi
-                        .by_id(root)
-                        .and_then(|r| r.remotes.first())
-                        .map(|r| r.name.clone())
-                })
-                .unwrap_or_else(|| "origin".to_string());
-            state.ui.dlg.push_remote = remote;
-            state.ui.dlg.push_branch = branch.name.clone();
-            state.ui.dlg.push_scope = PushScope::ThisRepo;
-            state.ui.dialog = Some(Dialog::Push);
+            state.open_push_for_branch(root, &branch.name);
         }
         BranchMenuAction::Rename => {
             state.ui.branches_tree.renaming = Some(branch.name.clone());

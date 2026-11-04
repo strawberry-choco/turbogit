@@ -67,7 +67,18 @@ the order the doc describes them:
 1. **Repository list**, "showing all Git repositories (for multi-repository
    projects)"; **only the current repository is selected by default** (line 209-210)
 2. **Commit list**, "all commits made in the current branch in each repository
-   since the last push", with per-commit checkboxes (line 207-208)
+   since the last push", ~~with per-commit checkboxes~~ **(corrected 2026-11-03:
+   there are no commit checkboxes.)** The doc does not say "checkbox" at line
+   207-208; that was this harvest's inference, and the shipped product contradicts
+   it. `CommitNode` extends `DefaultMutableTreeNode` rather than
+   `CheckedTreeNode`, and `PushController.getSelectedPushSpecs` passes
+   `ContainerUtil.emptyList()` as the commits container, so ticking a repository
+   row is the only push filter and the whole outgoing range of each checked
+   repository travels. Commit selection drives the right-hand preview. The range
+   cut is `Git.PushUpToCommit` = `Push All up to Here…`, a Log verb (§A above,
+   doc line 206). The correction is load-bearing: `ADR-0032` was framed against
+   this line, and the parity rewrite it justified shipped per-commit checkboxes
+   that measured as unable to reduce a push.
 3. **Right-hand preview pane**, "The right-hand pane shows the changes included in
    the selected commit" (line 218)
 4. **Target panel**: remote name (click-to-change) and branch name
@@ -387,7 +398,7 @@ Git | Fetch   (or the widget's button, or the 20-minute background task)
 ⌃⇧K  (or Commit ▾ → Commit and Push)
   → Push Commits dialog                                            [dialog]
       repository list — only the current repo selected by default
-      commit list, per-commit checkboxes
+      commit list — NO checkboxes, preview selection only (corrected 2026-11-03)
       ⌃Q on a commit → author / time / hash / message
       right pane: the selected commit's changed files (⌘D per file)
          a file touched by several commits is listed once, diffs zipped

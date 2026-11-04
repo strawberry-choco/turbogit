@@ -7,6 +7,7 @@ use turbogit_domain::model::{
 };
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
+use turbogit_services::sync_service::PushTarget;
 
 use crate::state::{AppState, UnmergedCommit, UnmergedCommits};
 
@@ -251,6 +252,24 @@ impl AppState {
                 .collect()
             }
         }
+    }
+
+    /// The dry-run of exactly the targets a push session resolved, so a preview
+    /// reads the refs the button would write and never a re-derived set.
+    pub fn push_target_dry_run(
+        &self,
+        targets: &[PushTarget],
+        force: bool,
+    ) -> Vec<(String, Result<String, String>)> {
+        let verbatim = |e: turbogit_domain::error::TgError| match e {
+            turbogit_domain::error::TgError::Cli { stderr, .. } => stderr,
+            other => other.to_string(),
+        };
+        let refs: Vec<&PushTarget> = targets.iter().collect();
+        turbogit_services::sync_service::dry_run_targets(self.executor.as_ref(), &refs, force)
+            .into_iter()
+            .map(|(remote, res)| (remote, res.map_err(verbatim)))
+            .collect()
     }
 
     pub fn current_branch_of(&self, path: &Path) -> Option<String> {

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
@@ -14,10 +13,11 @@ use test_support::harness::{
     painted_text, shell_harness_over_unstyled,
 };
 use test_support::wait_until;
+use turbogit_app::push_session::Focus;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{RootId, VcsSettings};
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, PushTags};
 use turbogit_ui::theme::Palette;
 
 fn head_sha(repo: &Path) -> String {
@@ -146,32 +146,22 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
+/// The rows are built by the app now, not by the paint, so a test that sets the
+/// dialog field directly gets an empty table.
 fn open_push_dialog(h: &mut Harness<'_, AppState>) {
-    h.state_mut().ui.dialog = Some(Dialog::Push);
+    h.state_mut().open_push();
     h.run();
 }
 
 fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
-    let labels = [
-        "Push",
-        "Push 1 commits to 1 repo",
-        "Push 1 commits to 2 repos",
-        "Push 2 commits to 1 repo",
-        "Push 2 commits to 2 repos",
-        "Push 4 commits to 2 repos",
-        "Push 4 commits to 3 repos",
-        "Push 6 commits to 3 repos",
-    ];
-    let mut nodes: Vec<Node<'h>> = Vec::new();
-    for label in labels {
-        nodes.extend(h.query_all_by_label(label));
-    }
+    // The window is titled `Push Commits`, so the plain `Push` label belongs to
+    // one node: the primary button.
+    let mut nodes: Vec<Node<'h>> = h.query_all_by_label("Push").collect();
     assert!(
-        nodes.len() >= 2,
-        "expected the dialog window plus the dialog's Push button, found {} nodes",
-        nodes.len()
+        !nodes.is_empty(),
+        "expected the dialog's Push button, found none among {:?}",
+        painted_text(h)
     );
-    nodes.sort_by(|a, b| a.rect().center().y.total_cmp(&b.rect().center().y));
     nodes.pop().expect("at least one Push button")
 }
 
@@ -180,7 +170,7 @@ fn toast_galley(h: &Harness<'_, AppState>) -> Option<String> {
 }
 
 #[test]
-fn outgoing_tree_aggregates_all_roots_under_project_node() {
+fn clicking_a_row_focuses_the_preview_without_touching_consent() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = repo_ahead_of_origin(parent.path(), "alpha");
     let beta = repo_ahead_of_origin(parent.path(), "beta");
@@ -191,26 +181,47 @@ fn outgoing_tree_aggregates_all_roots_under_project_node() {
     ));
     open_push_dialog(&mut h);
 
-    assert_painted(&h, "(all roots)");
-    assert_painted(&h, "alpha — 2 commits ahead");
-    assert_painted(&h, "beta — 2 commits ahead");
+    let before: Vec<bool> = h
+        .state()
+        .ui
+        .dlg
+        .push
+        .rows
+        .iter()
+        .map(|row| row.consented)
+        .collect();
+    assert_eq!(
+        before,
+        vec![true, false],
+        "only the repository the app is pointed at is consented on open"
+    );
 
-    for sha in [&alpha.shas[1], &alpha.shas[2], &beta.shas[1], &beta.shas[2]] {
-        assert_painted(&h, &sha[..7]);
-    }
-    assert_painted(&h, "alpha second");
-    assert_painted(&h, "alpha third");
-    assert_painted(&h, "beta second");
-    assert_painted(&h, "beta third");
+    let targets: Vec<Node<'_>> = h.query_all_by_label("main → origin : main").collect();
+    assert_eq!(targets.len(), 2, "every row prints its own target line");
+    targets[1].clone().click();
+    h.run();
 
-    assert_painted(&h, "alpha-c2.txt");
-    assert_painted(&h, "alpha-c3.txt");
+    assert_eq!(
+        h.state().ui.dlg.push.focus,
+        Some(Focus::Root(RootId(beta.path.clone().into()))),
+        "the row click must set the preview focus"
+    );
+    let after: Vec<bool> = h
+        .state()
+        .ui
+        .dlg
+        .push
+        .rows
+        .iter()
+        .map(|row| row.consented)
+        .collect();
+    assert_eq!(after, before, "a preview click must not change consent");
     assert_painted(&h, "beta-c2.txt");
-    assert_painted(&h, "beta-c3.txt");
+    assert_not_painted(&h, "alpha-c3.txt");
 }
 
 #[test]
-fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
+fn consenting_both_rows_pushes_both_remotes() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = repo_ahead_of_origin(parent.path(), "alpha");
     let beta = repo_ahead_of_origin(parent.path(), "beta");
@@ -221,15 +232,12 @@ fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
     ));
     open_push_dialog(&mut h);
 
-    h.get_by_label("alpha — 2 commits ahead").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "beta")
+        .click();
     h.run();
-
-    assert_painted(&h, "alpha-c2.txt");
-    assert_not_painted(&h, "beta-c3.txt");
-    assert_eq!(
-        h.state().ui.dlg.push_preview_root,
-        Some(RootId(alpha.path.clone().into())),
-        "root click must set the preview filter"
+    assert!(
+        h.state().ui.dlg.push.rows[1].consented,
+        "the row's checkbox is the only push filter"
     );
 
     dialog_push_button(&h).click();
@@ -242,77 +250,9 @@ fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
             bare_ref(&alpha.remote, "refs/heads/main").as_deref() == Some(alpha_tip.as_str())
                 && bare_ref(&beta.remote, "refs/heads/main").as_deref() == Some(beta_tip.as_str())
         }),
-        "batch push must reach BOTH roots' remotes regardless of the preview selection"
-    );
-}
-
-#[test]
-fn remote_and_branch_edits_propagate_to_execution() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo_path = parent.path().join("solo");
-    std::fs::create_dir_all(&repo_path).unwrap();
-    git(&repo_path, &["init", "-q", "-b", "main"]);
-    git(&repo_path, &["config", "user.email", "test@example.com"]);
-    git(&repo_path, &["config", "user.name", "Test"]);
-
-    std::fs::write(repo_path.join("base.txt"), "base\n").unwrap();
-    git(&repo_path, &["add", "."]);
-    git(&repo_path, &["commit", "-q", "-m", "base"]);
-
-    let origin = parent.path().join("solo-origin.git");
-    let upstream = parent.path().join("solo-upstream.git");
-    git(
-        &repo_path,
-        &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
-    );
-    git(
-        &repo_path,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&repo_path, &["push", "-q", "-u", "origin", "main"]);
-    git(
-        &repo_path,
-        &["init", "--bare", "-b", "main", upstream.to_str().unwrap()],
-    );
-    git(
-        &repo_path,
-        &["remote", "add", "upstream", upstream.to_str().unwrap()],
-    );
-
-    git(&repo_path, &["checkout", "-q", "-b", "feature"]);
-    std::fs::write(repo_path.join("feature-file.txt"), "work\n").unwrap();
-    git(&repo_path, &["add", "."]);
-    git(&repo_path, &["commit", "-q", "-m", "feature work"]);
-    let feature_sha = head_sha(&repo_path);
-
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo_path)));
-    open_push_dialog(&mut h);
-    assert_eq!(
-        h.state().ui.dlg.push_branch,
-        "feature",
-        "dialog must prefill the current branch"
-    );
-
-    h.state_mut().ui.dlg.push_remote = "upstream".into();
-    h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
-    dialog_push_button(&h).click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || {
-            bare_ref(&upstream, "refs/heads/feature").as_deref() == Some(feature_sha.as_str())
-        }),
-        "the edited Remote field must drive the narrowed push target"
-    );
-    assert!(
-        bare_ref(&origin, "refs/heads/feature").is_none(),
-        "origin must not receive a push aimed at the edited remote"
+        "both consented remotes must move; got alpha {:?} beta {:?}",
+        bare_ref(&alpha.remote, "refs/heads/main"),
+        bare_ref(&beta.remote, "refs/heads/main")
     );
 }
 
@@ -328,6 +268,12 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
         &[alpha.path.clone(), beta.path.clone()],
     ));
     open_push_dialog(&mut h);
+
+    // beta's remote is gone, and an unconsented row is never pushed, so the
+    // failure this test is about only exists once beta is consented too.
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "beta")
+        .click();
+    h.run();
 
     dialog_push_button(&h).click();
     h.run();
@@ -479,12 +425,6 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
 
     h.get_by_label("Force push (--force-with-lease)").click();
     h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
     dialog_push_button(&h).click();
     h.run();
 
@@ -512,12 +452,6 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
     ));
     open_push_dialog(&mut h2);
 
-    h2.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h2.run();
     dialog_push_button(&h2).click();
     h2.run();
 
@@ -533,7 +467,7 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
 }
 
 #[test]
-fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
+fn protected_branch_refuses_force_per_repository_and_keeps_plain_push_available() {
     let parent = tempfile::tempdir().unwrap();
     let guarded = repo_ahead_of_origin(parent.path(), "guarded");
     let (rec, settings) = recording_engine(VcsSettings::default());
@@ -548,15 +482,11 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
 
     h.get_by_label("Force push (--force-with-lease)").click();
     h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
 
-    assert_painted(&h, "is protected");
-    assert_painted(&h, "force-push blocked");
+    assert_painted(&h, "protected — the push refuses force");
+    // The reference disables the force affordance, never the push, so the
+    // primary button must still be live on a protected branch.
+    assert_not_painted(&h, "Nothing to update");
 
     dialog_push_button(&h).click();
     h.run();
@@ -564,31 +494,26 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
     h.run();
     assert!(
         rec.recorded().is_empty(),
-        "blocked force-push must never reach the engine, got: {:?}",
+        "a refused force push must never reach the engine, got: {:?}",
         rec.recorded()
     );
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Push),
-        "a blocked push keeps the dialog open"
-    );
-    let c3 = guarded.shas[2].clone();
-    assert_ne!(
-        bare_ref(&guarded.remote, "refs/heads/main").as_deref(),
-        Some(c3.as_str()),
-        "blocked force-push must leave the remote untouched"
-    );
 
-    h.state_mut().ui.dlg.push_branch = "feature".into();
-    h.run();
-    assert_not_painted(&h, "force-push blocked");
-
-    dialog_push_button(&h).click();
-    h.run();
+    let plain = repo_ahead_of_origin(parent.path(), "plain");
+    let (rec2, settings2) = recording_engine(VcsSettings::default());
+    let dyn_exec2: Arc<dyn GitExecutor> = rec2.clone();
+    let mut h2 = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&plain.path),
+        dyn_exec2,
+        settings2,
+    ));
+    open_push_dialog(&mut h2);
+    dialog_push_button(&h2).click();
+    h2.run();
     assert!(
-        wait_until(15_000, || rec.contains_push("origin", "feature", true)),
-        "unprotected target must execute with force=true at the boundary, got: {:?}",
-        rec.recorded()
+        wait_until(15_000, || rec2.contains_push("origin", "main", false)),
+        "plain push must still reach the boundary on a protected branch, got: {:?}",
+        rec2.recorded()
     );
 }
 
@@ -655,209 +580,53 @@ fn push_severity_messages_use_the_shared_semantic_inks() {
     open_push_dialog(&mut h);
 
     h.get_by_label("Force push (--force-with-lease)").click();
-    h.get_by_label("Set upstream (--set-upstream)").click();
-    h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
     h.run();
 
     assert_eq!(
-        painted_ink_for(&h, "force-push blocked"),
+        painted_ink_for(&h, "the push refuses force"),
         Some(Palette::STATE_ERROR),
-        "protected-branch block must render in the shared error ink"
-    );
-    assert_eq!(
-        painted_ink_for(&h, "upstream will be set"),
-        Some(Palette::STATE_INFO),
-        "upstream guidance must render in the shared informational ink"
+        "the protected-branch refusal must render in the shared error ink"
     );
 
-    h.state_mut().ui.dlg.push_branch = "feature".into();
-    h.run();
-    assert_eq!(
-        painted_ink_for(&h, "Force push rewrites"),
-        Some(Palette::STATE_WARNING),
-        "force-push warning must render in the shared warning ink"
-    );
-
-    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
-    let commits = snapshot[0].commits.as_ref().expect("commits");
-    let older = commits[1].id.clone();
-    h.state_mut().ui.dlg.push_selected_commits = vec![older.clone()];
-    h.run();
-    assert_eq!(
-        painted_ink_for(&h, "commits will be pushed"),
-        Some(Palette::STATE_WARNING),
-        "subset guidance must render in the shared warning ink"
-    );
-}
-
-#[test]
-fn outgoing_commits_open_with_every_commit_selected() {
-    let parent = tempfile::tempdir().unwrap();
-    let solo = repo_ahead_of_origin(parent.path(), "solo");
-
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&solo.path)));
-    open_push_dialog(&mut h);
-
-    let selected = h.state().ui.dlg.push_selected_commits.clone();
-    assert_eq!(
-        selected.len(),
-        2,
-        "default selection covers every commit listed in the outgoing snapshot"
-    );
-    let snapshot = h
-        .state()
-        .ui
-        .dlg
-        .push_outgoing
-        .clone()
-        .expect("snapshot built");
-    let outgoing: Vec<String> = snapshot[0]
-        .commits
-        .as_ref()
-        .expect("commits")
-        .iter()
-        .map(|c| c.id.clone())
-        .collect();
-    for cid in &outgoing {
-        assert!(
-            selected.contains(cid),
-            "every outgoing commit must be selected by default; missing {cid}"
-        );
-    }
-}
-
-#[test]
-fn commit_rows_paint_checkboxes_and_a_selection_counter() {
-    use egui::accesskit::Role;
-
-    let parent = tempfile::tempdir().unwrap();
-    let solo = repo_ahead_of_origin(parent.path(), "solo");
-
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&solo.path)));
-    open_push_dialog(&mut h);
-
-    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
-    let commits = snapshot[0].commits.as_ref().expect("commits");
-    let subject = commits[0].message.lines().next().unwrap().to_string();
-
-    assert!(
-        h.get_all_by_role(Role::CheckBox)
-            .any(|n| n.accesskit_node().label() == Some(subject.clone())),
-        "the first outgoing commit must paint as a checkbox row"
-    );
-
-    assert_painted(&h, "2 selected of 2");
-
-    h.get_by_role_and_label(Role::CheckBox, &subject).click();
-    h.run();
-    assert_painted(&h, "1 selected of 2");
-    let selected = h.state().ui.dlg.push_selected_commits.clone();
-    assert_eq!(
-        selected.len(),
-        1,
-        "toggling the checkbox must update selection"
-    );
-    assert!(
-        !selected.contains(&commits[0].id),
-        "the unchecked commit is removed"
-    );
-    assert!(
-        selected.contains(&commits[1].id),
-        "the other commit stays selected"
-    );
-
-    h.get_by_role_and_label(Role::CheckBox, &subject).click();
-    h.run();
-    assert_painted(&h, "2 selected of 2");
-}
-
-#[test]
-fn suffix_selection_pushes_only_the_selected_newest_commit() {
-    let parent = tempfile::tempdir().unwrap();
-    let solo = repo_ahead_of_origin(parent.path(), "solo");
-
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
+    // The same control on an unprotected branch warns instead of refusing.
+    let loose = repo_ahead_of_origin(parent.path(), "loose");
+    let settings2 = VcsSettings {
+        protected_branch_patterns: vec!["never".to_string()],
+        ..VcsSettings::default()
+    };
+    let (rec2, settings2) = recording_engine(settings2);
+    let dyn_exec2: Arc<dyn GitExecutor> = rec2.clone();
+    let mut h2 = harness(app_state_with(
         parent.path(),
-        std::slice::from_ref(&solo.path),
-        dyn_exec,
-        settings,
+        std::slice::from_ref(&loose.path),
+        dyn_exec2,
+        settings2,
     ));
-    open_push_dialog(&mut h);
-
-    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
-    let commits = snapshot[0].commits.as_ref().expect("commits");
-    let older = commits[1].id.clone();
-    let newer = commits[0].id.clone();
-    h.state_mut().ui.dlg.push_selected_commits = vec![newer.clone()];
-    h.run();
-    assert_painted(&h, "1 selected of 2");
-
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
-    dialog_push_button(&h).click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || {
-            rec.contains_push_selected("origin", "main", false, Some(&newer))
-        }),
-        "subset push must carry the oldest selected SHA at the boundary; got: {:?}",
-        rec.recorded()
+    open_push_dialog(&mut h2);
+    h2.get_by_label("Force push (--force-with-lease)").click();
+    h2.run();
+    assert_eq!(
+        painted_ink_for(&h2, "Force push rewrites"),
+        Some(Palette::STATE_WARNING),
+        "an allowed force push must warn in the shared warning ink"
     );
-    let older_short = &older[..7];
-    let _ = older_short;
 }
 
 #[test]
-fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
+fn a_dialog_whose_only_row_cannot_be_pushed_offers_no_push() {
     let parent = tempfile::tempdir().unwrap();
-    let solo = repo_ahead_of_origin(parent.path(), "solo");
+    let loose = repo_without_remote(parent.path(), "loose");
 
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
-        parent.path(),
-        std::slice::from_ref(&solo.path),
-        dyn_exec,
-        settings,
-    ));
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&loose)));
     open_push_dialog(&mut h);
 
-    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
-    let commits = snapshot[0].commits.as_ref().expect("commits");
-    let older = commits[1].id.clone();
-    h.state_mut().ui.dlg.push_selected_commits = vec![older.clone()];
-    h.run();
-
-    assert_painted(&h, "all");
-    assert_painted(&h, "commits will be pushed");
-
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
-    dialog_push_button(&h).click();
-    h.run();
-
+    assert_painted(&h, "no remote to push to");
+    // Consent is not enough: the row's obstacle keeps it out of the payload, so
+    // the button must not dispatch an empty batch and call it a success.
     assert!(
-        wait_until(15_000, || {
-            rec.contains_push_selected("origin", "main", false, None)
-        }),
-        "non-suffix selection must fall back to a full push at the boundary; got: {:?}",
-        rec.recorded()
+        !h.query_all_by_label("Nothing to update").next().is_none(),
+        "an unpushable dialog must relabel its primary action, got: {:?}",
+        painted_text(&h)
     );
 }
 
@@ -876,15 +645,9 @@ fn push_tags_checkbox_propagates_to_engine_boundary() {
     ));
     open_push_dialog(&mut h);
 
-    assert_painted(&h, "Push tags");
+    assert_painted(&h, "Push tags:");
 
-    h.get_by_label("Push tags").click();
-    h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
+    h.get_by_label("All").click();
     h.run();
     dialog_push_button(&h).click();
     h.run();
@@ -897,13 +660,13 @@ fn push_tags_checkbox_propagates_to_engine_boundary() {
                     test_support::RecordedCall::Push {
                         remote,
                         branch,
-                        tags: true,
+                        tags: PushTags::All,
                         ..
                     } if remote == "origin" && branch == "main"
                 )
             })
         }),
-        "Push tags must reach the boundary as tags=true; got: {:?}",
+        "Push tags must reach the boundary as tags=All; got: {:?}",
         rec.recorded()
     );
 }
@@ -923,13 +686,7 @@ fn skip_pre_push_hooks_propagates_to_engine_boundary() {
     ));
     open_push_dialog(&mut h);
 
-    h.get_by_label("Skip pre-push hooks").click();
-    h.run();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
+    h.get_by_label("Run Git hooks").click();
     h.run();
     dialog_push_button(&h).click();
     h.run();
@@ -954,56 +711,7 @@ fn skip_pre_push_hooks_propagates_to_engine_boundary() {
 }
 
 #[test]
-fn set_upstream_propagates_and_paints_hint() {
-    let parent = tempfile::tempdir().unwrap();
-    let solo = repo_ahead_of_origin(parent.path(), "solo");
-
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
-        parent.path(),
-        std::slice::from_ref(&solo.path),
-        dyn_exec,
-        settings,
-    ));
-    open_push_dialog(&mut h);
-
-    assert_not_painted(&h, "upstream will be set");
-
-    h.get_by_label("Set upstream (--set-upstream)").click();
-    h.run();
-    assert_painted(&h, "upstream will be set");
-
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
-    h.run();
-    dialog_push_button(&h).click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || {
-            rec.recorded().iter().any(|c| {
-                matches!(
-                    c,
-                    test_support::RecordedCall::Push {
-                        remote,
-                        branch,
-                        set_upstream: true,
-                        ..
-                    } if remote == "origin" && branch == "main"
-                )
-            })
-        }),
-        "Set upstream must reach the boundary as set_upstream=true; got: {:?}",
-        rec.recorded()
-    );
-}
-
-#[test]
-fn protected_branch_block_survives_new_push_options() {
+fn protected_force_refusal_survives_the_other_push_options() {
     let parent = tempfile::tempdir().unwrap();
     let guarded = repo_ahead_of_origin(parent.path(), "guarded");
     let (rec, settings) = recording_engine(VcsSettings::default());
@@ -1017,18 +725,11 @@ fn protected_branch_block_survives_new_push_options() {
     open_push_dialog(&mut h);
 
     h.get_by_label("Force push (--force-with-lease)").click();
-    h.get_by_label("Push tags").click();
-    h.get_by_label("Skip pre-push hooks").click();
-    h.get_by_label("Set upstream (--set-upstream)").click();
-    h.query_all_by_label("This repo")
-        .last()
-        .unwrap()
-        .clone()
-        .click();
+    h.get_by_label("All").click();
+    h.get_by_label("Run Git hooks").click();
     h.run();
 
-    assert_painted(&h, "is protected");
-    assert_painted(&h, "force-push blocked");
+    assert_painted(&h, "protected — the push refuses force");
 
     dialog_push_button(&h).click();
     h.run();
@@ -1037,209 +738,12 @@ fn protected_branch_block_survives_new_push_options() {
 
     assert!(
         rec.recorded().is_empty(),
-        "blocked push with extra options must never reach the engine; got: {:?}",
+        "a refused force push with the other options set must never reach the engine; got: {:?}",
         rec.recorded()
-    );
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Push),
-        "the dialog must stay open while the block is in force"
     );
 }
 
 use turbogit_services::sync_service::PushScope;
-
-#[test]
-fn push_scope_segmented_control_lists_all_four_variants() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    let beta = repo_ahead_of_origin(parent.path(), "beta");
-    let gamma = repo_ahead_of_origin(parent.path(), "gamma");
-
-    let mut h = harness(app_state(
-        parent.path(),
-        &[alpha.path.clone(), beta.path.clone(), gamma.path.clone()],
-    ));
-    open_push_dialog(&mut h);
-
-    assert_painted(&h, "PUSH SCOPE");
-    assert_painted(&h, "This repo");
-    assert_painted(&h, "Selected 0");
-    assert_painted(&h, "Project subtree");
-    assert_painted(&h, "All 3");
-    assert_eq!(h.state().ui.dlg.push_scope, PushScope::All);
-}
-
-#[test]
-fn push_scope_selection_pushes_only_checked_roots() {
-    use std::collections::HashSet;
-    use turbogit_domain::model::RootId;
-
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    let beta = repo_ahead_of_origin(parent.path(), "beta");
-    let gamma = repo_ahead_of_origin(parent.path(), "gamma");
-
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
-        parent.path(),
-        &[alpha.path.clone(), beta.path.clone(), gamma.path.clone()],
-        dyn_exec,
-        settings,
-    ));
-    let beta_id = RootId(beta.path.clone().into());
-    h.state_mut().ui.repo_selection = HashSet::from([beta_id]);
-    h.state_mut().ui.dlg.push_scope = PushScope::Selection;
-    open_push_dialog(&mut h);
-
-    dialog_push_button(&h).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            rec.recorded()
-                .iter()
-                .any(|c| matches!(c, test_support::RecordedCall::Push { .. }))
-        }),
-        "scope=Selection must dispatch at least one push; got: {:?}",
-        rec.recorded()
-    );
-    let beta_pushes = rec
-        .recorded()
-        .iter()
-        .filter(
-            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &beta.path),
-        )
-        .count();
-    let alpha_pushes = rec
-        .recorded()
-        .iter()
-        .filter(
-            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &alpha.path),
-        )
-        .count();
-    assert_eq!(beta_pushes, 1, "selected beta must be pushed exactly once");
-    assert_eq!(alpha_pushes, 0, "unselected alpha must NOT be pushed");
-}
-
-#[test]
-fn protected_branch_banner_names_protected_repos_in_scope() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    let feature_only = repo_ahead_of_origin(parent.path(), "feature_only");
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
-        parent.path(),
-        &[alpha.path.clone(), feature_only.path.clone()],
-        dyn_exec,
-        settings,
-    ));
-    open_push_dialog(&mut h);
-
-    assert_painted(&h, "Protected branch in scope");
-    assert_painted(&h, "alpha");
-    assert_painted(&h, "feature_only");
-    assert_painted(&h, "main");
-}
-
-#[test]
-fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    let work_path = parent.path().join("work");
-    std::fs::create_dir_all(&work_path).unwrap();
-    git(&work_path, &["init", "-q", "-b", "main"]);
-    git(&work_path, &["config", "user.email", "test@example.com"]);
-    git(&work_path, &["config", "user.name", "Test"]);
-    std::fs::write(work_path.join("base.txt"), "base\n").unwrap();
-    git(&work_path, &["add", "."]);
-    git(&work_path, &["commit", "-q", "-m", "work base"]);
-    let work_remote = parent.path().join("work-remote.git");
-    git(
-        &work_path,
-        &[
-            "init",
-            "--bare",
-            "-b",
-            "main",
-            work_remote.to_str().unwrap(),
-        ],
-    );
-    git(
-        &work_path,
-        &["remote", "add", "origin", work_remote.to_str().unwrap()],
-    );
-    git(&work_path, &["push", "-q", "-u", "origin", "main"]);
-    git(&work_path, &["checkout", "-q", "-b", "feature"]);
-    git(&work_path, &["push", "-q", "-u", "origin", "feature"]);
-    std::fs::write(work_path.join("f.txt"), "f\n").unwrap();
-    git(&work_path, &["add", "."]);
-    git(&work_path, &["commit", "-q", "-m", "work feature"]);
-    git(&work_path, &["checkout", "-q", "main"]);
-    git(&work_path, &["checkout", "-q", "feature"]);
-    std::fs::write(work_path.join("f2.txt"), "f2\n").unwrap();
-    git(&work_path, &["add", "."]);
-    git(&work_path, &["commit", "-q", "-m", "work feature 2"]);
-    let (rec, settings) = recording_engine(VcsSettings::default());
-    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
-    let mut h = harness(app_state_with(
-        parent.path(),
-        &[alpha.path.clone(), work_path.clone()],
-        dyn_exec,
-        settings,
-    ));
-    open_push_dialog(&mut h);
-
-    assert_painted(&h, "Protected branch in scope");
-    h.get_by_label("Remove 1 protected repo from scope").click();
-    h.run();
-
-    let excluded = &h.state().ui.dlg.push_scope_excluded;
-    assert!(
-        excluded.iter().any(|id| id.0.to_path_buf() == alpha.path),
-        "alpha (protected) must be excluded"
-    );
-    assert!(
-        excluded.iter().all(|id| id.0.to_path_buf() != work_path),
-        "work (unprotected) must NOT be excluded"
-    );
-
-    dialog_push_button(&h).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            rec.recorded()
-                .iter()
-                .any(|c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &work_path))
-        }),
-        "work (unprotected) must reach the engine after remediation; got: {:?}",
-        rec.recorded()
-    );
-    let alpha_pushes = rec
-        .recorded()
-        .iter()
-        .filter(
-            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &alpha.path),
-        )
-        .count();
-    assert_eq!(alpha_pushes, 0, "alpha must stay excluded from the push");
-}
-
-#[test]
-fn push_button_states_the_resolved_scope() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
-    let beta = repo_ahead_of_origin(parent.path(), "beta");
-
-    let mut h = harness(app_state(
-        parent.path(),
-        &[alpha.path.clone(), beta.path.clone()],
-    ));
-    open_push_dialog(&mut h);
-
-    assert_painted(&h, "Push 4 commits to 2 repos");
-}
 
 /// `repo_ahead_of_origin` plus divergence, WITHOUT the follow-up fetch: the
 /// remote moved while the repo's remote-tracking ref still names the old tip.
@@ -1417,252 +921,12 @@ fn field_on_row<'h>(h: &'h Harness<'_, AppState>, y: f32) -> Node<'h> {
         .unwrap_or_else(|| panic!("no single-line text field painted on the row at y {y}"))
 }
 
-#[test]
-fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
-    let parent = tempfile::tempdir().unwrap();
-    let path = repo_without_remote(parent.path(), "orphan");
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
-    let link = painted_galleys(&h)
-        .into_iter()
-        .find(|g| g.text == "Define remote")
-        .expect("`Define remote` must paint for a repository with no remote");
-    assert!(
-        (link.rect.center().y - remote_row).abs() < 6.0,
-        "`Define remote` must share the Remote row; row y {remote_row}, link {:?}",
-        link.rect
-    );
-    assert!(
-        link.rect.min.x > row_right_of(&h, "Remote:"),
-        "the link stands where the name would be, not left of its label"
-    );
-    assert!(
-        filled_rects(&h)
-            .into_iter()
-            .all(|(rect, _)| (rect.center().y - remote_row).abs() > 6.0),
-        "a remote-less panel paints a link, not a field"
-    );
-
-    assert_eq!(git(&path, &["remote"]).trim(), "");
-}
-
 fn row_right_of(h: &Harness<'_, AppState>, text: &str) -> f32 {
     painted_galleys(h)
         .into_iter()
         .find(|g| g.text == text)
         .map(|g| g.rect.max.x)
         .unwrap_or(0.0)
-}
-
-#[test]
-fn a_repo_with_a_remote_paints_the_name_and_no_link() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_ahead_of_origin(parent.path(), "named");
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
-    let painted = painted_galleys(&h)
-        .into_iter()
-        .filter(|g| (g.rect.center().y - remote_row).abs() < 6.0)
-        .map(|g| g.text)
-        .collect::<Vec<_>>();
-    assert!(
-        painted.iter().any(|t| t == "origin"),
-        "the configured remote's name paints on its own row; got {painted:?}"
-    );
-    assert!(
-        !painted.iter().any(|t| t == "Define remote"),
-        "the link is the remote-less case only; got {painted:?}"
-    );
-}
-
-#[test]
-fn the_target_state_names_new_then_new_and_upstream() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_ahead_of_origin(parent.path(), "naming");
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    h.state_mut().ui.dlg.push_branch = "fresh".into();
-    h.run();
-    assert_eq!(
-        painted_target_state(&h).as_deref(),
-        Some("New"),
-        "a branch absent from the remote is named `New`"
-    );
-
-    h.get_by_label("Set upstream (--set-upstream)").click();
-    h.run();
-    assert_eq!(
-        painted_target_state(&h).as_deref(),
-        Some("New & Upstream"),
-        "create-and-track is its own state, or the user cannot tell tracking was set"
-    );
-}
-
-#[test]
-fn a_branch_on_the_remote_is_named_as_upstream_not_new() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_ahead_of_origin(parent.path(), "exists");
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    assert_eq!(
-        painted_target_state(&h).as_deref(),
-        Some("Upstream"),
-        "an existing remote branch is not `New`; painted: {:?}",
-        painted_text(&h)
-    );
-    h.get_by_label("Set upstream (--set-upstream)").click();
-    h.run();
-    assert_eq!(
-        painted_target_state(&h).as_deref(),
-        Some("Set upstream"),
-        "recording a tracking ref on an existing branch is its own state"
-    );
-}
-
-#[test]
-fn an_empty_repository_is_its_own_target_state_and_cannot_push() {
-    let parent = tempfile::tempdir().unwrap();
-    let path = repo_with_no_commits(parent.path(), "unborn");
-    let mut h = harness(app_state(parent.path(), &[path]));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    assert_eq!(
-        painted_target_state(&h).as_deref(),
-        Some("Empty repository"),
-        "a repository with no commits names itself rather than reading as a new branch"
-    );
-    assert!(
-        painted_galleys(&h).iter().any(|g| g.text == "Cannot push"),
-        "the panel says the push cannot run; painted: {:?}",
-        painted_text(&h)
-    );
-}
-
-#[test]
-fn defining_a_remote_in_the_panel_saves_it_immediately() {
-    let parent = tempfile::tempdir().unwrap();
-    let path = repo_without_remote(parent.path(), "defining");
-    let remote = parent.path().join("defining-remote.git");
-    git(
-        &path,
-        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
-    );
-
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
-
-    h.get_by_label("Define remote").click();
-    h.run();
-
-    let on_remote_row: Vec<String> = painted_galleys(&h)
-        .into_iter()
-        .filter(|g| (g.rect.center().y - remote_row).abs() < 6.0)
-        .map(|g| g.text)
-        .collect();
-    assert!(
-        on_remote_row.iter().any(|t| t == "origin"),
-        "the name field arrives filled, on the row the link held; got {on_remote_row:?}"
-    );
-    {
-        let url_row = row_y(&h, "URL:").expect("the entry labels its URL row");
-        let url_field = field_on_row(&h, url_row);
-        url_field.focus();
-        url_field.type_text(remote.to_str().unwrap());
-    }
-    h.run();
-
-    h.get_by_label("Add Remote").click();
-
-    assert!(
-        wait_for_state(&mut h, 15_000, |s| {
-            s.multi
-                .roots
-                .iter()
-                .any(|r| r.remotes.iter().any(|remote| remote.name == "origin"))
-        }),
-        "the saved remote must land in the snapshot the panel reads its name from"
-    );
-    assert_eq!(
-        git(&path, &["remote"]).trim(),
-        "origin",
-        "the add is durable the moment it is saved — no settings dialog involved"
-    );
-    assert_eq!(
-        git(&path, &["config", "--get", "remote.origin.url"]).trim(),
-        remote.to_str().unwrap(),
-        "and at the URL that was typed"
-    );
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Push),
-        "saving a remote does not close the push the user was filling in"
-    );
-    assert_eq!(
-        h.state().ui.dlg.push_remote,
-        "origin",
-        "the Remote field takes the saved name, so the push targets it"
-    );
-    assert!(
-        !h.state().ui.dlg.push_define_remote,
-        "the entry closes on a saved remote"
-    );
-    assert!(
-        !painted_galleys(&h)
-            .iter()
-            .any(|g| g.text == "Define remote"),
-        "the link is gone once the repository has a remote"
-    );
-}
-
-#[test]
-fn a_rejected_remote_add_paints_the_reason_inline_and_keeps_the_panel_open() {
-    let parent = tempfile::tempdir().unwrap();
-    let path = repo_without_remote(parent.path(), "badname");
-    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
-    open_push_dialog(&mut h);
-    use_this_repo_scope(&mut h);
-
-    h.get_by_label("Define remote").click();
-    h.run();
-    {
-        let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
-        let name_field = field_on_row(&h, remote_row);
-        name_field.focus();
-        // git refuses a space in a remote name, which is the failure this path
-        // has to paint inline rather than swallow.
-        name_field.type_text("bad name");
-        let url_row = row_y(&h, "URL:").expect("the entry labels its URL row");
-        let url_field = field_on_row(&h, url_row);
-        url_field.focus();
-        url_field.type_text(parent.path().join("unused.git").to_str().unwrap());
-    }
-    h.run();
-    h.get_by_label("Add Remote").click();
-
-    assert!(
-        wait_for_painted(&mut h, "Could not add remote:", 15_000),
-        "the failure is inline, in the panel, with git's reason; painted: {:?}",
-        painted_text(&h)
-    );
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Push),
-        "a rejected add leaves the dialog open"
-    );
-    assert_eq!(git(&path, &["remote"]).trim(), "");
 }
 
 #[test]

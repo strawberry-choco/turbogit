@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, RootStatus, Upstream, VcsSettings};
 use turbogit_engine::fake::{Call, FakeExecutor};
+use turbogit_engine_api::PushTags;
 use turbogit_services::sync_service::{
     PushScope, protected_roots, push_dry_run_roots, push_roots, roots_in_scope, summarize_dry_runs,
 };
@@ -59,7 +60,16 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
     let roots = vec![alpha, beta];
     let refs: Vec<&Root> = roots.iter().collect();
 
-    let results = push_roots(&engine, &refs, &s, false, false, false, false, None);
+    let results = push_roots(
+        &engine,
+        &refs,
+        &s,
+        false,
+        PushTags::None,
+        false,
+        false,
+        None,
+    );
 
     assert_eq!(results.len(), 2, "one result per root in the subset");
     assert!(results.iter().all(|(_, r)| r.is_ok()));
@@ -72,7 +82,7 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
                 remote: "origin".into(),
                 branch: "main".into(),
                 force: false,
-                tags: false,
+                tags: PushTags::None,
                 no_verify: false,
                 set_upstream: false,
                 selected_oldest: None,
@@ -82,7 +92,7 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
                 remote: "backup".into(),
                 branch: "feature".into(),
                 force: false,
-                tags: false,
+                tags: PushTags::None,
                 no_verify: false,
                 set_upstream: false,
                 selected_oldest: None,
@@ -99,7 +109,16 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
     let roots2 = vec![gamma, delta];
     let refs2: Vec<&Root> = roots2.iter().collect();
 
-    let results2 = push_roots(&engine2, &refs2, &s, true, false, false, false, None);
+    let results2 = push_roots(
+        &engine2,
+        &refs2,
+        &s,
+        true,
+        PushTags::None,
+        false,
+        false,
+        None,
+    );
 
     assert!(
         results2[0].1.is_err(),
@@ -111,6 +130,43 @@ fn push_roots_pushes_only_the_given_subset_and_guards_protected_roots() {
             |c| !matches!(c, Call::Push { root, .. } if root == &PathBuf::from("/proj/gamma"))
         ),
         "the protected root must never reach the engine"
+    );
+}
+
+/// A root whose HEAD is not on a branch pushed nothing, and the batch says so
+/// instead of reporting it as one of the roots that went.
+#[test]
+fn a_root_with_no_head_branch_is_named_and_the_others_still_push() {
+    let engine = FakeExecutor::new();
+    let s = settings_with(&[]);
+    let detached = root("/proj/detached");
+    let alpha = root_tracking("/proj/alpha", "main", "origin");
+    let refs = [&detached, &alpha];
+
+    let results = push_roots(
+        &engine,
+        &refs,
+        &s,
+        false,
+        PushTags::None,
+        false,
+        false,
+        None,
+    );
+
+    let err = results[0]
+        .1
+        .as_ref()
+        .expect_err("a root that pushed nothing is not a root that pushed");
+    assert!(
+        err.to_string().contains("detached"),
+        "the answer names the case the way the reference does: {err}"
+    );
+    assert!(results[1].1.is_ok(), "the root with a branch still pushes");
+    assert_eq!(
+        engine.calls.lock().unwrap().len(),
+        1,
+        "only the pushable root reaches git"
     );
 }
 

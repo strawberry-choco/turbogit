@@ -15,6 +15,32 @@ pub enum ApplyDirection {
     Reverse,
 }
 
+/// Which tags [`GitExecutor::push`] carries. A boolean could not state this
+/// three-way choice, and a dialog control whose third state sent the same argv
+/// as its second was a control that lied, so the port carries the mode itself:
+/// `All` is `--tags`, `Follow` is `--follow-tags`, `None` sends neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PushTags {
+    #[default]
+    None,
+    All,
+    /// `--follow-tags`: only the tags reachable from the refs this push
+    /// updates, which is what the reference's `Current Branch` entry means.
+    Follow,
+}
+
+impl PushTags {
+    /// The reference's own combo words. Lives here because the enum is what
+    /// those words name, the same way [`OwnedOperation::label`] owns its words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No tags",
+            Self::All => "All",
+            Self::Follow => "Current Branch",
+        }
+    }
+}
+
 pub trait GitExecutor: Send + Sync {
     fn status(&self, root: &Path) -> TgResult<RootStatus>;
 
@@ -137,7 +163,7 @@ pub trait GitExecutor: Send + Sync {
         remote: &str,
         branch: &str,
         force: bool,
-        tags: bool,
+        tags: PushTags,
         no_verify: bool,
         set_upstream: bool,
         selected_oldest: Option<&str>,

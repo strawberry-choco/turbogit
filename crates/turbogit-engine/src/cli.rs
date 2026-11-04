@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation};
+use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation, PushTags};
 
 /// Git-for-Windows rejects Windows verbatim (`\\?\`) prefixed paths handed
 /// to `git worktree …`. Canonicalized roots carry that prefix (Rust
@@ -1238,7 +1238,7 @@ impl GitExecutor for CliExecutor {
         remote: &str,
         branch: &str,
         force: bool,
-        tags: bool,
+        tags: PushTags,
         no_verify: bool,
         set_upstream: bool,
         selected_oldest: Option<&str>,
@@ -1247,8 +1247,10 @@ impl GitExecutor for CliExecutor {
         if force {
             a.push("--force-with-lease".to_string());
         }
-        if tags {
-            a.push("--tags".to_string());
+        match tags {
+            PushTags::All => a.push("--tags".to_string()),
+            PushTags::Follow => a.push("--follow-tags".to_string()),
+            PushTags::None => {}
         }
         if no_verify {
             a.push("--no-verify".to_string());

@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::shell_harness_over;
 use turbogit_app::recents::{RecentKind, RecentProject};
-use turbogit_app::state::{AppState, Dialog, NewBranchBase};
+use turbogit_app::state::{AppState, NewBranchBase};
 use turbogit_domain::model::{ChangeRef, RootId, Submodule, SubmoduleState, Worktree};
 
 const CAPTURE_SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
@@ -448,7 +448,10 @@ fn acceptance_matrix_screenshots() {
     snapshot(&mut h, "05-branches-popup");
     h.state_mut().ui.branches_popup = false;
 
-    h.state_mut().ui.dialog = Some(Dialog::Push);
+    // The rows are built by the app, so the capture must open the dialog the
+    // way every real verb does; setting the dialog field alone renders an
+    // empty table.
+    h.state_mut().open_push();
     settle(&mut h);
     snapshot(&mut h, "06-push-dialog");
     h.state_mut().ui.dialog = None;

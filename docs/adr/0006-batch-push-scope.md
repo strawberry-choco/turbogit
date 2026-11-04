@@ -1,5 +1,14 @@
 # Batch push dialog aggregates all roots; per-root scoping is a filter, not a mode
 
+**Superseded by `ADR-0032` (2026-11-03).** Its decision, that selecting a root node filters the
+preview and never narrows the push, and its rejection of per-root selective push, are both
+replaced: a repository row now owns a checkbox and that checkbox is the only push filter. The
+rejection's stated ground was that "the mockup gives root nodes no checkbox semantics", and the
+reference product gives every repository row a checkbox and selects only the current repository by
+default, so the ground is gone rather than the decision having been wrong for its time. Its
+remaining worry survives and `ADR-0032` answers it: selection-driven scope was ambiguous because
+the *button* named the scope. The button now says `Push` and each repository owns its own yes.
+
 The push dialog shows a tree of "<project> (all roots)" with per-root nodes
 listing outgoing commits. We decided Push always executes the batch push
 (B4) across all roots with upstreams; selecting a root node only filters the

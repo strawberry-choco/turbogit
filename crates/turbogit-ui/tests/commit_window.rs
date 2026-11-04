@@ -761,8 +761,11 @@ fn commit_and_push_dialog_lists_the_commit_the_chain_just_landed() {
         Some(Dialog::Push),
         "commit-and-push must open the push dialog"
     );
-    assert_not_painted(&h, "No outgoing commits.");
-    assert_painted(&h, "tracking-repo — 1 commits ahead");
+    // A consented row auto-expands, so the commit the chain just made is
+    // listed under its repository rather than counted in a header.
+    assert_painted(&h, "tracking-repo");
+    assert_painted(&h, "chained subject");
+    assert_painted(&h, "main → origin : main");
 }
 
 fn seed_tracked(repo: &Path, name: &str) {

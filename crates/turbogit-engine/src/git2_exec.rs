@@ -3,7 +3,7 @@ use git2::{ApplyLocation, BranchType, ErrorCode, StashFlags};
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation};
+use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation, PushTags};
 
 pub struct Git2Executor {
     pub cli: CliExecutor,
@@ -521,6 +521,17 @@ impl GitExecutor for Git2Executor {
             .map_err(err)?
             .id();
         let mut walk = repo.revwalk().map_err(err)?;
+        // TIME alone gives newest-first by committer time. For merges
+        // the topological order matters; combined with TIME this matches
+        // `git log`'s default (commit-date, parents-after-children), which is
+        // the order the CLI adapter documents for the same query and the order
+        // the push dialog reads its commit rows off. libgit2's default is
+        // `GIT_SORT_NONE`, and an unsorted walk is not visibly wrong here —
+        // measured on 0.21 it answers these merge shapes in the same order as
+        // this call — which is precisely why the order must be said rather than
+        // inherited from a library default.
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+            .map_err(err)?;
         walk.hide(upstream_oid).map_err(err)?;
         walk.push(branch_oid).map_err(err)?;
         walk.map(|oid| oid.map(|o| o.to_string()).map_err(err))
@@ -742,7 +753,7 @@ impl GitExecutor for Git2Executor {
         remote: &str,
         branch: &str,
         force: bool,
-        tags: bool,
+        tags: PushTags,
         no_verify: bool,
         set_upstream: bool,
         selected_oldest: Option<&str>,
