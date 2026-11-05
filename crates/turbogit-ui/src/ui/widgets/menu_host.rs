@@ -50,21 +50,20 @@ pub fn host_menu<T>(
 ) -> Option<T> {
     let ctx = ui.ctx();
     if !open {
-        ctx.memory_mut(|m| m.data.insert_temp(id.painted_last_frame(), false));
         return None;
     }
     let Some(pos) = ctx.memory(|m| m.data.get_temp::<Pos2>(id.anchor())) else {
         *dismiss = true;
-        ctx.memory_mut(|m| m.data.insert_temp(id.painted_last_frame(), false));
         return None;
     };
 
     // A click outside only dismisses once the menu was visible on the PREVIOUS
     // frame, so the right-click that opened it cannot also close it (egui's own
     // dropdown idiom, `popups.rs`).
+    let frame = ctx.cumulative_frame_nr();
     let was_visible =
-        ctx.memory(|m| m.data.get_temp::<bool>(id.painted_last_frame()) == Some(true));
-    ctx.memory_mut(|m| m.data.insert_temp(id.painted_last_frame(), true));
+        ctx.memory(|m| m.data.get_temp::<u64>(id.painted_last_frame())) == frame.checked_sub(1);
+    ctx.memory_mut(|m| m.data.insert_temp(id.painted_last_frame(), frame));
 
     let ctx = ctx.clone();
     let mut painted = None;
