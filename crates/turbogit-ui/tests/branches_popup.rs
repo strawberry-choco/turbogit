@@ -100,10 +100,6 @@ fn open_popup(harness: &mut Harness<'_, AppState>) {
     settle_quiet(harness);
 }
 
-fn clear_recents(harness: &mut Harness<'_, AppState>) {
-    harness.state_mut().ui.recent_branches.clear();
-}
-
 fn set_favorite(harness: &mut Harness<'_, AppState>, name: &str) {
     let st = harness.state_mut();
     let id = st.selected_root.clone().expect("selected root");
@@ -123,10 +119,9 @@ fn popup_groups_render_with_members() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
 
-    harness.state_mut().ui.recent_branches = vec!["feature-b".into()];
     open_popup(&mut harness);
 
-    for group in ["RECENT", "LOCAL", "REMOTE", "TAGS"] {
+    for group in ["LOCAL", "REMOTE", "TAGS"] {
         assert_painted(&harness, group);
     }
     for member in [
@@ -437,7 +432,6 @@ fn commit_pinned(repo: &Path, msg: &str, epoch: i64) {
 fn stale_badge_remote_arrows_and_gone_render() {
     let (_project, dir) = sync_repo_project();
     let mut harness = branches_harness(dir);
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     assert_painted(&harness, "3w");
@@ -452,7 +446,6 @@ fn protected_rows_render_lock_gate_delete_and_offer_hover_actions() {
     let (_project, dir) = sync_repo_project();
     let mut harness = branches_harness(dir);
     harness.state_mut().settings.protected_branch_patterns = vec!["zebra".into()];
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     {
@@ -495,7 +488,6 @@ fn protected_rows_render_lock_gate_delete_and_offer_hover_actions() {
 fn delete_flow_confirms_and_refreshes_the_list() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     {
@@ -522,7 +514,6 @@ fn delete_flow_confirms_and_refreshes_the_list() {
 fn rename_flow_renames_through_the_dialog() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     {
@@ -568,7 +559,6 @@ fn rename_flow_renames_through_the_dialog() {
 fn compare_flow_lists_commits_and_swaps() {
     let (_project, dir) = sync_repo_project();
     let mut harness = branches_harness(dir);
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     {
@@ -592,7 +582,6 @@ fn compare_flow_lists_commits_and_swaps() {
 fn footer_entries_render_and_new_branch_opens_the_dialog() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
-    clear_recents(&mut harness);
     open_popup(&mut harness);
 
     for label in ["+ New branch", "Manage remotes…", "Compare…"] {
@@ -609,7 +598,7 @@ fn footer_entries_render_and_new_branch_opens_the_dialog() {
 
 mod pure {
     use turbogit_domain::model::{Branch, BranchKind};
-    use turbogit_ui::ui::branch_widget::{popup_entries, push_recent};
+    use turbogit_ui::ui::branch_widget::popup_entries;
 
     fn b(name: &str, kind: BranchKind, favorite: bool) -> Branch {
         Branch {
@@ -637,7 +626,7 @@ mod pure {
         ];
         let remotes = [b("only", BranchKind::Remote, false)];
         let tags = vec!["v2".to_string(), "v1".to_string()];
-        let rows = popup_entries(&locals, &remotes, &tags, &[], None, "");
+        let rows = popup_entries(&locals, &remotes, &tags, None, "");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
 
         assert_eq!(
@@ -647,54 +636,18 @@ mod pure {
     }
 
     #[test]
-    fn recent_rows_render_first_and_starred_first() {
-        let locals = [
-            b("a", BranchKind::Local, true),
-            b("b", BranchKind::Local, false),
-        ];
-        let rows = popup_entries(
-            &locals,
-            &[],
-            &[],
-            &["b".to_string(), "a".to_string()],
-            None,
-            "",
-        );
-        let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
-        assert_eq!(
-            &names[..4],
-            &[
-                "a".to_string(),
-                "b".to_string(),
-                "a".to_string(),
-                "b".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn filter_matches_display_names_and_current_is_excluded_from_locals() {
         let locals = [
             b("main", BranchKind::Local, false),
             b("feature", BranchKind::Local, false),
         ];
-        let rows = popup_entries(&locals, &[], &[], &[], Some("main"), "");
+        let rows = popup_entries(&locals, &[], &[], Some("main"), "");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
         assert_eq!(names, vec!["feature"]);
 
-        let rows = popup_entries(&locals, &[], &[], &[], Some("main"), "feat");
+        let rows = popup_entries(&locals, &[], &[], Some("main"), "feat");
         let names: Vec<String> = rows.iter().map(|r| r.label()).collect();
         assert_eq!(names, vec!["feature"]);
-    }
-
-    #[test]
-    fn push_recent_is_deduped_and_capped_at_five() {
-        let mut recents = vec![];
-        for n in ["a", "b", "c", "d", "e", "f"] {
-            push_recent(&mut recents, n);
-        }
-        push_recent(&mut recents, "c");
-        assert_eq!(recents, vec!["c", "f", "e", "d", "b"]);
     }
 
     #[test]
@@ -731,24 +684,20 @@ mod pure {
             gone: false,
             last_touched: None,
         };
-        assert_eq!(delete_gate(&local, Some("main"), false, true), None);
-        assert_eq!(rename_gate(&local, Some("main"), false, true), None);
+        assert_eq!(delete_gate(&local, Some("main"), false), None);
+        assert_eq!(rename_gate(&local, Some("main"), false), None);
         assert_eq!(
-            delete_gate(&local, Some("main"), true, true),
+            delete_gate(&local, Some("main"), true),
             Some("protected branches cannot be deleted")
         );
-        assert_eq!(rename_gate(&local, Some("main"), true, true), None);
+        assert_eq!(rename_gate(&local, Some("main"), true), None);
         assert_eq!(
-            delete_gate(&local, Some("feature"), false, true),
+            delete_gate(&local, Some("feature"), false),
             Some("check out another branch first")
-        );
-        assert_eq!(
-            delete_gate(&local, Some("main"), false, false),
-            Some("this branch no longer exists")
         );
         let tag = PopupEntry::Tag { name: "v1".into() };
         assert_eq!(
-            delete_gate(&tag, None, false, true),
+            delete_gate(&tag, None, false),
             Some("tags are not deleted from here")
         );
         let remote = PopupEntry::Remote {
@@ -759,11 +708,11 @@ mod pure {
             last_touched: None,
         };
         assert_eq!(
-            rename_gate(&remote, Some("feature"), false, true),
+            rename_gate(&remote, Some("feature"), false),
             Some("remote branches cannot be renamed")
         );
         assert_eq!(
-            rename_gate(&tag, None, false, true),
+            rename_gate(&tag, None, false),
             Some("tags cannot be renamed")
         );
     }
@@ -779,9 +728,9 @@ mod pure {
             gone: false,
             last_touched: None,
         };
-        let a = row_actions(&local, Some("main"), false, true);
+        let a = row_actions(&local, Some("main"), false);
         assert!(a.delete && a.rename && !a.protected);
-        let a = row_actions(&local, Some("main"), true, true);
+        let a = row_actions(&local, Some("main"), true);
         assert!(!a.delete && a.rename && a.protected);
         let cur = PopupEntry::Local {
             name: "main".into(),
@@ -791,20 +740,10 @@ mod pure {
             gone: false,
             last_touched: None,
         };
-        let a = row_actions(&cur, Some("main"), false, true);
+        let a = row_actions(&cur, Some("main"), false);
         assert!(!a.delete && !a.rename);
         let tag = PopupEntry::Tag { name: "v1".into() };
-        let a = row_actions(&tag, None, false, true);
+        let a = row_actions(&tag, None, false);
         assert!(!a.delete && !a.rename && !a.protected);
-        let recent = PopupEntry::Recent {
-            name: "gone-branch".into(),
-            favorite: false,
-            ahead: 0,
-            behind: 0,
-            gone: false,
-            last_touched: None,
-        };
-        let a = row_actions(&recent, None, false, false);
-        assert!(!a.delete && !a.rename);
     }
 }

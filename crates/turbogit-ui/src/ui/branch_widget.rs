@@ -12,14 +12,6 @@ pub const STAR_COLOR: Color32 = Palette::STATE_WARNING;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopupEntry {
-    Recent {
-        name: String,
-        favorite: bool,
-        ahead: usize,
-        behind: usize,
-        gone: bool,
-        last_touched: Option<chrono::DateTime<chrono::Utc>>,
-    },
     Local {
         name: String,
         favorite: bool,
@@ -43,27 +35,21 @@ pub enum PopupEntry {
 impl PopupEntry {
     pub fn label(&self) -> String {
         match self {
-            Self::Recent { name, .. } | Self::Local { name, .. } | Self::Tag { name } => {
-                name.clone()
-            }
+            Self::Local { name, .. } | Self::Tag { name } => name.clone(),
             Self::Remote { name, .. } => format!("origin/{name}"),
         }
     }
 
     fn branch_name(&self) -> &str {
         match self {
-            Self::Recent { name, .. } | Self::Local { name, .. } | Self::Remote { name, .. } => {
-                name
-            }
+            Self::Local { name, .. } | Self::Remote { name, .. } => name,
             Self::Tag { name } => name,
         }
     }
 
     fn last_touched(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         match self {
-            Self::Recent { last_touched, .. }
-            | Self::Local { last_touched, .. }
-            | Self::Remote { last_touched, .. } => *last_touched,
+            Self::Local { last_touched, .. } | Self::Remote { last_touched, .. } => *last_touched,
             Self::Tag { .. } => None,
         }
     }
@@ -72,16 +58,8 @@ impl PopupEntry {
         filter_lower.is_empty() || self.label().to_lowercase().contains(filter_lower)
     }
 
-    fn starred(&self) -> bool {
-        matches!(
-            self,
-            Self::Recent { favorite: true, .. } | Self::Local { favorite: true, .. }
-        )
-    }
-
     fn section(&self) -> &'static str {
         match self {
-            Self::Recent { .. } => "RECENT",
             Self::Local { .. } => "LOCAL",
             Self::Remote { .. } => "REMOTE",
             Self::Tag { .. } => "TAGS",
@@ -89,45 +67,19 @@ impl PopupEntry {
     }
 }
 
-/// Flattened, ordered popup rows: RECENT (starred first), LOCAL (favorites
-/// first, alphabetical, current excluded, it is pinned separately), REMOTE,
-/// TAGS, every row filtered against `filter`.
+/// Flattened, ordered popup rows: LOCAL (favorites first, alphabetical,
+/// current excluded, it is pinned separately), REMOTE, TAGS, every row
+/// filtered against `filter`.
 pub fn popup_entries(
     locals: &[Branch],
     remotes: &[Branch],
     tags: &[String],
-    recents: &[String],
     current: Option<&str>,
     filter: &str,
 ) -> Vec<PopupEntry> {
     let f = filter.to_lowercase();
-    let fav_of = |name: &str| {
-        locals
-            .iter()
-            .find(|b| b.name == name)
-            .map(|b| b.favorite)
-            .unwrap_or(false)
-    };
 
     let mut out = Vec::new();
-
-    let mut recent: Vec<PopupEntry> = recents
-        .iter()
-        .filter(|n| Some(n.as_str()) != current)
-        .map(|n| {
-            let b = locals.iter().find(|b| &b.name == n);
-            PopupEntry::Recent {
-                name: n.clone(),
-                favorite: fav_of(n),
-                ahead: b.map_or(0, |b| b.ahead),
-                behind: b.map_or(0, |b| b.behind),
-                gone: b.is_some_and(|b| b.gone),
-                last_touched: b.and_then(|b| b.last_touched),
-            }
-        })
-        .collect();
-    recent.sort_by_key(|e| std::cmp::Reverse(e.starred()));
-    out.extend(recent.into_iter().filter(|e| e.matches(&f)));
 
     let mut locs: Vec<&Branch> = locals
         .iter()
@@ -205,12 +157,6 @@ pub fn popup_entries(
     out
 }
 
-pub fn push_recent(recents: &mut Vec<String>, name: &str) {
-    recents.retain(|n| n != name);
-    recents.insert(0, name.to_string());
-    recents.truncate(crate::ui::branches_tree::RECENT_CAP);
-}
-
 pub fn sync_notice(roots: usize) -> String {
     format!("Synchronous branch operations across {roots} repositories")
 }
@@ -261,23 +207,12 @@ pub struct RowActions {
 
 /// Gating rules for one popup row (issue 32): destructive actions are gated
 /// on protected branches; the current branch can never be deleted; tags are
-/// neither deletable nor renameable. `exists` is false for a recent entry
-/// whose local branch has since been deleted. Compare… is offered for every
-/// row, so it has no gate.
-pub fn row_actions(
-    entry: &PopupEntry,
-    current: Option<&str>,
-    protected: bool,
-    exists: bool,
-) -> RowActions {
+/// neither deletable nor renameable. Compare… is offered for every row, so
+/// it has no gate.
+pub fn row_actions(entry: &PopupEntry, current: Option<&str>, protected: bool) -> RowActions {
     let is_current = Some(entry.branch_name()) == current;
-    let deletable = exists
-        && matches!(
-            entry,
-            PopupEntry::Recent { .. } | PopupEntry::Local { .. } | PopupEntry::Remote { .. }
-        );
-    let renameable =
-        exists && matches!(entry, PopupEntry::Recent { .. } | PopupEntry::Local { .. });
+    let deletable = matches!(entry, PopupEntry::Local { .. } | PopupEntry::Remote { .. });
+    let renameable = matches!(entry, PopupEntry::Local { .. });
     RowActions {
         delete: deletable && !is_current && !protected,
         rename: renameable && !is_current,
@@ -293,14 +228,11 @@ pub fn delete_gate(
     entry: &PopupEntry,
     current: Option<&str>,
     protected: bool,
-    exists: bool,
 ) -> Option<&'static str> {
-    if row_actions(entry, current, protected, exists).delete {
+    if row_actions(entry, current, protected).delete {
         return None;
     }
-    Some(if !exists {
-        "this branch no longer exists"
-    } else if Some(entry.branch_name()) == current {
+    Some(if Some(entry.branch_name()) == current {
         "check out another branch first"
     } else if protected {
         "protected branches cannot be deleted"
@@ -315,15 +247,13 @@ pub fn rename_gate(
     entry: &PopupEntry,
     current: Option<&str>,
     protected: bool,
-    exists: bool,
 ) -> Option<&'static str> {
-    if row_actions(entry, current, protected, exists).rename {
+    if row_actions(entry, current, protected).rename {
         return None;
     }
     Some(match entry {
         PopupEntry::Remote { .. } => "remote branches cannot be renamed",
         PopupEntry::Tag { .. } => "tags cannot be renamed",
-        _ if !exists => "this branch no longer exists",
         _ => "the current branch cannot be renamed from here",
     })
 }
@@ -413,7 +343,6 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 &locals,
                 &remotes,
                 &tags,
-                &state.ui.recent_branches,
                 current.as_deref(),
                 &state.ui.branch_filter,
             );
@@ -469,30 +398,22 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                 let label = e.label();
                                 let protected =
                                     sync_service::is_protected(&state.settings, e.branch_name());
-                                let exists = match e {
-                                    PopupEntry::Remote { .. } | PopupEntry::Tag { .. } => true,
-                                    _ => locals.iter().any(|b| b.name == e.branch_name()),
-                                };
-                                let actions = row_actions(e, current.as_deref(), protected, exists);
+                                let actions = row_actions(e, current.as_deref(), protected);
                                 let band_id = egui::Id::new(("branch-quick-actions", e.label()));
                                 let hinted = ui
                                     .ctx()
                                     .memory(|m| m.data.get_temp::<egui::Rect>(band_id))
                                     .is_some_and(|r| ui.rect_contains_pointer(r));
                                 let row = ui.horizontal(|ui| {
-                                    match e {
-                                        PopupEntry::Recent { name, favorite, .. }
-                                        | PopupEntry::Local { name, favorite, .. } => {
-                                            let glyph = if *favorite { "★" } else { "☆" };
-                                            let star = egui::Button::new(
-                                                RichText::new(glyph).color(STAR_COLOR),
-                                            )
-                                            .frame(false);
-                                            if ui.add(star).clicked() {
-                                                toggled_star = Some(name.clone());
-                                            }
+                                    if let PopupEntry::Local { name, favorite, .. } = e {
+                                        let glyph = if *favorite { "★" } else { "☆" };
+                                        let star = egui::Button::new(
+                                            RichText::new(glyph).color(STAR_COLOR),
+                                        )
+                                        .frame(false);
+                                        if ui.add(star).clicked() {
+                                            toggled_star = Some(name.clone());
                                         }
-                                        _ => {}
                                     }
                                     if protected {
                                         icons::icon(ui, Icon::LOCK, 13.0, Palette::STATE_WARNING);
@@ -535,7 +456,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                         actions.rename,
                                     );
                                     if let Some(reason) =
-                                        rename_gate(e, current.as_deref(), protected, exists)
+                                        rename_gate(e, current.as_deref(), protected)
                                     {
                                         rename.on_disabled_hover_text(reason);
                                     } else if rename.clicked() {
@@ -547,7 +468,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                         actions.delete,
                                     );
                                     if let Some(reason) =
-                                        delete_gate(e, current.as_deref(), protected, exists)
+                                        delete_gate(e, current.as_deref(), protected)
                                     {
                                         delete.on_disabled_hover_text(reason);
                                     } else if delete.clicked() {
@@ -635,13 +556,11 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
 fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
     let affected = Affected::Root(id.clone());
     match e {
-        PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
-            push_recent(&mut state.ui.recent_branches, name);
+        PopupEntry::Local { name, .. } => {
             let op = shell_writes::branch::checkout(id, name, affected.clone());
             state.dispatch(op);
         }
         PopupEntry::Remote { name, .. } => {
-            push_recent(&mut state.ui.recent_branches, name);
             let op = shell_writes::branch::checkout_new_local(id, name, affected.clone());
             state.dispatch(op);
         }
@@ -673,7 +592,7 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
                     name: name.clone(),
                 });
             }
-            PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
+            PopupEntry::Local { name, .. } => {
                 state.ui.branches_delete_unmerged = state.unmerged_commits(id, name.as_str());
                 state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
                     root: id.clone(),

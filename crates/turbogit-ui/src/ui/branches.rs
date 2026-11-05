@@ -646,7 +646,6 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
         return;
     }
 
-    crate::ui::branch_widget::push_recent(&mut state.ui.recent_branches, &branch.name);
     state.checkout_branch_op(root, branch.kind, &branch.name);
 }
 

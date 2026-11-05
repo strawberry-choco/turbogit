@@ -837,7 +837,6 @@ pub struct UiState {
     pub busy: bool,
     pub confirm: Option<crate::state::PendingConfirm>,
     pub recent_repos: Vec<PathBuf>,
-    pub recent_branches: Vec<String>,
     pub branches_cursor: usize,
     pub welcome_visible: bool,
     pub sidebar_filter: String,
