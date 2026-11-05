@@ -614,3 +614,31 @@ fn clicking_the_header_again_closes_the_picker() {
     );
     assert_not_painted(&fx.harness, "Open Project…");
 }
+
+#[test]
+fn a_third_click_on_the_header_reopens_the_picker() {
+    let scratch = tempfile::tempdir().unwrap();
+    let repo = seed_repo(scratch.path(), "alpha");
+    let mut fx = fixture_at_wide(repo, &[]);
+    settle(&mut fx.harness);
+
+    let band = header(&fx.harness).rect();
+    let aim = egui::Pos2::new(band.left() + 150.0, band.center().y);
+
+    click_at(&mut fx.harness, aim);
+    assert_painted(&fx.harness, "Open Project…");
+
+    click_at(&mut fx.harness, aim);
+    assert!(
+        !fx.harness.state().ui.workspace_picker_open,
+        "the dismiss happened"
+    );
+
+    click_at(&mut fx.harness, aim);
+
+    assert!(
+        fx.harness.state().ui.workspace_picker_open,
+        "the trigger opens the picker as often as it is clicked"
+    );
+    assert_painted(&fx.harness, "Open Project…");
+}
