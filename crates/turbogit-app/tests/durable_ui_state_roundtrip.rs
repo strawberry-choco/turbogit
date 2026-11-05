@@ -21,7 +21,6 @@ const COLLAPSED_KEY: &str = "durable-ui/frontend/src";
 const BRANCHES_VIEW: BranchesViewOptions = BranchesViewOptions {
     group_by_directory: false,
     group_by_repository: true,
-    show_recent: false,
     show_tags: true,
 };
 const POLICIES: DiffPolicies = DiffPolicies {
@@ -126,7 +125,7 @@ fn nine_of_the_ten_durable_fields_come_back_through_the_launch_path() {
     );
     assert_eq!(
         reloaded.ui.branches_view, BRANCHES_VIEW,
-        "branches_view: the four gear toggles keep their positions"
+        "branches_view: the three gear toggles keep their positions"
     );
     assert_eq!(
         reloaded.ui.diff_policies, POLICIES,

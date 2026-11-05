@@ -66,7 +66,6 @@ pub fn add_mapping(project_dir: &Path, dir: &Path, vcs: Vcs) -> TgResult<()> {
 pub struct BranchesViewOptions {
     pub group_by_directory: bool,
     pub group_by_repository: bool,
-    pub show_recent: bool,
     pub show_tags: bool,
 }
 
@@ -75,7 +74,6 @@ impl Default for BranchesViewOptions {
         Self {
             group_by_directory: true,
             group_by_repository: true,
-            show_recent: true,
             show_tags: true,
         }
     }

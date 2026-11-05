@@ -384,12 +384,7 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         deco_by_root.insert(root.id.clone(), deco);
     }
     let tags_by_root = state.caches.tags_by_root();
-    let mut view = build_branch_view(
-        &roots,
-        tags_by_root,
-        &std::collections::HashMap::new(),
-        &|_| state.ui.log_tree.show_remotes,
-    );
+    let mut view = build_branch_view(&roots, tags_by_root, &|_| state.ui.log_tree.show_remotes);
     for repo in &mut view.repos {
         if let Some(deco) = deco_by_root.get(&repo.root_id) {
             for tag in &mut repo.tags {
@@ -438,10 +433,6 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
             state.ui.log_selected_file = None;
         }
         TreeEvent::GroupToggled(group) => match group {
-            TreeGroup::Recent => {
-                let on = state.ui.log_tree.groups.recent;
-                state.ui.log_tree.groups.recent = !on;
-            }
             TreeGroup::Local => {
                 let on = state.ui.log_tree.groups.local;
                 state.ui.log_tree.groups.local = !on;

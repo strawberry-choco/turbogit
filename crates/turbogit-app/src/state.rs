@@ -294,7 +294,6 @@ pub enum ConflictBulkReport {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BranchesGroups {
-    pub recent: bool,
     pub local: bool,
     pub remote: bool,
     pub tags: bool,
@@ -303,7 +302,6 @@ pub struct BranchesGroups {
 impl Default for BranchesGroups {
     fn default() -> Self {
         Self {
-            recent: true,
             local: true,
             remote: true,
             tags: false,

@@ -195,52 +195,22 @@ fn show_tags_off_paints_no_tag_row_and_no_tags_header() {
 }
 
 #[test]
-fn the_gear_exposes_the_four_documented_toggles() {
+fn the_gear_exposes_the_three_documented_toggles() {
     let (_tmp, project) = grouped_project();
     let mut harness = branches_harness(project);
     open_branches_tab(&mut harness);
     open_gear(&mut harness);
 
-    for label in [
-        "Group by Directory",
-        "Group by Repository",
-        "Show Recent Branches",
-        "Show Tags",
-    ] {
+    for label in ["Group by Directory", "Group by Repository", "Show Tags"] {
         assert!(
             has_painted(&harness, label),
-            "{label} is one of the four: painted {:?}",
+            "{label} is one of the three: painted {:?}",
             painted_galleys(&harness)
                 .into_iter()
                 .map(|g| g.text)
                 .collect::<Vec<_>>()
         );
     }
-}
-
-#[test]
-fn show_recent_off_hides_the_group_the_other_ticket_built() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().to_path_buf();
-    let alpha = project.join("alpha");
-    git_with_env(
-        &project,
-        &["init", "-q", "-b", "main", alpha.to_str().unwrap()],
-        &GitEnv::fixture(),
-    );
-    std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git_with_env(&alpha, &["add", "."], &GitEnv::fixture());
-    git_with_env(&alpha, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
-    git_with_env(&alpha, &["branch", "work"], &GitEnv::fixture());
-    git_with_env(&alpha, &["checkout", "-q", "work"], &GitEnv::fixture());
-
-    let mut harness = branches_harness(project);
-    open_branches_tab(&mut harness);
-    assert!(has_painted(&harness, "RECENT"), "the group is on");
-
-    toggle(&mut harness, "Show Recent Branches");
-    assert_eq!(painted_count(&harness, "RECENT"), 0);
-    assert!(has_painted(&harness, "work"));
 }
 
 #[test]

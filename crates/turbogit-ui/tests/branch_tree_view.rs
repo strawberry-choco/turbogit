@@ -184,12 +184,9 @@ impl Fixture {
     }
 
     fn view(&self) -> BranchView {
-        build_branch_view(
-            &self.roots,
-            &self.tags,
-            &std::collections::HashMap::new(),
-            &|root| remotes_revealed(&self.tree, root),
-        )
+        build_branch_view(&self.roots, &self.tags, &|root| {
+            remotes_revealed(&self.tree, root)
+        })
     }
 
     fn has_any_data(&self) -> bool {

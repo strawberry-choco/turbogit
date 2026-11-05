@@ -109,7 +109,6 @@ pub enum TreeEvent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeGroup {
-    Recent,
     Local,
     Tags,
 }
@@ -202,16 +201,6 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                 no_match_state(ui, filter.trim(), &mut events);
                 return;
             }
-            paint_recent_group(
-                ui,
-                props,
-                tree,
-                &filter,
-                &scroll_target,
-                &mut y_cursor,
-                &mut target_y,
-                &mut events,
-            );
             if props.view.options.group_by_repository {
                 for section in &in_scope {
                     paint_repo_section(
@@ -308,60 +297,6 @@ fn filter_nodes(nodes: &[BranchNode], filter: &str) -> Vec<BranchNode> {
 
 fn leaf_count(nodes: &[BranchNode]) -> usize {
     branches_tree::leaf_count(nodes)
-}
-
-#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
-fn paint_recent_group(
-    ui: &mut Ui,
-    props: &TreeProps<'_>,
-    tree: &mut TreeState,
-    filter: &str,
-    scroll_target: &Option<String>,
-    y_cursor: &mut f32,
-    target_y: &mut Option<f32>,
-    events: &mut Vec<TreeEvent>,
-) {
-    if !props.view.options.show_recent {
-        return;
-    }
-    let rows: Vec<&branches_tree::BranchLeaf> = props
-        .view
-        .recent
-        .iter()
-        .filter(|r| match props.repo_filter {
-            Some(f) => &r.root == f,
-            None => true,
-        })
-        .filter(|r| branch_matches(&r.branch, filter))
-        .collect();
-    if rows.is_empty() {
-        return;
-    }
-    let header = section_header(ui, "Recent", rows.len(), tree.groups.recent, |_| {});
-    if header.clicked() {
-        events.push(TreeEvent::GroupToggled(TreeGroup::Recent));
-    }
-    *y_cursor += SECTION_H;
-    if !tree.groups.recent {
-        return;
-    }
-    for row in rows {
-        if Some(row.branch.name.as_str()) == scroll_target.as_deref() {
-            *target_y = Some(*y_cursor);
-        }
-        *y_cursor += BRANCH_ROW_H;
-        branch_row(
-            ui,
-            props,
-            tree,
-            &row.root,
-            row.active,
-            &row.label,
-            &row.branch,
-            0.0,
-            events,
-        );
-    }
 }
 
 #[allow(clippy::too_many_arguments)] // the painter-thread this function shares

@@ -59,7 +59,6 @@ fn state_holding_every_durable_value(project: &std::path::Path) -> AppState {
     state.ui.branches_view = BranchesViewOptions {
         group_by_directory: false,
         group_by_repository: false,
-        show_recent: false,
         show_tags: true,
     };
     state.ui.diff_policies = DiffPolicies {

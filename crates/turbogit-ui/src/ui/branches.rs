@@ -92,7 +92,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let view = branches_tree::build_branch_view_with(
         &state.multi.roots,
         state.caches.tags_by_root(),
-        state.caches.recents_by_root(),
         &|root| branch_tree_view::remotes_revealed(&state.ui.branches_tree, root),
         &state.ui.branches_view,
     );
@@ -326,12 +325,6 @@ fn settings_toggles(ui: &mut Ui, options: &mut BranchesViewOptions) -> bool {
     );
     changed |= toggle_row(
         ui,
-        &mut options.show_recent,
-        "Show Recent Branches",
-        "The branches HEAD moved onto most recently",
-    );
-    changed |= toggle_row(
-        ui,
         &mut options.show_tags,
         "Show Tags",
         "Tags beside the branches, in their own group",
@@ -500,10 +493,6 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
             state.ui.branches_tree.context_menu = Some((root, branch));
         }
         TreeEvent::GroupToggled(group) => match group {
-            TreeGroup::Recent => {
-                let on = state.ui.branches_tree.groups.recent;
-                state.ui.branches_tree.groups.recent = !on;
-            }
             TreeGroup::Local => {
                 let on = state.ui.branches_tree.groups.local;
                 state.ui.branches_tree.groups.local = !on;
