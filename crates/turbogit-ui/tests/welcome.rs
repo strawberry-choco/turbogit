@@ -360,18 +360,23 @@ fn recent_branch_chip_paints_the_selection_fill() {
 fn recents_card_is_enclosed_and_footers_show_all_projects() {
     let project = tempfile::tempdir().expect("temp project dir");
     let config = tempfile::tempdir().expect("temp config dir");
-    let repo = seed_repo(project.path(), "alpha");
+    let names = ["alpha", "beta", "gamma", "delta", "epsilon"];
+    let seeded: Vec<RecentProject> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let repo = seed_repo(project.path(), name);
+            RecentProject {
+                path: repo,
+                name: (*name).into(),
+                last_opened: 1_755_000_000_050 - i as i64 * 1_000,
+                kind: turbogit_app::recents::RecentKind::Project,
+                repo_count: None,
+            }
+        })
+        .collect();
 
-    seed_recents(
-        config.path(),
-        &[RecentProject {
-            path: repo.clone(),
-            name: "alpha".into(),
-            last_opened: 1_755_000_000_050,
-            kind: turbogit_app::recents::RecentKind::Project,
-            repo_count: None,
-        }],
-    );
+    seed_recents(config.path(), &seeded);
 
     let cfg = config.path().to_path_buf();
     let mut harness = shell_harness_over(
@@ -381,7 +386,22 @@ fn recents_card_is_enclosed_and_footers_show_all_projects() {
     settle(&mut harness);
 
     assert_painted(&harness, "RECENT PROJECTS");
-    assert_painted(&harness, "alpha");
+    for name in names.iter().take(3) {
+        assert_painted(&harness, name);
+    }
+    for name in names.iter().skip(3) {
+        assert_not_painted(&harness, name);
+    }
+    let header = painted_text_centers(&harness, "RECENT PROJECTS")
+        .into_iter()
+        .next()
+        .expect("recents header");
+    assert!(
+        painted_text_centers(&harness, "5")
+            .into_iter()
+            .any(|c| (c.y - header.y).abs() <= 20.0 && c.x > header.x),
+        "the badge counts the whole store: a `5` must paint on the recents header row"
+    );
     assert_painted(&harness, "Show all projects");
     let card_fill = harness
         .output()
@@ -392,6 +412,186 @@ fn recents_card_is_enclosed_and_footers_show_all_projects() {
             _ => false,
         });
     assert!(card_fill, "the recents card must paint a CONTENT_BG frame");
+}
+
+/// Synthetic records, newest first, whose paths do not exist on disk, so no row
+/// here paints a branch chip. A test that clicks a row seeds real repos instead.
+fn windowed_recents(base: &Path, names: &[&str]) -> Vec<RecentProject> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| RecentProject {
+            path: base.join(name),
+            name: (*name).into(),
+            last_opened: 1_755_000_000_050 - i as i64 * 1_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_recents_window_paints_three_rows_and_the_badge_counts_the_whole_store() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+
+    seed_recents(
+        config.path(),
+        &windowed_recents(
+            project.path(),
+            &[
+                "p12", "p11", "p10", "p09", "p08", "p07", "p06", "p05", "p04", "p03", "p02", "p01",
+            ],
+        ),
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
+    );
+    settle(&mut harness);
+
+    for name in ["p12", "p11", "p10"] {
+        assert_painted(&harness, name);
+    }
+    for name in ["p09", "p05", "p01"] {
+        assert_not_painted(&harness, name);
+    }
+    assert_eq!(
+        count_painted(&harness, "12"),
+        1,
+        "the badge reads the 12 stored records, not the 3 painted rows"
+    );
+    assert_painted(&harness, "Show all projects");
+}
+
+#[test]
+fn showing_all_projects_paints_every_record_and_collapses_again() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+
+    seed_recents(
+        config.path(),
+        &windowed_recents(
+            project.path(),
+            &["q08", "q07", "q06", "q05", "q04", "q03", "q02", "q01"],
+        ),
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 1200.0),
+    );
+    settle(&mut harness);
+    assert!(!harness.state().ui.welcome_recents_expanded);
+
+    harness.get_by_label("Show all projects").click();
+    settle(&mut harness);
+    for name in ["q08", "q07", "q06", "q05", "q04", "q03", "q02", "q01"] {
+        assert_painted(&harness, name);
+    }
+    assert_painted(&harness, "Show fewer projects");
+    assert_not_painted(&harness, "Show all projects");
+    assert!(harness.state().ui.welcome_recents_expanded);
+
+    harness.get_by_label("Show fewer projects").click();
+    settle(&mut harness);
+    for name in ["q08", "q07", "q06"] {
+        assert_painted(&harness, name);
+    }
+    for name in ["q05", "q01"] {
+        assert_not_painted(&harness, name);
+    }
+    assert_painted(&harness, "Show all projects");
+    assert!(!harness.state().ui.welcome_recents_expanded);
+}
+
+#[test]
+fn a_record_below_the_window_is_openable_once_the_card_is_expanded() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let mut repos = Vec::new();
+    let names = ["alpha", "beta", "gamma", "delta"];
+    for name in names {
+        repos.push(seed_repo(project.path(), name));
+    }
+    let seeded: Vec<RecentProject> = names
+        .iter()
+        .zip(&repos)
+        .enumerate()
+        .map(|(i, (name, path))| RecentProject {
+            path: path.clone(),
+            name: (*name).into(),
+            last_opened: 1_755_000_000_050 - i as i64 * 1_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        })
+        .collect();
+
+    seed_recents(config.path(), &seeded);
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 1200.0),
+    );
+    settle(&mut harness);
+    assert_not_painted(&harness, "delta");
+
+    harness.get_by_label("Show all projects").click();
+    settle(&mut harness);
+    assert_painted(&harness, "delta");
+
+    harness.get_by_label("delta").click();
+    settle(&mut harness);
+    let s = harness.state();
+    assert!(
+        !s.show_welcome(),
+        "a record revealed by the disclosure must open like any other"
+    );
+    assert_eq!(s.project_dir, repos[3], "the row's own path was opened");
+}
+
+#[test]
+fn two_stored_projects_paint_both_rows_and_no_footer() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let alpha = seed_repo(project.path(), "alpha");
+    let beta = seed_repo(project.path(), "beta");
+
+    seed_recents(
+        config.path(),
+        &[
+            RecentProject {
+                path: alpha,
+                name: "alpha".into(),
+                last_opened: 1_755_000_000_050,
+                kind: turbogit_app::recents::RecentKind::Project,
+                repo_count: None,
+            },
+            RecentProject {
+                path: beta,
+                name: "beta".into(),
+                last_opened: 1_755_000_000_040,
+                kind: turbogit_app::recents::RecentKind::Project,
+                repo_count: None,
+            },
+        ],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
+    );
+    settle(&mut harness);
+
+    assert_painted(&harness, "alpha");
+    assert_painted(&harness, "beta");
+    assert_not_painted(&harness, "Show all projects");
+    assert_not_painted(&harness, "Show fewer projects");
 }
 
 #[test]
@@ -909,7 +1109,7 @@ fn cli_path_argument_bypasses_welcome_but_no_argument_lands_on_it() {
 }
 
 #[test]
-fn recents_store_roundtrips_upserts_sorts_and_caps() {
+fn recents_store_roundtrips_upserts_sorts_and_keeps_every_record() {
     let config = tempfile::tempdir().expect("temp config dir");
 
     assert!(load(config.path()).projects.is_empty());
@@ -937,7 +1137,8 @@ fn recents_store_roundtrips_upserts_sorts_and_caps() {
     assert_eq!(recents.projects.len(), 2, "upsert must not duplicate");
     assert_eq!(recents.projects[0].name, "alpha", "re-opened moves to top");
 
-    for i in 0..(turbogit_app::recents::MAX_RECENTS + 4) {
+    const RECORDED: usize = 16;
+    for i in 0..RECORDED {
         let p = config.path().join(format!("r{i}"));
         std::fs::create_dir_all(&p).unwrap();
         record(config.path(), &p);
@@ -945,8 +1146,18 @@ fn recents_store_roundtrips_upserts_sorts_and_caps() {
     let recents = load(config.path());
     assert_eq!(
         recents.projects.len(),
-        turbogit_app::recents::MAX_RECENTS,
-        "store must cap at MAX_RECENTS"
+        RECORDED + 2,
+        "the store keeps every record; nothing is truncated"
+    );
+    assert_eq!(
+        recents.projects[0].name,
+        format!("r{}", RECORDED - 1),
+        "still newest first"
+    );
+    assert_eq!(
+        recents.projects.last().expect("a non-empty store").path,
+        b,
+        "the earliest-recorded entry must still sit at the tail"
     );
 
     let file = recents_file(config.path());
@@ -1292,7 +1503,12 @@ fn welcome_locks_the_redesigned_structure() {
 
     assert_painted(&harness, "RECENT PROJECTS");
     assert_painted(&harness, "alpha");
-    assert_painted(&harness, "Show all projects");
+    let texts = painted_text(&harness);
+    assert!(
+        !texts.iter().any(|t| t.contains("Show all projects")),
+        "one recent is already all of them, so the card must offer no disclosure; \
+         painted text:\n{texts:#?}"
+    );
 
     assert_painted(&harness, "GETTING STARTED");
     assert_painted(&harness, "Browse history in the Git Log tool window.");

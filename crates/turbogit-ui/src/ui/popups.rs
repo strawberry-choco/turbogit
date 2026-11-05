@@ -373,6 +373,8 @@ enum WorkspaceMenuAction {
     AttachRoot,
 }
 
+const WORKSPACE_ROWS_MAX_HEIGHT: f32 = 420.0;
+
 fn workspace_menu(ui: &mut Ui, rows: &[WorkspaceRow]) -> Option<WorkspaceMenuAction> {
     ui.spacing_mut().item_spacing.y = 0.0;
     ui.set_min_width(296.0);
@@ -380,58 +382,35 @@ fn workspace_menu(ui: &mut Ui, rows: &[WorkspaceRow]) -> Option<WorkspaceMenuAct
 
     let mut picked = None;
     widgets::group_title(ui, "Current");
-    for (idx, row) in rows.iter().enumerate() {
-        let is_current = row.is_current;
-        let count = if row.recent.kind == RecentKind::Workspace {
-            row.recent
-                .repo_count
-                .map(|n| components::counted(n, "repo", "repos"))
+    let mut recents = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.is_current {
+            picked = picked.or(workspace_row_item(ui, row));
         } else {
-            None
-        };
-        let full_path = row.recent.path.display().to_string();
-        // The current row skips the path column: the rail header it hangs under
-        // already states where this workspace is.
-        let path = (!is_current).then_some(full_path.as_str());
-        // `menu_item` puts `label` in the accessibility tree and paints `shortcut`
-        // beside it, and the "current" caption is paint only, so the name has to
-        // carry the fact for a reader that cannot see the caption.
-        let open_mark = if is_current { " · current" } else { "" };
-        let accessible = match &count {
-            Some(count) => format!("{} · {count}{open_mark}", row.recent.name),
-            None => format!("{}{open_mark}", row.recent.name),
-        };
-        let response = widgets::menu_item(
-            ui,
-            widgets::MenuItemProps {
-                icon: Icon::FOLDER_GIT,
-                label: &row.recent.name,
-                data: path,
-                shortcut: count.as_deref(),
-                state: widgets::MenuItemState::enabled(),
-                kind: widgets::MenuItemKind::Default,
-            },
-        )
-        .on_hover_text(full_path);
-        // The closure is stored as `Fn`, not consumed once, so it clones rather
-        // than moves.
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, is_current, accessible.clone())
-        });
-        if response.clicked() {
-            picked = Some(if is_current {
-                WorkspaceMenuAction::Stay
-            } else {
-                WorkspaceMenuAction::Enter(row.recent.clone())
-            });
+            recents.push(row);
         }
+    }
+    if !recents.is_empty() {
         // The reference's project widget heads each half of its list with a
         // caption, so the open workspace is named by its group rather than
         // marked inside its own row.
-        if is_current && idx + 1 < rows.len() {
-            widgets::menu_rule(ui);
-            widgets::group_title(ui, "Recent");
-        }
+        widgets::menu_rule(ui);
+        widgets::group_title(ui, "Recent");
+        // Only this half scrolls, and its caption stays outside: the recents
+        // store is unbounded, so a scrolled "Recent" title would leave the
+        // visible rows under no name.
+        let mut recent_pick = None;
+        egui::ScrollArea::vertical()
+            .id_salt("workspace_menu_recent_rows")
+            .max_height(WORKSPACE_ROWS_MAX_HEIGHT)
+            .show(ui, |ui| {
+                for row in recents {
+                    if let Some(action) = workspace_row_item(ui, row) {
+                        recent_pick = Some(action);
+                    }
+                }
+            });
+        picked = picked.or(recent_pick);
     }
 
     widgets::menu_rule(ui);
@@ -464,6 +443,54 @@ fn workspace_menu(ui: &mut Ui, rows: &[WorkspaceRow]) -> Option<WorkspaceMenuAct
         }
     }
     picked
+}
+
+fn workspace_row_item(ui: &mut Ui, row: &WorkspaceRow) -> Option<WorkspaceMenuAction> {
+    let is_current = row.is_current;
+    let count = if row.recent.kind == RecentKind::Workspace {
+        row.recent
+            .repo_count
+            .map(|n| components::counted(n, "repo", "repos"))
+    } else {
+        None
+    };
+    let full_path = row.recent.path.display().to_string();
+    // The current row skips the path column: the rail header it hangs under
+    // already states where this workspace is.
+    let path = (!is_current).then_some(full_path.as_str());
+    // `menu_item` puts `label` in the accessibility tree and paints `shortcut`
+    // beside it, and the "current" caption is paint only, so the name has to
+    // carry the fact for a reader that cannot see the caption.
+    let open_mark = if is_current { " · current" } else { "" };
+    let accessible = match &count {
+        Some(count) => format!("{} · {count}{open_mark}", row.recent.name),
+        None => format!("{}{open_mark}", row.recent.name),
+    };
+    let response = widgets::menu_item(
+        ui,
+        widgets::MenuItemProps {
+            icon: Icon::FOLDER_GIT,
+            label: &row.recent.name,
+            data: path,
+            shortcut: count.as_deref(),
+            state: widgets::MenuItemState::enabled(),
+            kind: widgets::MenuItemKind::Default,
+        },
+    )
+    .on_hover_text(full_path);
+    // The closure is stored as `Fn`, not consumed once, so it clones rather
+    // than moves.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, is_current, accessible.clone())
+    });
+    if response.clicked() {
+        return Some(if is_current {
+            WorkspaceMenuAction::Stay
+        } else {
+            WorkspaceMenuAction::Enter(row.recent.clone())
+        });
+    }
+    None
 }
 
 pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {

@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::DisplayName;
 
-pub const MAX_RECENTS: usize = 10;
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RecentKind {
@@ -82,7 +80,6 @@ pub fn record_into(recents: &mut Recents, path: &Path) {
     recents
         .projects
         .sort_by_key(|p| std::cmp::Reverse(p.last_opened));
-    recents.projects.truncate(MAX_RECENTS);
 }
 
 pub fn record_workspace(config_dir: &Path, path: &Path, repo_count: usize) -> Recents {

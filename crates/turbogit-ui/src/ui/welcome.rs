@@ -17,6 +17,8 @@ const ICON_TILE: f32 = 30.0;
 const STEP_PILL: f32 = 20.0;
 const RECENT_ROW_HEIGHT: f32 = 64.0;
 
+const RECENTS_WINDOW: usize = 3;
+
 const RECENT_ACTIONS_ZONE: f32 = 44.0;
 
 /// Paint alpha of the hero's soft `BRAND` gradient overlay (spec §5.1). A mix
@@ -431,25 +433,39 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
         });
         ui.add_space(4.0);
 
-        let recents = state.ui.recent_projects.clone();
-        if recents.is_empty() {
+        if count == 0 {
             widgets::empty_state(ui, "No recent projects yet.");
             return;
         }
-        for r in &recents {
+        let expanded = state.ui.welcome_recents_expanded;
+        let window = if expanded {
+            count
+        } else {
+            count.min(RECENTS_WINDOW)
+        };
+        let rows: Vec<_> = state
+            .ui
+            .recent_projects
+            .iter()
+            .take(window)
+            .cloned()
+            .collect();
+        for r in &rows {
             recent_row(ui, state, r);
             ui.add_space(4.0);
         }
 
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Show all projects")
-                    .size(crate::theme::TYPE_CONTROL)
-                    .color(Palette::ACCENT_TEXT),
-            );
-            icons::icon(ui, Icon::CHEVRON_RIGHT, 14.0, Palette::ACCENT_TEXT);
-        });
+        if count > RECENTS_WINDOW {
+            ui.add_space(2.0);
+            let (icon, label) = if expanded {
+                (Icon::CHEVRON_UP, "Show fewer projects")
+            } else {
+                (Icon::CHEVRON_RIGHT, "Show all projects")
+            };
+            if widgets::ghost_button(ui, Some(icon), label).clicked() {
+                state.ui.welcome_recents_expanded = !expanded;
+            }
+        }
     });
 }
 

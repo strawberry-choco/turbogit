@@ -866,6 +866,7 @@ pub struct UiState {
     pub welcome_clone_url: String,
     pub welcome_shallow: bool,
     pub welcome_focus_clone: bool,
+    pub welcome_recents_expanded: bool,
     pub show_toolbar: bool,
     pub show_status_bar: bool,
     pub banner: Option<crate::banner::Banner>,
