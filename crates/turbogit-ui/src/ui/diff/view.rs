@@ -390,6 +390,13 @@ pub fn render_diff(
 
     let paint = egui::Id::new(("diff-view", &target));
 
+    // Diff rows paint flush, so the vertical item gap is zero here. show_rows
+    // reads item_spacing.y from this outer ui before it creates the viewport
+    // child, so the zero has to live here for the scroll pitch and the
+    // rendered rows to agree.
+    let row_gap = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+
     // Named id salt: the commit window's `ui.columns` panes share one stable
     // child id, and egui's default ScrollArea salt is constant, an unnamed
     // area here would share persisted scrollbar state with the changelist
@@ -426,6 +433,7 @@ pub fn render_diff(
             }
         },
     );
+    ui.spacing_mut().item_spacing.y = row_gap;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

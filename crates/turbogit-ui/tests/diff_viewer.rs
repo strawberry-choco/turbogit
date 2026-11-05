@@ -1149,6 +1149,69 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     }
 }
 
+fn repo_two_adjacent_edits() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    write_file(&repo, "adjacent.txt", "one\ntwo\nthree\n");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    write_file(&repo, "adjacent.txt", "one\nTWO\nTHREE\n");
+    (tmp, repo)
+}
+
+fn changed_row_bands(h: &Harness<'_, AppState>, min_width: f32) -> Vec<Rect> {
+    let changed = [
+        Palette::DIFF_ADD_BG,
+        Palette::DIFF_DEL_BG,
+        Palette::DIFF_ADD_UNSTAGED_BG,
+        Palette::DIFF_DEL_UNSTAGED_BG,
+    ];
+    let mut bands: Vec<Rect> = filled_rects(h)
+        .into_iter()
+        .filter(|(r, c)| r.width() > min_width && r.height() > 15.0 && changed.contains(c))
+        .map(|(r, _)| r)
+        .collect();
+    bands.sort_by(|a, b| {
+        a.top()
+            .total_cmp(&b.top())
+            .then(a.left().total_cmp(&b.left()))
+    });
+    bands.dedup_by(|a, b| (a.top() - b.top()).abs() < 0.01 && (a.left() - b.left()).abs() < 0.01);
+    bands
+}
+
+fn assert_changed_rows_touch(h: &Harness<'_, AppState>, min_width: f32) {
+    let mut bands = changed_row_bands(h, min_width);
+    assert!(!bands.is_empty(), "changed rows must be on screen");
+    let first = bands[0];
+    bands.retain(|band| {
+        (band.left() - first.left()).abs() < 0.01 && (band.width() - first.width()).abs() < 0.01
+    });
+    assert!(
+        bands.len() >= 2,
+        "one column must hold consecutive changed rows: {bands:?}"
+    );
+    let gaps: Vec<f32> = bands
+        .windows(2)
+        .map(|pair| pair[1].top() - pair[0].bottom())
+        .collect();
+    assert!(
+        gaps.iter().all(|gap| gap.abs() < 0.01),
+        "consecutive diff rows leave background showing between them: {gaps:?} for {bands:?}"
+    );
+}
+
+#[test]
+fn consecutive_changed_rows_touch_without_a_gap() {
+    for (side_by_side, min_width) in [(false, 300.0), (true, 100.0)] {
+        let (_tmp, repo) = repo_two_adjacent_edits();
+        let mut h = diff_harness(&repo);
+        settle(&mut h);
+        h.state_mut().ui.diff_side_by_side = side_by_side;
+        open_preview(&mut h, &repo, &repo.join("adjacent.txt"));
+        assert_changed_rows_touch(&h, min_width);
+    }
+}
+
 const DIFF_ACTIONS_SRC: &str = include_str!("../src/ui/diff/actions.rs");
 
 #[test]

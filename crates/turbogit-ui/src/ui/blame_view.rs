@@ -100,6 +100,7 @@ fn blame_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::B
             ScrollArea::vertical()
                 .id_salt("blame_lines")
                 .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     for line in lines.iter() {
                         let response = blame_row(ui, line, &target.rev);
                         if Some(line.line_no) == caret {

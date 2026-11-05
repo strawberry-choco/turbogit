@@ -533,6 +533,26 @@ fn blame_row_label(id: &str, content: &str) -> String {
 }
 
 #[test]
+fn consecutive_blame_lines_touch_without_a_gap() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_commit_and_file(&mut harness, &seed);
+    harness.get_by_label("Blame").click();
+    settle_reads(&mut harness);
+
+    let first = blame_row_in_window(
+        &harness,
+        &blame_row_label(&seed.c1, "alpha: initial commit"),
+    );
+    let second = blame_row_in_window(&harness, &blame_row_label(&seed.c2, "alpha: second commit"));
+    let gap = second.top() - first.bottom();
+    assert!(
+        gap.abs() < 0.01,
+        "adjacent file lines leave window background between them: {gap} for {first:?} and {second:?}"
+    );
+}
+
+#[test]
 fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
