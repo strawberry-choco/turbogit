@@ -889,7 +889,6 @@ const ROW_CHECKBOX: f32 = 16.0;
 const ROW_GAP: f32 = 6.0;
 const ROW_EDGE: f32 = 12.0;
 const RENAME_ARROW_W: f32 = 24.0;
-const MIN_NAME_COLUMN: f32 = 96.0;
 
 const GROUP_CHEVRON_X: f32 = 14.0;
 const GROUP_ICON_X: f32 = 32.0;
@@ -934,27 +933,35 @@ fn change_row(
         .as_ref()
         .map(|loc| painter.layout_no_wrap(loc.clone(), font.clone(), Palette::INK_3));
     let loc_w = loc_galley.as_ref().map_or(0.0, |g| g.size().x);
-    let loc_h = loc_galley.as_ref().map_or(0.0, |g| g.size().y);
-    let loc_gap = if loc_galley.is_some() { ROW_GAP } else { 0.0 };
-    let full_column = content_right - name_x;
-    let loc_below = loc_galley.is_some() && full_column - loc_w - loc_gap < MIN_NAME_COLUMN;
-    let name_column = if loc_below {
-        full_column
-    } else {
-        full_column - loc_w - loc_gap
-    }
-    .max(1.0);
-    let name_galley = painter.layout(name.clone(), font.clone(), Palette::INK, name_column);
+    let space_w = painter
+        .layout_no_wrap(" ".to_owned(), font.clone(), Palette::INK_3)
+        .size()
+        .x;
+    let name_galley = painter.layout(
+        name.clone(),
+        font.clone(),
+        Palette::INK,
+        content_right - name_x,
+    );
+
+    let name_end = name_x + name_galley.size().x;
+    let loc_x = name_end + space_w;
+    let loc_cropped = loc_galley.is_some() && loc_x + loc_w > content_right;
+    // A crop narrower than the space between the segments is a glyph stub, not
+    // a path, so the directory drops out and the hover alone carries it.
+    let loc_shown =
+        loc_galley.is_some() && name_galley.rows.len() == 1 && loc_x + space_w < content_right;
+    let run_end = match &loc_galley {
+        Some(_) => (loc_x + loc_w).min(content_right),
+        None => name_end,
+    };
 
     let orig_galley = c
         .orig_path
         .as_ref()
         .map(|p| painter.layout_no_wrap(p.display().to_string(), font.clone(), Palette::INK_3));
     let rename_below = match (&orig_galley, name_galley.rows.len()) {
-        (Some(orig), 1) => {
-            name_x + name_galley.size().x + ROW_GAP + RENAME_ARROW_W + orig.size().x
-                > name_x + name_column
-        }
+        (Some(orig), 1) => run_end + ROW_GAP + RENAME_ARROW_W + orig.size().x > content_right,
         (Some(_), _) => true,
         (None, _) => false,
     };
@@ -965,7 +972,7 @@ fn change_row(
         .map_or(name_galley.size().y, |row| row.size.y);
     let name_h = name_galley.size().y;
     let name_lines = name_galley.rows.len().max(1);
-    let below_lines = usize::from(rename_below) + usize::from(loc_below);
+    let below_lines = usize::from(rename_below);
     let content_h = name_h + below_lines as f32 * line_h;
     let row_h = crate::theme::FILE_ROW_HEIGHT + (name_lines - 1 + below_lines) as f32 * line_h;
     let row = Rect::from_min_size(left, Vec2::new(ui.available_width(), row_h));
@@ -1015,7 +1022,6 @@ fn change_row(
     );
 
     let rename_top = block_top + name_h;
-    let loc_top = rename_top + if rename_below { line_h } else { 0.0 };
     if let Some(orig) = &orig_galley {
         let orig_h = orig.size().y;
         let (arrow_cy, orig_x, orig_y) = if rename_below {
@@ -1025,11 +1031,7 @@ fn change_row(
                 rename_top + (line_h - orig_h) / 2.0,
             )
         } else {
-            (
-                cy,
-                name_x + name_galley.size().x + ROW_GAP + RENAME_ARROW_W,
-                cy - orig_h / 2.0,
-            )
+            (cy, run_end + ROW_GAP + RENAME_ARROW_W, cy - orig_h / 2.0)
         };
         icons::centered_icon(
             ui,
@@ -1045,17 +1047,14 @@ fn change_row(
         );
     }
 
-    if let Some(loc) = &loc_galley {
-        let loc_y = if loc_below {
-            loc_top + (line_h - loc_h) / 2.0
-        } else {
-            cy - loc_h / 2.0
-        };
-        painter.galley_with_override_text_color(
-            Pos2::new(content_right - loc_w, loc_y),
-            loc.clone(),
-            Palette::INK_3,
+    if let Some(loc) = loc_galley.filter(|_| loc_shown) {
+        let clip = Rect::from_min_max(
+            Pos2::new(loc_x.min(content_right), row.top()),
+            Pos2::new(content_right, row.bottom()),
         );
+        painter
+            .with_clip_rect(clip)
+            .galley_with_override_text_color(Pos2::new(loc_x, block_top), loc, Palette::INK_3);
     }
 
     let body_rect = Rect::from_min_max(
@@ -1068,6 +1067,16 @@ fn change_row(
         Sense::click(),
     );
     body.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name.clone()));
+    if loc_cropped {
+        // `align` is egui's first preference, not a promise: `Popup` re-picks
+        // any side that fits, so a window too narrow for the reveal on the
+        // right moves it instead of clipping it.
+        let mut reveal = egui::Tooltip::for_enabled(&body);
+        reveal.popup = reveal.popup.align(egui::RectAlign::RIGHT_START);
+        reveal.show(|ui| {
+            ui.label(c.path.display().to_string());
+        });
+    }
     order.push(RowSlot {
         key: key.clone(),
         selectable: true,

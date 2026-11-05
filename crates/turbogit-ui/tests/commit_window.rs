@@ -1719,25 +1719,19 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
          got {name_lines} line(s)"
     );
 
-    let (loc_pos, ..) = galley_metrics(&h, "src/");
+    let row_right = h.get_by_label(long).rect().right();
     assert!(
-        loc_pos.x > name_pos.x,
-        "the location column must stay right of the name (name x={}, location x={})",
+        name_pos.x + name_size.x <= row_right,
+        "every wrapped line must stay inside the row (name runs \
+         {:.1}..{:.1}, the row ends at {:.1})",
         name_pos.x,
-        loc_pos.x
+        name_pos.x + name_size.x,
+        row_right,
     );
     assert!(
-        (loc_pos.y - name_pos.y).abs() < 1.0,
-        "the location must ride the name's first line (name y={}, location y={})",
-        name_pos.y,
-        loc_pos.y
-    );
-    assert!(
-        name_size.x <= loc_pos.x - name_pos.x,
-        "every wrapped line must stay inside the name column, left of the \
-         location (name width={}, column={})",
-        name_size.x,
-        loc_pos.x - name_pos.x
+        galley_origin(&h, "src/").is_none(),
+        "a wrapped name fills the band, so the directory must drop out rather \
+         than paint a glyph stub — the hover carries it"
     );
 
     h.get_by_label(long).click();
@@ -1795,6 +1789,251 @@ fn short_file_names_keep_the_single_line_row_height() {
         selected_row_height(&h, origin),
         turbogit_ui::theme::FILE_ROW_HEIGHT,
         "a single-line row keeps the 24 px file-row height"
+    );
+}
+
+/// `(origin, size, line count)` of the painted galley carrying exactly
+/// `text`, plus the right edge of the clip it was painted under.
+///
+/// A hard-cropped galley still submits its **whole** input string, so the
+/// crop is only observable from the clip rect, never from the text.
+fn galley_fit(h: &Harness<'_, AppState>, text: &str) -> (egui::Pos2, egui::Vec2, usize, f32) {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => Some((
+                shape.pos,
+                shape.galley.size(),
+                shape.galley.rows.len(),
+                clipped.clip_rect.right(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no painted galley carries {text:?}"))
+}
+
+/// The advance of one space in the row's body font. The row takes it from a
+/// laid-out `" "` galley and this takes it from the font tables, so the two
+/// must keep agreeing; the gap asserts tolerate 0.5 px between them.
+fn one_space(h: &Harness<'_, AppState>) -> f32 {
+    let font = egui::FontId::new(
+        turbogit_ui::theme::TYPE_BODY,
+        egui::FontFamily::Proportional,
+    );
+    h.ctx.fonts_mut(|f| f.glyph_width(&font, ' '))
+}
+
+const DEEP_DIR: &str = "a_very_long_package_name/src/ui/widgets/panels/";
+
+/// Seeds `a_very_long_package_name/src/ui/widgets/panels/file.rs`, whose
+/// directory is wider than the file row's whole text band.
+fn deep_path_repo(parent: &Path, name: &str) -> PathBuf {
+    let repo = temp_repo(parent, name);
+    let deep = format!("{DEEP_DIR}file.rs");
+    let path = repo.path.join(&deep);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "tracked\n").unwrap();
+    git(&repo.path, &["add", "-A"]);
+    git(&repo.path, &["commit", "-q", "-m", "track deep"]);
+    std::fs::write(&path, "modified\n").unwrap();
+    repo.path
+}
+
+#[test]
+fn a_deep_directory_rides_the_name_and_crops_at_the_row_edge() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = deep_path_repo(parent.path(), "crop-deep-path");
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+
+    let row_right = h.get_by_label("file.rs").rect().right();
+    let (name_pos, name_size, name_lines) = galley_metrics(&h, "file.rs");
+    assert_eq!(name_lines, 1, "a short name must stay on one line");
+
+    let (loc_pos, loc_size, _, clip_right) = galley_fit(&h, DEEP_DIR);
+    assert!(
+        loc_pos.x >= name_pos.x + name_size.x,
+        "the directory must never start left of the name it belongs to \
+         (name ends at {:.1}, directory starts at {:.1})",
+        name_pos.x + name_size.x,
+        loc_pos.x,
+    );
+    let gap = loc_pos.x - (name_pos.x + name_size.x);
+    assert!(
+        (gap - one_space(&h)).abs() < 0.5,
+        "the directory must sit exactly one white space right of the name, \
+         got a {gap:.1} px gap against a {:.1} px space",
+        one_space(&h),
+    );
+    assert!(
+        (loc_pos.y - name_pos.y).abs() < 1.0,
+        "the directory must ride the name's line, not fall below it \
+         (name y={:.1}, directory y={:.1})",
+        name_pos.y,
+        loc_pos.y,
+    );
+    assert!(
+        loc_pos.x + loc_size.x > clip_right,
+        "this fixture must actually overflow: the directory is {:.1} px wide \
+         from x={:.1}, past the crop at {:.1}",
+        loc_size.x,
+        loc_pos.x,
+        clip_right,
+    );
+    assert!(
+        clip_right <= row_right,
+        "the overflow must be cropped at or inside the row's right edge \
+         ({clip_right:.1} against {row_right:.1}) — nothing may paint \
+         outside the row",
+    );
+
+    h.get_by_label("file.rs").click();
+    h.run();
+    assert_eq!(
+        selected_row_height(&h, name_pos),
+        turbogit_ui::theme::FILE_ROW_HEIGHT,
+        "a cropped directory must not grow the row onto a second line",
+    );
+}
+
+#[test]
+fn a_cropped_directory_is_readable_to_the_right_on_hover() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = deep_path_repo(parent.path(), "hover-deep-path");
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+
+    let row = h.get_by_label("file.rs").rect();
+    h.hover_at(row.center());
+    h.run();
+
+    let full = format!("{DEEP_DIR}file.rs");
+    let painted: Vec<egui::Pos2> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text == full)
+        .map(|g| g.pos)
+        .collect();
+    assert!(
+        painted.iter().any(|p| p.x > row.right()),
+        "hovering a cropped row must show the whole path to the right of the \
+         row (row ends at {:.1}), got {painted:?}",
+        row.right(),
+    );
+
+    h.hover_at(egui::pos2(1100.0, 700.0));
+    h.run();
+    assert_not_painted(&h, &full);
+
+    h.get_by_label("file.rs").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(change(&repo, &full)),
+        "the row body must still select: the reveal hangs off the body's \
+         hover, not off an extra click sense",
+    );
+}
+
+#[test]
+fn a_renamed_file_keeps_the_directory_between_the_name_and_the_old_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "rename-order");
+    std::fs::create_dir_all(repo.path.join("src")).unwrap();
+    std::fs::write(repo.path.join("src/a.rs"), "tracked\n").unwrap();
+    git(&repo.path, &["add", "-A"]);
+    git(&repo.path, &["commit", "-q", "-m", "track a"]);
+    git(&repo.path, &["mv", "src/a.rs", "src/b.rs"]);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let row_right = h.get_by_label("b.rs").rect().right();
+    let (name_pos, name_size, name_lines) = galley_metrics(&h, "b.rs");
+    assert_eq!(name_lines, 1, "a short renamed-to name must not wrap");
+
+    let (loc_pos, loc_size, _, clip_right) = galley_fit(&h, "src/");
+    let gap = loc_pos.x - (name_pos.x + name_size.x);
+    assert!(
+        (gap - one_space(&h)).abs() < 0.5,
+        "the directory must hug the name, not the old path: gap {gap:.1} px \
+         against a {:.1} px space",
+        one_space(&h),
+    );
+    assert!(
+        loc_pos.x + loc_size.x <= clip_right,
+        "this fixture must fit whole, so nothing here is cropped",
+    );
+
+    let (orig_pos, orig_size, orig_lines, _) = galley_fit(&h, "src/a.rs");
+    assert_eq!(orig_lines, 1, "an old path that fits stays inline");
+    assert!(
+        orig_pos.x >= loc_pos.x + loc_size.x,
+        "the old path must follow the directory, never overlap it \
+         (directory ends at {:.1}, old path starts at {:.1})",
+        loc_pos.x + loc_size.x,
+        orig_pos.x,
+    );
+    assert!(
+        orig_pos.x + orig_size.x <= row_right,
+        "the inline rename must stay inside the row (it runs to {:.1}, the \
+         row ends at {:.1})",
+        orig_pos.x + orig_size.x,
+        row_right,
+    );
+    assert!(
+        (orig_pos.y - name_pos.y).abs() < 1.0,
+        "name, directory and old path share the one line the operator asked \
+         for (name y={:.1}, old path y={:.1})",
+        name_pos.y,
+        orig_pos.y,
+    );
+
+    h.get_by_label("b.rs").click();
+    h.run();
+    assert_eq!(
+        selected_row_height(&h, name_pos),
+        turbogit_ui::theme::FILE_ROW_HEIGHT,
+        "an inline rename with a directory must not grow a second line",
+    );
+}
+
+#[test]
+fn a_directory_that_fits_shows_no_hover() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "hover-fits");
+    std::fs::create_dir_all(repo.path.join("src")).unwrap();
+    std::fs::write(repo.path.join("src/main.rs"), "tracked\n").unwrap();
+    git(&repo.path, &["add", "-A"]);
+    git(&repo.path, &["commit", "-q", "-m", "track main"]);
+    std::fs::write(repo.path.join("src/main.rs"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let row = h.get_by_label("main.rs").rect();
+    let (loc_pos, loc_size, _, clip_right) = galley_fit(&h, "src/");
+    assert!(
+        loc_pos.x + loc_size.x <= clip_right,
+        "the fixture must actually fit: src/ runs {:.1}..{:.1} inside {:.1}",
+        loc_pos.x,
+        loc_pos.x + loc_size.x,
+        clip_right,
+    );
+
+    let before: Vec<(String, egui::Pos2)> = painted_galleys(&h)
+        .into_iter()
+        .map(|g| (g.text, g.pos))
+        .collect();
+    h.hover_at(row.center());
+    h.run();
+    let strays: Vec<String> = painted_galleys(&h)
+        .into_iter()
+        .map(|g| (g.text, g.pos))
+        .filter(|painted| !before.contains(painted))
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "a row that shows everything must not open a hover surface, got {strays:?}"
     );
 }
 
