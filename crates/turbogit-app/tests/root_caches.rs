@@ -9,8 +9,7 @@ use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
 use turbogit_app::shell_writes::tag as tag_writes;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{
-    Commit, LogOpts, RecentCheckout, RefState, RootId, Signature, SignatureState, Stash, TagSpec,
-    VcsSettings,
+    Commit, LogOpts, RefState, RootId, Signature, SignatureState, Stash, TagSpec, VcsSettings,
 };
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -256,15 +255,8 @@ fn a_stash_listing_is_invalidated_with_its_own_root_and_no_further() {
     );
 }
 
-fn recent(name: &str) -> RecentCheckout {
-    RecentCheckout {
-        name: name.to_string(),
-        at: 0,
-    }
-}
-
 #[test]
-fn a_tag_list_and_checkout_history_are_invalidated_with_their_own_root_and_no_further() {
+fn a_tag_list_is_invalidated_with_its_own_root_and_no_further() {
     let p = two_root_project();
     let alpha_id = RootId(p.alpha.clone().into());
     let beta_id = RootId(p.beta.clone().into());
@@ -274,16 +266,10 @@ fn a_tag_list_and_checkout_history_are_invalidated_with_their_own_root_and_no_fu
         alpha_id.clone(),
         vec![("alpha-v1".to_string(), RefState::Default)],
     );
-    state
-        .caches
-        .store_recents(alpha_id.clone(), vec![recent("alpha-move")]);
     state.caches.store_tags(
         beta_id.clone(),
         vec![("beta-v1".to_string(), RefState::Default)],
     );
-    state
-        .caches
-        .store_recents(beta_id.clone(), vec![recent("beta-move")]);
 
     state
         .tx
@@ -297,34 +283,23 @@ fn a_tag_list_and_checkout_history_are_invalidated_with_their_own_root_and_no_fu
     state.drain_events();
 
     assert!(
-        state.caches.tags(&alpha_id).is_none() && state.caches.recents(&alpha_id).is_none(),
-        "the root the op named loses its tag list and its checkout history"
+        state.caches.tags(&alpha_id).is_none(),
+        "the root the op named loses its tag list"
     );
     assert_eq!(
         state.caches.tags(&beta_id).map(|t| t.len()),
         Some(1),
         "and the root the op never named keeps its own tag list"
     );
-    assert_eq!(
-        state.caches.recents(&beta_id).map(|r| r.len()),
-        Some(1),
-        "…and its own checkout history"
-    );
 
     state.caches.store_tags(
         alpha_id.clone(),
         vec![("alpha-v1".to_string(), RefState::Default)],
     );
-    state
-        .caches
-        .store_recents(alpha_id.clone(), vec![recent("alpha-move")]);
     state.caches.store_tags(
         beta_id.clone(),
         vec![("beta-v1".to_string(), RefState::Default)],
     );
-    state
-        .caches
-        .store_recents(beta_id.clone(), vec![recent("beta-move")]);
     state
         .tx
         .send(AppEvent::OpCompleted {
@@ -336,11 +311,8 @@ fn a_tag_list_and_checkout_history_are_invalidated_with_their_own_root_and_no_fu
         .expect("send OpCompleted");
     state.drain_events();
     assert!(
-        state.caches.tags(&alpha_id).is_none()
-            && state.caches.tags(&beta_id).is_none()
-            && state.caches.recents(&alpha_id).is_none()
-            && state.caches.recents(&beta_id).is_none(),
-        "every root's tag list and checkout history go with a project-wide invalidation"
+        state.caches.tags(&alpha_id).is_none() && state.caches.tags(&beta_id).is_none(),
+        "every root's tag list goes with a project-wide invalidation"
     );
 }
 

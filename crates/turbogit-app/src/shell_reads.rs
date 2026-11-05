@@ -88,14 +88,6 @@ impl AppState {
         }
     }
 
-    pub fn warm_branch_recents(&mut self) {
-        let ids: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
-        let exec = self.executor.clone();
-        for id in ids {
-            self.caches.ensure_recents(exec.as_ref(), &id);
-        }
-    }
-
     /// the delete confirmation's warning. `None` when git could not say, which
     /// the caller treats as "do not warn".
     pub fn is_ancestor(&self, root: &RootId, ref_name: &str, branch: &str) -> Option<bool> {

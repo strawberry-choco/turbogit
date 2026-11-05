@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
-    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, Patch, RecentCheckout, RefState,
-    RootId, Stash, Submodule, Worktree, forward_slash_path,
+    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, Patch, RefState, RootId, Stash,
+    Submodule, Worktree, forward_slash_path,
 };
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::hunk_stats::{self, FileHunks};
@@ -83,7 +83,6 @@ pub struct RootCaches {
     submodule_cache: HashMap<RootId, Vec<Submodule>>,
     stash_cache: HashMap<RootId, Vec<Stash>>,
     tag_cache: HashMap<RootId, Vec<(String, RefState)>>,
-    recent_cache: HashMap<RootId, Vec<RecentCheckout>>,
     hunk_stats: HashMap<RootId, RootHunkStats>,
     revision: u64,
 }
@@ -349,14 +348,6 @@ impl RootCaches {
         &self.tag_cache
     }
 
-    pub fn recents(&self, root: &RootId) -> Option<&[RecentCheckout]> {
-        self.recent_cache.get(root).map(|v| v.as_slice())
-    }
-
-    pub fn recents_by_root(&self) -> &HashMap<RootId, Vec<RecentCheckout>> {
-        &self.recent_cache
-    }
-
     pub fn hunk_stats(&self, root: &RootId) -> Option<&RootHunkStats> {
         self.hunk_stats.get(root)
     }
@@ -472,14 +463,6 @@ impl RootCaches {
             .map(|name| (name, RefState::Default))
             .collect();
         self.tag_cache.insert(root.clone(), tags);
-    }
-
-    pub fn ensure_recents(&mut self, exec: &dyn GitExecutor, root: &RootId) {
-        if self.recent_cache.contains_key(root) {
-            return;
-        }
-        let history = exec.recent_checkouts(&root.0).unwrap_or_default();
-        self.recent_cache.insert(root.clone(), history);
     }
 
     pub fn ensure_log(
@@ -694,10 +677,6 @@ impl RootCaches {
         self.tag_cache.insert(root, tags);
     }
 
-    pub fn store_recents(&mut self, root: RootId, recents: Vec<RecentCheckout>) {
-        self.recent_cache.insert(root, recents);
-    }
-
     pub fn invalidate(&mut self, affected: &Affected) {
         self.bump();
         match affected {
@@ -714,7 +693,6 @@ impl RootCaches {
                 self.submodule_cache.remove(root);
                 self.stash_cache.remove(root);
                 self.tag_cache.remove(root);
-                self.recent_cache.remove(root);
                 self.hunk_stats.remove(root);
                 self.log_failed.retain(|read, _| read.root() != root);
                 self.diff_failed.retain(|(r, _), _| r != root);
@@ -744,7 +722,6 @@ impl RootCaches {
         self.submodule_cache.clear();
         self.stash_cache.clear();
         self.tag_cache.clear();
-        self.recent_cache.clear();
         self.hunk_stats.clear();
         self.log_failed.clear();
         self.diff_failed.clear();
@@ -763,7 +740,6 @@ impl RootCaches {
             && self.submodule_cache.is_empty()
             && self.stash_cache.is_empty()
             && self.tag_cache.is_empty()
-            && self.recent_cache.is_empty()
             && self.hunk_stats.is_empty()
             && self.log_failed.is_empty()
             && self.diff_failed.is_empty()

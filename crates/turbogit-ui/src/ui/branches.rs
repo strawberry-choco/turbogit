@@ -88,7 +88,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         return;
     }
     branch_tree_view::warm_tags(state);
-    state.warm_branch_recents();
     let view = branches_tree::build_branch_view_with(
         &state.multi.roots,
         state.caches.tags_by_root(),
