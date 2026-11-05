@@ -274,12 +274,6 @@ impl BranchTip {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecentCheckout {
-    pub name: String,
-    pub at: i64,
-}
-
 /// The three conflict markers this parser understands and both painters draw.
 /// They are git wire-format facts with no service policy in them, so they live
 /// in the leaf crate every other layer already sees: `services` parses them,
