@@ -51,33 +51,6 @@ pub const REWRITE_BACKUP_REF: &str = "refs/turbogit/preflight-backup";
 const EXCLUDE_HEADING: &str =
     "# Added by TurboGit — the app's own project metadata (safe to delete)\n";
 
-/// Parse `git reflog --date=unix --grep-reflog "checkout:"` output into
-/// recent checkouts, newest first (the reflog's own order, kept as-is, the
-/// caller merges roots over it). Line shape:
-/// `<sha> HEAD@{<unix>}: checkout: moving from <from> to <to>`. The message
-/// may itself contain `": "`, so the selector ends at the FIRST occurrence,
-/// and branch names cannot contain spaces, so the moved-to ref is everything
-/// after the LAST `" to "`. A checkout of a tag or a sha parses to that name
-/// and is dropped later, when the caller joins against the branch snapshot.
-fn parse_reflog_checkouts(out: &str) -> Vec<RecentCheckout> {
-    out.lines()
-        .filter_map(|line| {
-            let (selector, message) = line.split_once(": ")?;
-            if !message.starts_with("checkout:") {
-                return None;
-            }
-            let at: i64 = selector
-                .split("@{")
-                .nth(1)?
-                .strip_suffix('}')?
-                .parse()
-                .ok()?;
-            let name = message.rsplit_once(" to ")?.1.to_string();
-            (!name.is_empty()).then_some(RecentCheckout { name, at })
-        })
-        .collect()
-}
-
 impl CliExecutor {
     /// Whether `root` has a commit for HEAD to resolve to. `--quiet` is what
     /// makes this a question rather than a guess: it exits 1 with **both**
@@ -730,38 +703,6 @@ impl GitExecutor for CliExecutor {
             });
         }
         Ok(result)
-    }
-
-    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        // The reference's own invocation reads
-        // `reflog --max-count 50 --grep-reflog "checkout: --"`; as a regex
-        // that quoted pattern matches no reflog message a checkout writes
-        // ("checkout: moving from A to B"), so the capture is treated as the
-        // family prefix and the pattern is `checkout:`, which matches exactly
-        // the checkout entries and nothing else (rebase/reset entries say
-        // "rebase (start): checkout …" / "reset: moving to …", neither of
-        // which contains it). `--date=unix` is the one addition: the selector
-        // then carries the entry's unix timestamp, which is what lets recents
-        // be merged across roots by recency.
-        let args = [
-            "reflog",
-            "--max-count",
-            "50",
-            "--date=unix",
-            "--grep-reflog",
-            "checkout:",
-        ];
-        match self.run(root, &args) {
-            Ok((out, _, _)) => Ok(parse_reflog_checkouts(&out)),
-            Err(TgError::Cli { code, stderr }) => {
-                if stderr.contains("does not have any commits yet") {
-                    Ok(Vec::new())
-                } else {
-                    Err(TgError::Cli { code, stderr })
-                }
-            }
-            Err(e) => Err(e),
-        }
     }
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {

@@ -65,11 +65,6 @@ pub trait GitExecutor: Send + Sync {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 
-    /// Branches HEAD's reflog says were checked out in `root`, newest first,
-    /// with no reflog yet answers empty, absence is a normal answer, not an
-    /// error.
-    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>>;
-
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>>;
 
     /// Returns `(ahead, behind)`.

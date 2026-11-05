@@ -17,8 +17,7 @@ use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
     BlameLine, Branch, Change, ChangeQuestion, ChangeStats, Commit, CommitId, CommitRef,
     ConflictVersions, DiffOpts, LogOpts, MergeOpts, Patch, PatchOrigin, RebaseOpts,
-    RebasePlanEntry, RecentCheckout, Remote, RootStatus, Stash, Submodule, TagSpec, Upstream,
-    Worktree,
+    RebasePlanEntry, Remote, RootStatus, Stash, Submodule, TagSpec, Upstream, Worktree,
 };
 use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
@@ -226,10 +225,6 @@ impl GitExecutor for RecordingExecutor {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         self.inner.branches(root)
-    }
-
-    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        self.inner.recent_checkouts(root)
     }
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {

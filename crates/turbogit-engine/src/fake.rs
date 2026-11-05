@@ -57,7 +57,6 @@ pub struct FakeExecutor {
     pub revisions: HashMap<String, CommitId>,
     pub upstreams: HashMap<String, Upstream>,
     pub branches: HashMap<PathBuf, Vec<Branch>>,
-    pub recents: HashMap<PathBuf, Vec<RecentCheckout>>,
     pub current_branch: HashMap<PathBuf, Option<String>>,
     pub remotes: HashMap<PathBuf, Vec<Remote>>,
     pub status: HashMap<PathBuf, RootStatus>,
@@ -89,7 +88,6 @@ impl FakeExecutor {
             revisions: HashMap::new(),
             upstreams: HashMap::new(),
             branches: HashMap::new(),
-            recents: HashMap::new(),
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
             status: HashMap::new(),
@@ -144,10 +142,6 @@ impl GitExecutor for FakeExecutor {
             out.push(cur);
         }
         Ok(out)
-    }
-
-    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        Ok(self.recents.get(root).cloned().unwrap_or_default())
     }
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {
