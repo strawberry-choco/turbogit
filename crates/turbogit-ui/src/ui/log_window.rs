@@ -133,7 +133,7 @@ fn root_index_of(state: &AppState, root: &RootId) -> usize {
 }
 
 fn visible_root_ids(state: &AppState) -> Vec<RootId> {
-    turbogit_app::log_display::visible_roots(state)
+    turbogit_app::log_display::listing_roots(state)
 }
 
 fn ensure_log_data(state: &mut AppState) {
@@ -148,6 +148,12 @@ fn ensure_log_data(state: &mut AppState) {
     ) {
         state.ensure_files(&root, &cid);
         state.fetch_file_stats(root, cid);
+    }
+    if let Some(key) = state.log_filter_key() {
+        for id in visible_root_ids(state) {
+            state.ensure_log(&id, LogScope::Combined(key.clone()));
+        }
+        return;
     }
     if let (Some(root), Some(path)) = (state.selected_root.clone(), state.ui.log_path_scope.clone())
     {
@@ -188,6 +194,12 @@ impl ListedWindow {
 }
 
 fn listed_windows(state: &AppState) -> Vec<ListedWindow> {
+    if let Some(key) = state.log_filter_key() {
+        return visible_root_ids(state)
+            .into_iter()
+            .map(|root| ListedWindow::Scoped(root, LogScope::Combined(key.clone())))
+            .collect();
+    }
     let mut windows = match (&state.ui.log_ref_scope, &state.ui.log_path_scope) {
         (Some((root, ref_name)), _) => {
             vec![ListedWindow::Scoped(
@@ -215,6 +227,12 @@ fn listed_windows(state: &AppState) -> Vec<ListedWindow> {
 }
 
 fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a Commit> {
+    if let Some(key) = state.log_filter_key() {
+        return state
+            .caches
+            .combined_log(root, &key)
+            .and_then(|commits| commits.iter().find(|c| c.id == cid));
+    }
     if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
         && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
     {
@@ -662,23 +680,9 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     let may_have_more = windows.iter().any(|window| window.has_more(state));
     let mut load_more = false;
 
-    if multi_root {
-        ui.horizontal_wrapped(|ui| {
-            for root in &state.multi.roots {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
-                ui.painter().rect_filled(
-                    rect,
-                    CornerRadius::same(crate::theme::MARK_RADIUS),
-                    root_color(root_index_of(state, &root.id)),
-                );
-                ui.label(
-                    RichText::new(root.id.name())
-                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
-                        .color(Palette::INK_3),
-                );
-            }
-        });
-    }
+    ui.horizontal_wrapped(|ui| {
+        crate::ui::filter_bar(ui, state);
+    });
 
     header_cells(ui, multi_root);
 

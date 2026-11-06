@@ -737,6 +737,11 @@ pub struct LogOpts {
     pub branch: Option<String>,
     pub path: Option<PathBuf>,
     pub pickaxe: Option<String>,
+    pub author: Option<String>,
+    /// Unix seconds, inclusive. Git's `--since=@{n}` understands this form.
+    pub since: Option<i64>,
+    /// Unix seconds, inclusive.
+    pub until: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

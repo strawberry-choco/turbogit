@@ -4,8 +4,8 @@ use crate::granular;
 use crate::new_branch::NewBranchSession;
 use crate::operation::Operation;
 use crate::root_caches::{
-    Affected, LogBatchSettle, LogRead, LogScope, RootCaches, log_batch_plan as window_batch_plan,
-    scoped_batch_plan,
+    Affected, LogBatchSettle, LogFilterKey, LogRead, LogScope, RootCaches,
+    log_batch_plan as window_batch_plan, scoped_batch_plan,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::{HashMap, HashSet};
@@ -767,6 +767,13 @@ pub struct UiState {
     pub log_file_filter: String,
     pub log_path_scope: Option<PathBuf>,
     pub log_ref_scope: Option<(RootId, String)>,
+    pub log_author_filter: Option<String>,
+    pub log_date_filter: crate::log_filters::DateFilter,
+    pub log_author_input: String,
+    pub log_branch_input: String,
+    pub log_path_input: String,
+    pub log_date_after: String,
+    pub log_date_before: String,
     pub selected_commit: Option<CommitId>,
     pub log_scroll_to: Option<CommitId>,
     pub log_hidden_jump: Option<(RootId, CommitId)>,
@@ -1292,6 +1299,42 @@ impl AppState {
         }
     }
 
+    /// Every dimension the Commits pane can filter on, in one value. `None`
+    /// leaves the legacy single-dimension read path alone, so a workspace that
+    /// never opens the new dropdowns reads git exactly as it did before.
+    pub fn log_filter_key(&self) -> Option<LogFilterKey> {
+        let (since, until) = self.ui.log_date_filter.bounds();
+        let author = self
+            .ui
+            .log_author_filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let branch = self.ui.log_ref_scope.as_ref().map(|(_, name)| name.clone());
+        let path = self.ui.log_path_scope.clone();
+        let query = self.ui.log_filter.trim();
+        let pickaxe = (!query.is_empty()).then(|| query.to_owned());
+        let structured = author.is_some() || since.is_some() || until.is_some();
+        let legacy = [branch.is_some(), path.is_some(), pickaxe.is_some()]
+            .into_iter()
+            .filter(|on| *on)
+            .count();
+        // One legacy scope still owns its own read path. Two or more must be
+        // read together, or the older ref-wins-over-path match drops a filter.
+        if !structured && legacy < 2 {
+            return None;
+        }
+        Some(LogFilterKey {
+            branch,
+            path,
+            pickaxe,
+            author,
+            since,
+            until,
+        })
+    }
+
     pub fn reset_log_filters(&mut self) {
         let query = self.ui.log_filter.trim().to_owned();
         let mut roots = crate::log_display::visible_roots(self);
@@ -1319,6 +1362,14 @@ impl AppState {
         self.ui.log_filter.clear();
         self.ui.log_path_scope = None;
         self.ui.log_ref_scope = None;
+        self.ui.log_root_filter = None;
+        self.ui.log_author_filter = None;
+        self.ui.log_date_filter = crate::log_filters::DateFilter::All;
+        self.ui.log_author_input.clear();
+        self.ui.log_branch_input.clear();
+        self.ui.log_path_input.clear();
+        self.ui.log_date_after.clear();
+        self.ui.log_date_before.clear();
     }
 
     fn scoped_log_batch_plan(&self, root: &RootId, scope: &LogScope) -> (LogOpts, LogBatchMode) {

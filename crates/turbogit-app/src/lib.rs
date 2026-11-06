@@ -24,6 +24,7 @@ pub mod fetch_admission;
 pub mod granular;
 pub mod keyed_read;
 pub mod log_display;
+pub mod log_filters;
 pub mod log_states;
 pub mod new_branch;
 pub mod operation;

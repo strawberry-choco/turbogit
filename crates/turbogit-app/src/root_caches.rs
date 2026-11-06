@@ -16,11 +16,25 @@ pub enum Affected {
     Root(RootId),
 }
 
+/// Every dimension the Commits pane can filter on, in one value. The log
+/// windows are keyed by it, so a change to any dimension asks git again instead
+/// of reusing a window read under a different set of filters.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct LogFilterKey {
+    pub branch: Option<String>,
+    pub path: Option<PathBuf>,
+    pub pickaxe: Option<String>,
+    pub author: Option<String>,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LogScope {
     Path(PathBuf),
     Ref(String),
     Search(String),
+    Combined(LogFilterKey),
 }
 
 impl LogScope {
@@ -34,6 +48,14 @@ impl LogScope {
             LogScope::Path(p) => opts.path = Some(p.clone()),
             LogScope::Ref(r) => opts.branch = Some(r.clone()),
             LogScope::Search(q) => opts.pickaxe = Some(q.clone()),
+            LogScope::Combined(key) => {
+                opts.branch = key.branch.clone();
+                opts.path = key.path.clone();
+                opts.pickaxe = key.pickaxe.clone();
+                opts.author = key.author.clone();
+                opts.since = key.since;
+                opts.until = key.until;
+            }
         }
         opts
     }
@@ -76,6 +98,7 @@ pub struct RootCaches {
     log_path_cache: HashMap<(RootId, PathBuf), LogWindow>,
     log_ref_cache: HashMap<(RootId, String), LogWindow>,
     search_cache: HashMap<(RootId, String), LogWindow>,
+    combined_cache: HashMap<(RootId, LogFilterKey), LogWindow>,
     log_failed: HashMap<LogRead, String>,
     diff_failed: HashMap<(RootId, StatsView), String>,
     ahead_behind: HashMap<RootId, (usize, usize)>,
@@ -163,7 +186,8 @@ pub(crate) fn scoped_batch_plan(
 ) -> (usize, Option<usize>, LogBatchMode) {
     match scope {
         LogScope::Search(_) => search_batch_plan(have),
-        LogScope::Path(_) | LogScope::Ref(_) => log_batch_plan(have),
+        LogScope::Combined(key) if key.pickaxe.is_some() => search_batch_plan(have),
+        LogScope::Path(_) | LogScope::Ref(_) | LogScope::Combined(_) => log_batch_plan(have),
     }
 }
 
@@ -175,6 +199,9 @@ fn batch_within(
 ) -> Vec<Commit> {
     match (scope, mode) {
         (LogScope::Search(_), LogBatchMode::Append { .. }) => {
+            page.into_iter().skip(held.saturating_sub(1)).collect()
+        }
+        (LogScope::Combined(key), LogBatchMode::Append { .. }) if key.pickaxe.is_some() => {
             page.into_iter().skip(held.saturating_sub(1)).collect()
         }
         _ => page,
@@ -269,7 +296,13 @@ impl RootCaches {
             LogScope::Path(target) => self.log_path_cache.get(&(root.clone(), target.clone())),
             LogScope::Ref(ref_name) => self.log_ref_cache.get(&(root.clone(), ref_name.clone())),
             LogScope::Search(query) => self.search_cache.get(&(root.clone(), query.clone())),
+            LogScope::Combined(key) => self.combined_cache.get(&(root.clone(), key.clone())),
         }
+    }
+
+    pub fn combined_log(&self, root: &RootId, key: &LogFilterKey) -> Option<&[Commit]> {
+        self.scope_window(root, &LogScope::Combined(key.clone()))
+            .map(|w| w.commits.as_slice())
     }
 
     pub fn path_log(&self, root: &RootId, path: &Path) -> Option<&[Commit]> {
@@ -415,6 +448,9 @@ impl RootCaches {
                 LogScope::Search(query) => {
                     self.search_cache.remove(&(root.clone(), query.clone()));
                 }
+                LogScope::Combined(key) => {
+                    self.combined_cache.remove(&(root.clone(), key.clone()));
+                }
             },
             LogRead::Changes(root, cid) => {
                 self.files_cache.remove(&(root.clone(), cid.clone()));
@@ -525,6 +561,13 @@ impl RootCaches {
             LogScope::Search(query) => settle_scoped_window(
                 &mut self.search_cache,
                 &(root.clone(), query.clone()),
+                scope,
+                mode,
+                page,
+            ),
+            LogScope::Combined(key) => settle_scoped_window(
+                &mut self.combined_cache,
+                &(root.clone(), key.clone()),
                 scope,
                 mode,
                 page,
@@ -689,6 +732,7 @@ impl RootCaches {
                 self.log_path_cache.retain(|(r, _), _| r != root);
                 self.log_ref_cache.retain(|(r, _), _| r != root);
                 self.search_cache.retain(|(r, _), _| r != root);
+                self.combined_cache.retain(|(r, _), _| r != root);
                 self.ahead_behind.remove(root);
                 self.submodule_cache.remove(root);
                 self.stash_cache.remove(root);
@@ -717,6 +761,7 @@ impl RootCaches {
         self.log_path_cache.clear();
         self.log_ref_cache.clear();
         self.search_cache.clear();
+        self.combined_cache.clear();
         self.ahead_behind.clear();
         self.worktree_cache.clear();
         self.submodule_cache.clear();
@@ -735,6 +780,7 @@ impl RootCaches {
             && self.log_path_cache.is_empty()
             && self.log_ref_cache.is_empty()
             && self.search_cache.is_empty()
+            && self.combined_cache.is_empty()
             && self.ahead_behind.is_empty()
             && self.worktree_cache.is_empty()
             && self.submodule_cache.is_empty()
@@ -854,5 +900,24 @@ mod tests {
             assert!(caches.revision() > last);
             last = caches.revision();
         }
+    }
+
+    #[test]
+    fn a_composite_scope_asks_git_for_every_active_dimension() {
+        let key = LogFilterKey {
+            branch: Some("main".to_owned()),
+            path: Some(PathBuf::from("src")),
+            pickaxe: Some("needle".to_owned()),
+            author: Some("alice".to_owned()),
+            since: Some(10),
+            until: Some(20),
+        };
+        let opts = LogScope::Combined(key.clone()).batch_opts(50, Some(5));
+        assert_eq!(opts.branch.as_deref(), Some("main"));
+        assert_eq!(opts.path, key.path);
+        assert_eq!(opts.pickaxe.as_deref(), Some("needle"));
+        assert_eq!(opts.author.as_deref(), Some("alice"));
+        assert_eq!((opts.since, opts.until), (Some(10), Some(20)));
+        assert_eq!((opts.max_count, opts.skip), (Some(50), Some(5)));
     }
 }

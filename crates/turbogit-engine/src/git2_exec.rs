@@ -180,6 +180,10 @@ impl GitExecutor for Git2Executor {
         {
             return self.cli.log(root, opts);
         }
+        // A revwalk cannot prune by author or date before max_count; delegate the composite.
+        if opts.author.is_some() || opts.since.is_some() || opts.until.is_some() {
+            return self.cli.log(root, opts);
+        }
         // libgit2 parity for `git log --pretty=format:%H\x00%P\x00%an\x00
         // %ae\x00%cn\x00%ce\x00%at\x00%B`. Differences worth knowing:
         // - `%B` ends in a trailing newline; the CLI parser trims trailing

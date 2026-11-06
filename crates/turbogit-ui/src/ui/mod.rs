@@ -26,6 +26,7 @@ pub mod hunk_nav;
 pub mod icons;
 pub mod interactive_rebase;
 pub(crate) mod kit;
+pub mod log_filter_bar;
 pub mod log_window;
 pub mod multi_selection;
 pub(crate) mod patch_chrome;
@@ -52,6 +53,8 @@ pub mod unshelve_dialog;
 pub mod welcome;
 pub mod widgets;
 pub mod worktrees;
+
+pub use log_filter_bar::filter_bar;
 
 use crate::theme::Palette;
 use crate::ui::components::{KitButton, kit_button};

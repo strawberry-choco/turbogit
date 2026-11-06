@@ -313,6 +313,15 @@ impl GitExecutor for CliExecutor {
         if let Some(s) = &opts.pickaxe {
             a.push(format!("-S{}", s));
         }
+        if let Some(author) = &opts.author {
+            a.push(format!("--author={author}"));
+        }
+        if let Some(since) = opts.since {
+            a.push(format!("--since=@{since}"));
+        }
+        if let Some(until) = opts.until {
+            a.push(format!("--until=@{until}"));
+        }
         if let Some(p) = &opts.path {
             a.push("--".to_string());
             a.push(p.to_string_lossy().to_string());
@@ -2179,6 +2188,7 @@ fn parse_blame(s: &str) -> Vec<BlameLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fake::FakeExecutor;
     use turbogit_domain::model::SignatureState;
 
     #[test]
@@ -2278,6 +2288,130 @@ mod tests {
                 stat("docs/b/guide.md", 6, 0),
                 stat("elsewhere/deep/two.txt", 0, 0),
             ]
+        );
+    }
+
+    fn seed_commit(id: &str, author: &str, email: &str, time: i64) -> Commit {
+        Commit {
+            id: id.to_string(),
+            parents: Vec::new(),
+            author: Signature {
+                name: author.to_string(),
+                email: email.to_string(),
+                time,
+            },
+            committer: Signature {
+                name: author.to_string(),
+                email: email.to_string(),
+                time,
+            },
+            message: String::new(),
+            time,
+            root: RootId(PathBuf::from("/repo").into()),
+            signature: SignatureState::Unsigned,
+        }
+    }
+
+    fn ids(commits: &[Commit]) -> Vec<&str> {
+        commits.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn fake_log_author_matches_name_and_email_case_insensitively() {
+        let root = PathBuf::from("/repo");
+        let mut fake = FakeExecutor::new();
+        fake.logs.insert(
+            root.clone(),
+            vec![
+                seed_commit("c1", "Alice Smith", "alice@corp.io", 100),
+                seed_commit("c2", "Bob", "ALICE@personal.dev", 200),
+                seed_commit("c3", "Carol", "carol@corp.io", 300),
+            ],
+        );
+
+        let hits = fake
+            .log(
+                &root,
+                &LogOpts {
+                    author: Some("alice".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ids(&hits),
+            vec!["c1", "c2"],
+            "a lowercase query matches a capitalized name and an uppercase email"
+        );
+    }
+
+    #[test]
+    fn fake_log_since_until_bound_an_inclusive_window() {
+        let root = PathBuf::from("/repo");
+        let mut fake = FakeExecutor::new();
+        fake.logs.insert(
+            root.clone(),
+            vec![
+                seed_commit("c1", "A", "a@x", 100),
+                seed_commit("c2", "B", "b@x", 200),
+                seed_commit("c3", "C", "c@x", 300),
+                seed_commit("c4", "D", "d@x", 400),
+            ],
+        );
+
+        let window = fake
+            .log(
+                &root,
+                &LogOpts {
+                    since: Some(200),
+                    until: Some(300),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ids(&window),
+            vec!["c2", "c3"],
+            "since and until include their boundary commits"
+        );
+    }
+
+    #[test]
+    fn fake_log_filters_before_skip_and_max_count() {
+        let root = PathBuf::from("/repo");
+        let mut fake = FakeExecutor::new();
+        fake.logs.insert(
+            root.clone(),
+            vec![
+                seed_commit("c1", "Bob", "b@x", 100),
+                seed_commit("c2", "Alice", "a2@x", 200),
+                seed_commit("c3", "Alice", "a3@x", 300),
+                seed_commit("c4", "Alice", "a4@x", 400),
+            ],
+        );
+
+        let page = fake
+            .log(
+                &root,
+                &LogOpts {
+                    author: Some("alice".to_string()),
+                    skip: Some(1),
+                    max_count: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ids(&page),
+            vec!["c3"],
+            "skip and max_count apply to the filtered listing, not the raw slice"
+        );
+
+        let unfiltered = fake.log(&root, &LogOpts::default()).unwrap();
+        assert_eq!(
+            ids(&unfiltered),
+            vec!["c1", "c2", "c3", "c4"],
+            "no new filter leaves the original listing unchanged"
         );
     }
 }

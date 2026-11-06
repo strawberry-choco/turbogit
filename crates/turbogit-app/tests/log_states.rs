@@ -277,6 +277,10 @@ fn an_empty_ref_scoped_listing_reads_as_filters_not_as_no_history() {
     );
     state.ensure_log(&root, scope.clone());
     state.ui.log_filter = "zzz-no-such-subject".to_owned();
+    let key = state
+        .log_filter_key()
+        .expect("a ref scope plus a search term is one composite read");
+    state.ensure_log(&root, LogScope::Combined(key));
     assert_eq!(
         log_states::commit_list(&state, true),
         LogState::FilteredOut,
@@ -365,6 +369,10 @@ fn an_absent_search_term_owns_no_filtering_state() {
     state.ui.log_filter = "token".to_owned();
     state.ui.log_path_scope = Some(PathBuf::from("f.txt"));
     state.ensure_log(&root, LogScope::Path(PathBuf::from("f.txt")));
+    let key = state
+        .log_filter_key()
+        .expect("a path scope plus a search term is one composite read");
+    state.ensure_log(&root, LogScope::Combined(key));
     assert_eq!(
         log_states::filtering(&state),
         LogState::Ready,

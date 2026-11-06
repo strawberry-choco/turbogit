@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use turbogit_domain::model::{Commit, CommitId, RootId};
 
-use crate::root_caches::RootCaches;
+use crate::root_caches::{LogFilterKey, RootCaches};
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub struct LogInputs {
     /// keyed by its TRIMMED form, so a difference of leading or trailing
     /// whitespace must rebuild; the filter itself matches case-insensitively.
     pub filter: String,
+    pub combined: Option<LogFilterKey>,
     pub roots: Vec<RootId>,
     pub scope_root: Option<RootId>,
 }
@@ -26,7 +27,8 @@ impl LogInputs {
             path_scope: state.ui.log_path_scope.clone(),
             ref_scope: state.ui.log_ref_scope.clone(),
             filter: state.ui.log_filter.clone(),
-            roots: visible_roots(state),
+            combined: state.log_filter_key(),
+            roots: listing_roots(state),
             scope_root: state
                 .ui
                 .log_path_scope
@@ -41,6 +43,17 @@ pub fn visible_roots(state: &AppState) -> Vec<RootId> {
         Some(id) => vec![id.clone()],
         None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
     }
+}
+
+/// Roots the active filter set reads from. A ref scope names one repository, so
+/// its branch must not be looked up in siblings that do not carry that branch.
+pub fn listing_roots(state: &AppState) -> Vec<RootId> {
+    if state.log_filter_key().is_some()
+        && let Some((root, _)) = &state.ui.log_ref_scope
+    {
+        return vec![root.clone()];
+    }
+    visible_roots(state)
 }
 
 pub type LogRow = Arc<Commit>;
@@ -174,6 +187,12 @@ fn assign_colors(commits: &[LogRow]) -> HashMap<CommitId, usize> {
 }
 
 pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<LogRow>) {
+    if let Some(key) = &inputs.combined {
+        return (
+            union(&inputs.roots, |id| caches.combined_log(id, key)),
+            Vec::new(),
+        );
+    }
     let loaded: Vec<LogRow> = if let Some((root, ref_name)) = &inputs.ref_scope {
         owned(caches.ref_log(root, ref_name).unwrap_or_default())
     } else if inputs.path_scope.is_some() {

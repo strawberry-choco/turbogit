@@ -46,7 +46,18 @@ fn the_repo_config_door_has_no_identity_to_borrow_and_reports_the_rule_it_broke(
     let (_tmp, repo) = headless_repo("unpinned");
 
     let mut cmd = Command::new("git");
-    cmd.args(["commit", "-q", "-m", "init"]).current_dir(&repo);
+    // Git 2.54 otherwise guesses an identity from the OS user and hostname, so
+    // an unconfigured repository would commit successfully and this door would
+    // look identical to the pinned one.
+    cmd.args([
+        "-c",
+        "user.useConfigOnly=true",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    ])
+    .current_dir(&repo);
     suppress_git_config(&mut cmd);
     let out = cmd.output().expect("git must be on PATH");
 

@@ -125,10 +125,18 @@ impl GitExecutor for FakeExecutor {
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
         let all = self.logs.get(root).map(Vec::as_slice).unwrap_or_default();
-        let rest = all.get(opts.skip.unwrap_or(0)..).unwrap_or_default();
+        let author = opts.author.as_deref().map(str::to_lowercase);
+        let matched = all.iter().filter(move |c| {
+            author.as_deref().is_none_or(|a| {
+                c.author.name.to_lowercase().contains(a)
+                    || c.author.email.to_lowercase().contains(a)
+            }) && opts.since.is_none_or(|s| c.time >= s)
+                && opts.until.is_none_or(|u| c.time <= u)
+        });
+        let skip = opts.skip.unwrap_or(0);
         Ok(match opts.max_count {
-            Some(n) => rest.iter().take(n).cloned().collect(),
-            None => rest.to_vec(),
+            Some(n) => matched.skip(skip).take(n).cloned().collect(),
+            None => matched.skip(skip).cloned().collect(),
         })
     }
 

@@ -135,6 +135,9 @@ pub fn named_states() -> Vec<LogState> {
 }
 
 pub fn commit_list(state: &AppState, window_empty: bool) -> LogState {
+    if let Some(key) = state.log_filter_key() {
+        return combined_list(state, &key, window_empty);
+    }
     if let Some(path) = &state.ui.log_path_scope {
         return path_scope(state, path);
     }
@@ -191,11 +194,27 @@ pub fn changed_files(state: &AppState) -> LogState {
 /// ever show commits touching the scoped path, so the pickaxe never runs there
 /// and owns no state to report ([`crate::log_display::sources`]).
 pub fn filtering(state: &AppState) -> LogState {
+    if let Some(key) = state.log_filter_key() {
+        let roots = crate::log_display::listing_roots(state);
+        for root in &roots {
+            let read = LogRead::Scope(root.clone(), LogScope::Combined(key.clone()));
+            if let Some(message) = state.caches.log_failure(&read) {
+                return LogState::FilteringFailed(message.to_owned());
+            }
+        }
+        if roots
+            .iter()
+            .all(|root| state.caches.combined_log(root, &key).is_none())
+        {
+            return LogState::LoadingFilters;
+        }
+        return LogState::Ready;
+    }
     let query = state.ui.log_filter.trim().to_owned();
     if query.is_empty() || state.ui.log_path_scope.is_some() {
         return LogState::Ready;
     }
-    let roots = crate::log_display::visible_roots(state);
+    let roots = crate::log_display::listing_roots(state);
     for root in &roots {
         if let Some(message) = state.caches.log_failure(&LogRead::Scope(
             root.clone(),
@@ -231,15 +250,45 @@ fn path_scope(state: &AppState, path: &std::path::Path) -> LogState {
     }
 }
 
+fn combined_list(
+    state: &AppState,
+    key: &crate::root_caches::LogFilterKey,
+    empty: bool,
+) -> LogState {
+    if !empty {
+        return LogState::Ready;
+    }
+    let roots = crate::log_display::listing_roots(state);
+    for root in &roots {
+        let read = LogRead::Scope(root.clone(), LogScope::Combined(key.clone()));
+        if let Some(message) = state.caches.log_failure(&read) {
+            return LogState::CommitsFailed(message.to_owned());
+        }
+    }
+    if roots
+        .iter()
+        .all(|root| state.caches.combined_log(root, key).is_none())
+    {
+        return LogState::LoadingFilters;
+    }
+    LogState::FilteredOut
+}
+
 fn listed_roots(state: &AppState) -> Vec<RootId> {
+    if state.log_filter_key().is_some() {
+        return crate::log_display::listing_roots(state);
+    }
     if let Some((root, _)) = &state.ui.log_ref_scope {
         vec![root.clone()]
     } else {
-        crate::log_display::visible_roots(state)
+        crate::log_display::listing_roots(state)
     }
 }
 
 fn listing_settled(state: &AppState, root: &RootId) -> bool {
+    if let Some(key) = state.log_filter_key() {
+        return state.caches.combined_log(root, &key).is_some();
+    }
     match &state.ui.log_ref_scope {
         Some((scope_root, name)) if scope_root == root => {
             state.caches.ref_log(root, name).is_some()
@@ -249,6 +298,9 @@ fn listing_settled(state: &AppState, root: &RootId) -> bool {
 }
 
 fn failed_listing(state: &AppState, root: &RootId) -> LogRead {
+    if let Some(key) = state.log_filter_key() {
+        return LogRead::Scope(root.clone(), LogScope::Combined(key));
+    }
     match &state.ui.log_ref_scope {
         Some((scope_root, name)) if scope_root == root => {
             LogRead::Scope(root.clone(), LogScope::Ref(name.clone()))
