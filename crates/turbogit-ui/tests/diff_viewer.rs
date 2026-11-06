@@ -2156,3 +2156,220 @@ fn a_previous_bar_keeps_its_row_and_its_lines_keep_reading_into_the_hunk_below()
          run still ends on the line the lower hunk's header follows"
     );
 }
+
+fn repo_wide_line() -> (tempfile::TempDir, PathBuf, String) {
+    let (tmp, repo) = init_repo();
+    let wide = "w".repeat(320);
+    let base: Vec<String> = (1..=12).map(|i| format!("l{i:02}")).collect();
+    write_file(&repo, "wide.txt", &format!("{}\n", base.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base;
+    edited[1] = wide.clone();
+    edited[10] = wide.clone();
+    write_file(&repo, "wide.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo, wide)
+}
+
+fn wheel_horizontally(harness: &mut Harness<'_, AppState>, at: Pos2, delta: f32) {
+    harness.hover_at(at);
+    harness.step();
+    for phase in [
+        egui::TouchPhase::Start,
+        egui::TouchPhase::Move,
+        egui::TouchPhase::End,
+    ] {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(delta, 0.0),
+            phase,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    settle(harness);
+}
+
+fn horizontal_scroll_bars(harness: &Harness<'_, AppState>) -> usize {
+    harness
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .filter(|node| {
+            let rect = node.rect();
+            rect.width() > rect.height()
+        })
+        .count()
+}
+
+fn wide_line_shape(harness: &Harness<'_, AppState>, text: &str) -> (f32, Rect, Rect) {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => {
+                let rect = Rect::from_min_size(shape.pos, shape.galley.size());
+                Some((shape.pos.x, rect, clipped.clip_rect))
+            }
+            _ => None,
+        })
+        .expect("the wide line must be painted")
+}
+
+#[test]
+fn a_long_line_scrolls_horizontally_in_the_changes_diff() {
+    let (_tmp, repo, wide) = repo_wide_line();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("wide.txt"));
+
+    let (start_x, text_rect, clip) = wide_line_shape(&h, &wide);
+    assert!(
+        text_rect.right() > clip.right() + 1.0,
+        "premise: the long line paints past the diff viewport's right edge: {text_rect:?} \
+         against {clip:?}"
+    );
+    assert!(
+        horizontal_scroll_bars(&h) >= 1,
+        "a long diff line must paint a horizontal scrollbar"
+    );
+
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, text_rect.center().y),
+        -400.0,
+    );
+
+    let (end_x, _, _) = wide_line_shape(&h, &wide);
+    assert!(
+        end_x < start_x - 1.0,
+        "a horizontal wheel must move a long diff line left so its tail can be read: \
+         {start_x} against {end_x}"
+    );
+}
+
+#[test]
+fn side_by_side_scrolls_a_long_line_horizontally() {
+    let (_tmp, repo, wide) = repo_wide_line();
+    let mut h = diff_harness(&repo);
+    h.state_mut().ui.diff_side_by_side = true;
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("wide.txt"));
+
+    let (start_x, text_rect, clip) = wide_line_shape(&h, &wide);
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, text_rect.center().y),
+        -400.0,
+    );
+
+    let (end_x, _, _) = wide_line_shape(&h, &wide);
+    assert!(
+        end_x < start_x - 1.0,
+        "side-by-side must scroll a long line left too: {start_x} against {end_x}"
+    );
+}
+
+#[test]
+fn a_short_diff_has_no_horizontal_scroll() {
+    let (_tmp, repo) = repo_mixed();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
+
+    let (start_x, text_rect, clip) = wide_line_shape(&h, "GAMMA");
+    assert_eq!(
+        horizontal_scroll_bars(&h),
+        0,
+        "a diff whose lines all fit must paint no horizontal scrollbar"
+    );
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, text_rect.center().y),
+        -400.0,
+    );
+
+    let (end_x, _, _) = wide_line_shape(&h, "GAMMA");
+    assert!(
+        (end_x - start_x).abs() < 1.0,
+        "lines that fit must not create a horizontal scrollbar: {start_x} against {end_x}"
+    );
+}
+
+#[test]
+fn hunk_navigation_keeps_the_horizontal_scroll_position() {
+    let (_tmp, repo, wide) = repo_wide_line();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("wide.txt"));
+
+    let (scrolled_x, text_rect, clip) = wide_line_shape(&h, &wide);
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, text_rect.center().y),
+        -400.0,
+    );
+    let (start_x, _, _) = wide_line_shape(&h, &wide);
+    assert!(
+        start_x < scrolled_x - 1.0,
+        "premise: the pane is scrolled to the right before hunk navigation"
+    );
+
+    h.state_mut().ui.diff_current_hunk = 1;
+    settle_after_aim(&mut h);
+
+    let (end_x, _, _) = wide_line_shape(&h, &wide);
+    assert!(
+        (end_x - start_x).abs() < 1.0,
+        "aiming a hunk must not yank the pane back horizontally: {start_x} against {end_x}"
+    );
+}
+
+#[test]
+fn widening_a_file_grows_the_cached_horizontal_scroll_range() {
+    let (_tmp, repo) = init_repo();
+    write_file(&repo, "wide.txt", "alpha\nbeta\ngamma\n");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    write_file(&repo, "wide.txt", "alpha\nBETA\ngamma\n");
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("wide.txt"));
+
+    let (short_x, short_rect, clip) = wide_line_shape(&h, "BETA");
+    assert!(
+        short_rect.right() < clip.right(),
+        "premise: the first diff's longest line fits the pane"
+    );
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, short_rect.center().y),
+        -400.0,
+    );
+    let (still_x, _, _) = wide_line_shape(&h, "BETA");
+    assert!(
+        (still_x - short_x).abs() < 1.0,
+        "premise: the first diff has no horizontal scroll"
+    );
+
+    let wide = "w".repeat(320);
+    write_file(&repo, "wide.txt", &format!("alpha\n{wide}\ngamma\n"));
+    h.state_mut()
+        .refresh(turbogit_app::root_caches::Affected::All);
+    settle(&mut h);
+
+    let (start_x, text_rect, clip) = wide_line_shape(&h, &wide);
+    assert!(
+        text_rect.right() > clip.right() + 1.0,
+        "the refreshed diff paints the long line past the viewport"
+    );
+    wheel_horizontally(
+        &mut h,
+        Pos2::new(clip.left() + 20.0, text_rect.center().y),
+        -400.0,
+    );
+    let (end_x, _, _) = wide_line_shape(&h, &wide);
+    assert!(
+        end_x < start_x - 1.0,
+        "a widened file must grow the cached horizontal scroll range: {start_x} against {end_x}"
+    );
+}

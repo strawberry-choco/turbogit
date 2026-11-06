@@ -13,6 +13,7 @@ use egui::{
     Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Response, RichText, ScrollArea,
     Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, Keyed, PaneFlavour, PaneTarget, Read};
@@ -401,11 +402,10 @@ pub fn render_diff(
     // child id, and egui's default ScrollArea salt is constant, an unnamed
     // area here would share persisted scrollbar state with the changelist
     // pane's area and flip-flop visibility (a zero-delay repaint loop).
-    ScrollArea::vertical().id_salt("diff_viewer").show_rows(
-        ui,
-        ROW_H,
-        total_rows,
-        |ui, visible| {
+    ScrollArea::both()
+        .id_salt("diff_viewer")
+        .show_rows(ui, ROW_H, total_rows, |ui, visible| {
+            let content_width = diff_content_width(ui, paint, state, model, &plan, side_by_side);
             // Hunk navigation (ADR-0014): index-based, aim the aimed hunk's
             // header slot at the viewport center instead of relying on
             // a realized widget (`resp.scroll_to_me` cannot reach rows this
@@ -420,19 +420,38 @@ pub fn render_diff(
                 let row_idx = plan.hunk_slots[state.ui.diff_current_hunk].slot(side_by_side);
                 let pitch = ROW_H + ui.spacing().item_spacing.y;
                 let y = ui.max_rect().top() + (row_idx as f32 - visible.start as f32) * pitch;
-                let rect = Rect::from_min_size(
-                    Pos2::new(ui.max_rect().left(), y),
-                    Vec2::new(ui.max_rect().width(), ROW_H),
-                );
+                // A two-axis area consumes the x target too, so an x range that
+                // moves with the content would pull the horizontal offset back
+                // to zero. The fixed viewport range leaves it alone.
+                let rect = Rect::from_x_y_ranges(ui.clip_rect().x_range(), y..=y + ROW_H);
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
             if side_by_side {
-                render_side_by_side(ui, state, model, &plan, visible, paint, status, change);
+                render_side_by_side(
+                    ui,
+                    state,
+                    model,
+                    &plan,
+                    visible,
+                    paint,
+                    status,
+                    change,
+                    content_width,
+                );
             } else {
-                render_unified(ui, state, model, &plan, visible, paint, status, change);
+                render_unified(
+                    ui,
+                    state,
+                    model,
+                    &plan,
+                    visible,
+                    paint,
+                    status,
+                    change,
+                    content_width,
+                );
             }
-        },
-    );
+        });
     ui.spacing_mut().item_spacing.y = row_gap;
 }
 
@@ -802,6 +821,81 @@ fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &Font
             .x
 }
 
+fn display_rows(model: &DiffModel) -> impl Iterator<Item = &Row> {
+    model.display.iter().flat_map(|disp| {
+        match disp {
+            DisplayRow::Full(row) => [Some(row), None],
+            DisplayRow::Pair(d, a) => [d.as_ref(), a.as_ref()],
+        }
+        .into_iter()
+        .flatten()
+    })
+}
+
+fn diff_content_width(
+    ui: &Ui,
+    paint: egui::Id,
+    state: &AppState,
+    model: &DiffModel,
+    plan: &PaintPlan,
+    side_by_side: bool,
+) -> f32 {
+    let font = mono_font();
+    let line_width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+
+    // Shaping every row is the only way to know a CJK line's width. The diff
+    // model changes far less often than the frame does, so cache the answer
+    // against a fingerprint of the text it was measured from.
+    let mut fingerprint = DefaultHasher::new();
+    font.size.to_bits().hash(&mut fingerprint);
+    for row in display_rows(model) {
+        row.text.hash(&mut fingerprint);
+    }
+    let fingerprint = fingerprint.finish();
+    let hash_id = egui::Id::new((paint, "widest_hash"));
+    let width_id = egui::Id::new((paint, "widest"));
+    let cached = ui.ctx().data_mut(|data| {
+        data.get_persisted::<u64>(hash_id)
+            .filter(|&seen| seen == fingerprint)
+            .and_then(|_| data.get_persisted::<f32>(width_id))
+    });
+    let mut widest = cached.unwrap_or_else(|| {
+        let mut widest: f32 = 0.0;
+        for row in display_rows(model) {
+            widest = widest.max(line_width(&row.text));
+        }
+        ui.ctx().data_mut(|data| {
+            data.insert_persisted(hash_id, fingerprint);
+            data.insert_persisted(width_id, widest);
+        });
+        widest
+    });
+
+    // Revealed lines come from the file, not the patch, so they are outside the
+    // fingerprint and few enough to measure on every frame.
+    for slot in plan.slots(side_by_side) {
+        if let Slot::Revealed { gap, off, .. } = *slot
+            && let Some(info) = model.gaps().gap(gap)
+            && let Ask::Have(side) = state.ui.reveals.side(&plan.key, info.file)
+            && let Some(text) = side.line(info.new_first + off)
+        {
+            widest = widest.max(line_width(text));
+        }
+    }
+    let text_span = TEXT_X + widest + ui.spacing().item_spacing.x;
+    if side_by_side {
+        // Each half must fit the longest line, so the single-cell span doubles.
+        (2.0 * text_span).max(ui.available_width())
+    } else {
+        text_span.max(ui.available_width())
+    }
+}
+
 fn pane_labels(target: &DiffTarget) -> (String, String) {
     let label = |rev: &Option<String>, working_tree_side: &str| {
         rev.clone().unwrap_or_else(|| working_tree_side.to_owned())
@@ -1092,8 +1186,8 @@ fn render_unified(
     paint: egui::Id,
     status: ChangeStatus,
     change: &Option<ChangeRef>,
+    width: f32,
 ) {
-    let width = ui.available_width();
     let painter = ui.painter().clone();
     let font = mono_font();
 
@@ -1531,8 +1625,8 @@ fn render_side_by_side(
     paint: egui::Id,
     status: ChangeStatus,
     change: &Option<ChangeRef>,
+    width: f32,
 ) {
-    let width = ui.available_width();
     let spacing = ui.style().spacing.item_spacing.x;
     let half = ((width - spacing * 2.0) / 2.0).max(120.0);
 
