@@ -304,7 +304,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             ui.separator();
 
             if widgets::compact_button(ui, "New Branch…").clicked() {
-                state.open_new_branch(NewBranchBase::Head, true, None);
+                state.open_new_branch(state.selected_root.clone(), NewBranchBase::Head, true, None);
                 state.ui.branches_popup = false;
             }
 
@@ -525,7 +525,12 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             ui.separator();
             ui.horizontal(|ui| {
                 if widgets::compact_button(ui, "+ New branch").clicked() {
-                    state.open_new_branch(NewBranchBase::Head, true, None);
+                    state.open_new_branch(
+                        state.selected_root.clone(),
+                        NewBranchBase::Head,
+                        true,
+                        None,
+                    );
                     state.ui.branches_popup = false;
                 }
                 ui.scope(|ui| {

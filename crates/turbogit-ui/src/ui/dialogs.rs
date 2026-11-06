@@ -292,7 +292,16 @@ fn create_named_branch(state: &mut AppState) {
 }
 
 fn new_branch_base_value(ui: &mut Ui, state: &AppState) {
-    let current = current_branch_name(state);
+    // The `current` badge answers a question about the session's repository, so it
+    // reads the session root the way the prefix table and the create do.
+    let current = state
+        .ui
+        .dlg
+        .new_branch
+        .root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .and_then(|r| r.current_branch.clone());
     let qualifier = state.ui.dlg.new_branch.start.qualifier(current.as_deref());
     match &state.ui.dlg.new_branch.start {
         NewBranchBase::Head => {

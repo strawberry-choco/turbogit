@@ -2074,8 +2074,16 @@ impl AppState {
     /// Open the New Branch dialog. The whole session is replaced, never patched,
     /// so an invocation cannot inherit a character or a start point from the last
     /// one. This is the only production path that sets `Dialog::NewBranch`.
-    pub fn open_new_branch(&mut self, base: NewBranchBase, checkout: bool, name: Option<String>) {
-        let root = self.selected_root.clone();
+    /// `root` is the repository the invoking action was pointed at. A row action
+    /// passes its row's root, not `AppState::selected_root`, which is the sidebar's
+    /// workspace focus and may name a different repository.
+    pub fn open_new_branch(
+        &mut self,
+        root: Option<RootId>,
+        base: NewBranchBase,
+        checkout: bool,
+        name: Option<String>,
+    ) {
         let current = root
             .as_ref()
             .and_then(|id| self.multi.by_id(id))

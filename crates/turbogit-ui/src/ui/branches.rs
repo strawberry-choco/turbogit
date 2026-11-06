@@ -266,7 +266,7 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     );
     actions_ui.add_space(PAD_STRIP);
     if kit_button(&mut actions_ui, KitButton::Primary, "New Branch").clicked() {
-        state.open_new_branch(NewBranchBase::Head, true, None);
+        state.open_new_branch(state.selected_root.clone(), NewBranchBase::Head, true, None);
     }
     if state.multi.roots.len() > 1 {
         actions_ui.add_space(PAD_STRIP);
@@ -542,7 +542,7 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
         }
         TreeEvent::CreateBranchRequested { name } => {
             let name = if name.is_empty() { None } else { Some(name) };
-            state.open_new_branch(NewBranchBase::Head, true, name);
+            state.open_new_branch(state.selected_root.clone(), NewBranchBase::Head, true, name);
         }
         TreeEvent::ClearFilterRequested => {
             state.ui.branches_filter.clear();
@@ -652,7 +652,12 @@ fn apply_branch_action(
         }
         BranchMenuAction::Checkout => checkout_branch(state, root, branch),
         BranchMenuAction::NewBranchFrom => {
-            state.open_new_branch(NewBranchBase::Branch(BranchSpec::from(branch)), true, None);
+            state.open_new_branch(
+                Some(root.clone()),
+                NewBranchBase::Branch(BranchSpec::from(branch)),
+                true,
+                None,
+            );
         }
         BranchMenuAction::CheckoutAndPull => {
             state.dispatch_pull("Checkout and pull", root.clone(), Some(branch.name.clone()));

@@ -177,7 +177,7 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     branch
         .widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "New branch for selection"));
     if branch.clicked() {
-        state.open_new_branch(NewBranchBase::Head, true, None);
+        state.open_new_branch(state.selected_root.clone(), NewBranchBase::Head, true, None);
     }
     let pull = widgets::compact_button(&mut right, "Pull");
     pull.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Pull selection"));

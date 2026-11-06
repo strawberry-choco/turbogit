@@ -889,7 +889,12 @@ fn apply_commit_action(
             });
         }
         CommitMenuAction::NewBranch => {
-            state.open_new_branch(NewBranchBase::Commit(cid.to_owned()), false, None);
+            state.open_new_branch(
+                Some(root.clone()),
+                NewBranchBase::Commit(cid.to_owned()),
+                false,
+                None,
+            );
         }
         CommitMenuAction::Checkout => {
             let dirty = state

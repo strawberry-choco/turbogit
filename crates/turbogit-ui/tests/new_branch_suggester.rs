@@ -537,6 +537,7 @@ fn a_remote_row_states_the_remote_spelling_and_the_branch_starts_there() {
         .expect("the remote-tracking release/2.4 row")
         .clone();
     harness.state_mut().open_new_branch(
+        Some(root.clone()),
         NewBranchBase::Branch(BranchSpec::from(&remote_branch)),
         true,
         None,
@@ -621,6 +622,7 @@ fn an_invocation_remembers_nothing_it_was_not_given() {
     settle_quiet(&mut harness);
     let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().open_new_branch(
+        Some(root.clone()),
         NewBranchBase::Branch(BranchSpec::remote("origin", "release/2.4")),
         false,
         None,
@@ -653,6 +655,7 @@ fn opening_again_replaces_the_session_rather_than_patching_it() {
 
     let root = first.root.clone();
     harness.state_mut().open_new_branch(
+        root.clone(),
         NewBranchBase::Branch(BranchSpec::local("zeta")),
         true,
         None,

@@ -154,7 +154,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
         }
         Action::Push => state.open_push(),
         Action::Branches => state.ui.branches_popup = true,
-        Action::NewBranch => state.open_new_branch(NewBranchBase::Head, true, None),
+        Action::NewBranch => state.open_new_branch(root, NewBranchBase::Head, true, None),
         Action::Merge => state.ui.dialog = Some(Dialog::Merge),
         Action::Rebase => state.ui.dialog = Some(Dialog::Rebase),
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),

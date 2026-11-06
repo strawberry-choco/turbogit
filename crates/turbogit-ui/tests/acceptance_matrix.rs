@@ -464,8 +464,9 @@ fn acceptance_matrix_screenshots() {
     // filter, and a page painted after it would inherit that interaction state.
     h.state_mut().ui.settings_open = false;
     settle(&mut h);
+    let root = h.state().selected_root.clone();
     h.state_mut()
-        .open_new_branch(NewBranchBase::Head, true, None);
+        .open_new_branch(root, NewBranchBase::Head, true, None);
     settle(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Branch name")
         .focus();
