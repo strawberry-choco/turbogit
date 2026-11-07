@@ -675,6 +675,41 @@ fn branches_pane_marks_remote_gone_and_tag_push_states() {
     assert_painted(&harness, "local only");
 }
 
+#[test]
+fn hovering_the_ref_pill_opens_the_ref_card() {
+    let (_tmp, project, repo) = ref_project();
+    let head = git_with_env(&repo, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_owned();
+    let mut state = AppState::for_roots(&project, &[repo]);
+    state.fetch_log(state.multi.roots[0].id.clone());
+    state.ui.tab = turbogit_app::state::Tab::Log;
+    let mut harness = harness_over(state);
+    settle_until(&mut harness, "c1");
+
+    let label = format!("{} c1", short(&head));
+    let row = harness.get_by_label(&label);
+    let at = egui::pos2(row.rect().left() + 200.0, row.rect().center().y);
+    harness.hover_at(at);
+    settle_until(&mut harness, "REFS ON THIS COMMIT");
+
+    assert_painted(&harness, "v1.0");
+    assert_painted(&harness, "v2.0");
+
+    harness.get_by_label("Filter log by tag v1.0").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.log_ref_scope,
+        Some("v1.0".to_string()),
+        "clicking a ref in the card scopes the graph to that ref"
+    );
+    assert_eq!(
+        harness.state().ui.selected_commit,
+        None,
+        "the ref scope clears the commit selection"
+    );
+}
+
 #[track_caller]
 fn click_button(harness: &mut Harness<'_, AppState>, label: &str) {
     let node = harness

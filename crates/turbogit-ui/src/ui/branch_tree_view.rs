@@ -1222,7 +1222,11 @@ fn tag_row(ui: &mut Ui, tag: &crate::ui::branches_tree::TagLeaf) {
     }
 }
 
-fn ref_state_marker(state: turbogit_domain::model::RefState) -> Option<(&'static str, Color32)> {
+/// The one tag/remote state vocabulary, shared with the log's ref card so a
+/// tag reads the same in the tags tree and in the commit popover.
+pub(crate) fn ref_state_marker(
+    state: turbogit_domain::model::RefState,
+) -> Option<(&'static str, Color32)> {
     use turbogit_domain::model::RefState;
     match state {
         RefState::Default => None,

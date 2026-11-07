@@ -24,8 +24,8 @@ use turbogit_app::state::{
 };
 use turbogit_app::sync_service;
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, DisplayName, GitRefKind, PatchOrigin,
-    RefState, Root, RootId, SignatureState, forward_slash_path,
+    BranchKind, ChangeStatus, Commit, CommitId, CommitRef, DateFormat, DisplayName, GitRefKind,
+    PatchOrigin, RefState, Root, RootId, SignatureState, forward_slash_path,
 };
 
 const BRANCHES_WIDTH: f32 = 210.0;
@@ -53,6 +53,8 @@ const COL_MESSAGE: f32 = 164.0;
 const COL_ROOTS: f32 = -GUTTER;
 const DATE_RIGHT_PAD: f32 = 8.0;
 const PILL_RESERVE: f32 = 30.0;
+const REF_CARD_WIDTH: f32 = 252.0;
+const REF_CARD_HOVER_BRIDGE: f32 = 6.0;
 
 const COMMIT_COLUMNS: [widgets::PaneColumn; 5] = [
     widgets::PaneColumn::start("ROOTS", COL_ROOTS),
@@ -683,6 +685,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
 
     let mut clicked: Option<(RootId, String)> = None;
     let mut opened: Option<(RootId, String)> = None;
+    let mut ref_filter: Option<(RootId, String)> = None;
     let viewport_height = ui.available_rect_before_wrap().height();
     let scrolled = ScrollArea::vertical().id_salt("log_commit_list").show_rows(
         ui,
@@ -731,6 +734,11 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                         if clicked.is_none() {
                             clicked = Some((c.root.clone(), c.id.clone()));
                             opened = Some((c.root.clone(), c.id.clone()));
+                        }
+                    }
+                    RowIntent::FilterRef { root, name } => {
+                        if ref_filter.is_none() {
+                            ref_filter = Some((root, name));
                         }
                     }
                 }
@@ -782,12 +790,21 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             window.load_more(state);
         }
     }
-    if let Some((root, id)) = clicked {
-        select_commit_row(state, root, id);
+    if let Some((root, name)) = ref_filter {
+        state.ui.log_ref_scope = Some(name);
+        state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root.clone()]);
+        state.selected_root = Some(root);
+        state.ui.selected_commit = None;
+        state.ui.log_selected_file = None;
         state.ui.log_commit_menu = None;
-    }
-    if let Some(target) = opened {
-        state.ui.log_commit_menu = Some(target);
+    } else {
+        if let Some((root, id)) = clicked {
+            select_commit_row(state, root, id);
+            state.ui.log_commit_menu = None;
+        }
+        if let Some(target) = opened {
+            state.ui.log_commit_menu = Some(target);
+        }
     }
 
     commit_context_menu(ui, state);
@@ -803,6 +820,7 @@ enum RowIntent {
     None,
     Select,
     SelectAndOpenMenu,
+    FilterRef { root: RootId, name: String },
 }
 
 fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitFacts<'a> {
@@ -1121,7 +1139,18 @@ fn commit_row(
 
     if !labels.is_empty() {
         let pill = paint_label_pill(&painter, mx, cy);
-        if ui.rect_contains_pointer(pill) {
+        let zone_id = ui.id().with(("log_refs_zone", &c.id));
+        let pointer = ui.ctx().pointer_hover_pos();
+        let last_zone = ui
+            .ctx()
+            .data(|d| d.get_temp::<Option<Rect>>(zone_id))
+            .flatten();
+        // The card must stay reachable: the zone spans the pill, the card, and
+        // the gap between them, so the pointer can move in without the card
+        // vanishing on the way. It is per commit because the card belongs to
+        // that row.
+        let keep_open = pointer.is_some_and(|p| last_zone.is_some_and(|zone| zone.contains(p)));
+        if ui.rect_contains_pointer(pill) || keep_open {
             // The popup anchors in global space; the row lives inside the
             // graph's scroll area, so map the pill rect to screen first.
             let screen_pill = ui
@@ -1129,24 +1158,35 @@ fn commit_row(
                 .layer_transform_to_global(ui.layer_id())
                 .map(|t| t * pill)
                 .unwrap_or(pill);
-            Popup::new(
-                ui.id().with(("log_label_tooltip", &c.id)),
+            let shown = Popup::new(
+                ui.id().with(("log_refs_popup", &c.id)),
                 ui.ctx().clone(),
                 screen_pill,
                 ui.layer_id(),
             )
             .kind(PopupKind::Tooltip)
             .gap(4.0)
-            .interactable(false)
-            .show(|ui| {
-                for r in labels {
-                    ui.label(
-                        RichText::new(&r.name)
-                            .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
-                            .color(ref_kind(r.kind).accent()),
-                    );
+            .interactable(true)
+            .frame(widgets::menu_surface(ui))
+            .width(REF_CARD_WIDTH)
+            .show(|ui| ref_popover(ui, labels));
+            if let Some(inner) = shown {
+                let zone = screen_pill
+                    .union(inner.response.rect)
+                    .expand(REF_CARD_HOVER_BRIDGE);
+                ui.ctx().data_mut(|d| d.insert_temp(zone_id, Some(zone)));
+                if let Some(name) = inner.inner {
+                    ui.ctx()
+                        .data_mut(|d| d.remove_temp::<Option<Rect>>(zone_id));
+                    return RowIntent::FilterRef {
+                        root: c.root.clone(),
+                        name,
+                    };
                 }
-            });
+            }
+        } else {
+            ui.ctx()
+                .data_mut(|d| d.remove_temp::<Option<Rect>>(zone_id));
         }
     }
 
@@ -1198,6 +1238,150 @@ fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
         colors.fg,
     );
     rect
+}
+
+fn ref_popover(ui: &mut Ui, refs: &[CommitRef]) -> Option<String> {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let micro = crate::theme::chrome_font(crate::theme::TYPE_CHIP);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("REFS ON THIS COMMIT")
+                .font(micro.clone())
+                .color(Palette::INK_3),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(refs.len().to_string())
+                    .font(micro)
+                    .color(Palette::INK_3),
+            );
+        });
+    });
+    widgets::menu_rule(ui);
+
+    let mut picked = None;
+    for r in ordered_refs(refs) {
+        let clicked = ref_row(ui, r).clicked();
+        if picked.is_none() && clicked {
+            picked = Some(r.name.clone());
+        }
+    }
+
+    widgets::menu_rule(ui);
+    ui.label(
+        RichText::new("Click a ref to filter the log")
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CHIP))
+            .color(Palette::INK_3),
+    );
+    picked
+}
+
+fn ref_row(ui: &mut Ui, r: &CommitRef) -> Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::GROUP_ROW_HEIGHT),
+        Sense::click(),
+    );
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            Palette::SURFACE_2,
+        );
+    }
+
+    let painter = ui.painter();
+    let cy = rect.center().y;
+    icons::paint_icon(
+        painter,
+        Pos2::new(rect.left() + 8.0, cy - 7.0),
+        14.0,
+        ref_icon(r.kind),
+        ref_kind(r.kind).accent(),
+    );
+
+    let state_font = crate::theme::chrome_font(crate::theme::TYPE_CHIP);
+    let state = branch_tree_view::ref_state_marker(r.state);
+    let state_w = state
+        .map(|(text, color)| {
+            painter
+                .layout_no_wrap(text.to_owned(), state_font.clone(), color)
+                .size()
+                .x
+        })
+        .unwrap_or(0.0);
+
+    let name_x = rect.left() + 30.0;
+    let name_right = rect.right() - 8.0 - if state.is_some() { state_w + 8.0 } else { 0.0 };
+    let name_budget = (name_right - name_x).max(24.0);
+    let name_font = crate::theme::data_font(crate::theme::TYPE_CONTROL);
+    let name = components::middle_truncate_to_width(ui, &r.name, &name_font, name_budget);
+    let name_galley = painter.layout_no_wrap(name, name_font, Palette::INK);
+    painter.galley(
+        Pos2::new(name_x, cy - name_galley.size().y / 2.0),
+        name_galley,
+        Palette::INK,
+    );
+
+    if let Some((text, color)) = state {
+        let galley = painter.layout_no_wrap(text.to_owned(), state_font, color);
+        painter.galley(
+            Pos2::new(
+                rect.right() - 8.0 - galley.size().x,
+                cy - galley.size().y / 2.0,
+            ),
+            galley,
+            color,
+        );
+    }
+
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Button,
+            true,
+            format!("Filter log by {} {}", ref_kind_word(r.kind), r.name),
+        )
+    });
+    widgets::focus_ring(ui, &response);
+    response
+}
+
+fn ordered_refs(refs: &[CommitRef]) -> Vec<&CommitRef> {
+    let mut ordered: Vec<&CommitRef> = refs.iter().collect();
+    ordered.sort_by(|a, b| {
+        ref_rank(a.kind).cmp(&ref_rank(b.kind)).then_with(|| {
+            if a.kind == GitRefKind::Tag {
+                b.name.cmp(&a.name)
+            } else {
+                a.name.cmp(&b.name)
+            }
+        })
+    });
+    ordered
+}
+
+fn ref_rank(kind: GitRefKind) -> u8 {
+    match kind {
+        GitRefKind::Tag => 0,
+        GitRefKind::Branch => 1,
+        GitRefKind::Remote => 2,
+    }
+}
+
+fn ref_icon(kind: GitRefKind) -> Icon {
+    match kind {
+        GitRefKind::Tag => Icon::TAG,
+        GitRefKind::Branch => Icon::GIT_BRANCH,
+        GitRefKind::Remote => Icon::UPLOAD,
+    }
+}
+
+fn ref_kind_word(kind: GitRefKind) -> &'static str {
+    match kind {
+        GitRefKind::Tag => "tag",
+        GitRefKind::Branch => "branch",
+        GitRefKind::Remote => "remote",
+    }
 }
 
 enum FileAction {
@@ -1769,11 +1953,13 @@ fn fit_to_budget(text: &str, budget: f32, measure: &dyn Fn(&str) -> f32) -> Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        centre_scroll_delta, commit_index, fit_to_budget, row_is_in_view, row_offset_from_built,
-        settled_at_bottom,
+        centre_scroll_delta, commit_index, fit_to_budget, ordered_refs, row_is_in_view,
+        row_offset_from_built, settled_at_bottom,
     };
     use std::sync::Arc;
-    use turbogit_domain::model::{Commit, RootId, Signature, SignatureState};
+    use turbogit_domain::model::{
+        Commit, CommitRef, GitRefKind, RefState, RootId, Signature, SignatureState,
+    };
 
     fn row(id: &str) -> turbogit_app::log_display::LogRow {
         Arc::new(Commit {
@@ -2042,5 +2228,28 @@ mod tests {
             None,
             "an empty window scrolls nowhere"
         );
+    }
+
+    fn ref_entry(kind: GitRefKind, name: &str) -> CommitRef {
+        CommitRef {
+            kind,
+            name: name.to_owned(),
+            state: RefState::Default,
+        }
+    }
+
+    #[test]
+    fn refs_read_tags_first_then_branches_then_remotes() {
+        let refs = vec![
+            ref_entry(GitRefKind::Remote, "origin/main"),
+            ref_entry(GitRefKind::Branch, "main"),
+            ref_entry(GitRefKind::Tag, "latest"),
+            ref_entry(GitRefKind::Tag, "v1.0.0"),
+        ];
+        let names: Vec<&str> = ordered_refs(&refs)
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(names, ["v1.0.0", "latest", "main", "origin/main"]);
     }
 }
