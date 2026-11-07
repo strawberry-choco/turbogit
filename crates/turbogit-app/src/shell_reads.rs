@@ -88,6 +88,26 @@ impl AppState {
         }
     }
 
+    /// The tag evidence a derived carrier set reads for the scoped rev, warmed
+    /// before `listing_roots` is consulted. The trigger is narrow: a rev a
+    /// selected root's branch inventory already holds needs no tag read there,
+    /// so a scope naming a local branch never pays a `git tag -l`.
+    pub fn ensure_ref_evidence(&mut self) {
+        let Some(name) = self.ui.log_ref_scope.clone() else {
+            return;
+        };
+        let exec = self.executor.clone();
+        for root in self.ui.log_roots.selected(&self.multi.roots) {
+            if !root
+                .branches
+                .iter()
+                .any(|b| crate::log_filters::rev_of(b) == name)
+            {
+                self.caches.ensure_tags(exec.as_ref(), &root.id);
+            }
+        }
+    }
+
     /// the delete confirmation's warning. `None` when git could not say, which
     /// the caller treats as "do not warn".
     pub fn is_ancestor(&self, root: &RootId, ref_name: &str, branch: &str) -> Option<bool> {

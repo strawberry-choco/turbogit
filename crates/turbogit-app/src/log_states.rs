@@ -141,14 +141,19 @@ pub fn commit_list(state: &AppState, window_empty: bool) -> LogState {
     if let Some(path) = &state.ui.log_path_scope {
         return path_scope(state, path);
     }
-    let roots = listed_roots(state);
     if window_empty {
+        let roots = crate::log_display::listing_roots(state);
+        if roots.is_empty() {
+            return LogState::FilteredOut;
+        }
         for root in &roots {
             if let Some(message) = state.caches.log_failure(&failed_listing(state, root)) {
                 return LogState::CommitsFailed(message.to_owned());
             }
         }
-        if !roots.iter().any(|root| listing_settled(state, root)) {
+        // ANY unsettled member of a multi-carrier read set keeps the answer
+        // loading; `!any(settled)` let one settled-empty carrier answer for all.
+        if roots.iter().any(|root| !listing_settled(state, root)) {
             return if state.ui.log_ref_scope.is_some() {
                 LogState::LoadingCommits
             } else {
@@ -274,26 +279,13 @@ fn combined_list(
     LogState::FilteredOut
 }
 
-fn listed_roots(state: &AppState) -> Vec<RootId> {
-    if state.log_filter_key().is_some() {
-        return crate::log_display::listing_roots(state);
-    }
-    if let Some((root, _)) = &state.ui.log_ref_scope {
-        vec![root.clone()]
-    } else {
-        crate::log_display::listing_roots(state)
-    }
-}
-
 fn listing_settled(state: &AppState, root: &RootId) -> bool {
     if let Some(key) = state.log_filter_key() {
         return state.caches.combined_log(root, &key).is_some();
     }
     match &state.ui.log_ref_scope {
-        Some((scope_root, name)) if scope_root == root => {
-            state.caches.ref_log(root, name).is_some()
-        }
-        _ => state.caches.log(root).is_some(),
+        Some(name) => state.caches.ref_log(root, name).is_some(),
+        None => state.caches.log(root).is_some(),
     }
 }
 
@@ -302,10 +294,8 @@ fn failed_listing(state: &AppState, root: &RootId) -> LogRead {
         return LogRead::Scope(root.clone(), LogScope::Combined(key));
     }
     match &state.ui.log_ref_scope {
-        Some((scope_root, name)) if scope_root == root => {
-            LogRead::Scope(root.clone(), LogScope::Ref(name.clone()))
-        }
-        _ => LogRead::Commits(root.clone()),
+        Some(name) => LogRead::Scope(root.clone(), LogScope::Ref(name.clone())),
+        None => LogRead::Commits(root.clone()),
     }
 }
 
@@ -314,7 +304,7 @@ fn failed_listing(state: &AppState, root: &RootId) -> LogRead {
 /// window that has never failed, which is the collapse this machine replaced
 /// coming back through the recovery path.
 pub fn failed_listing_reads(state: &AppState) -> Vec<LogRead> {
-    listed_roots(state)
+    crate::log_display::listing_roots(state)
         .iter()
         .map(|root| failed_listing(state, root))
         .filter(|read| state.caches.has_log_failure(read))

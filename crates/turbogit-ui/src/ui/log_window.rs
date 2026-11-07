@@ -137,6 +137,7 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 }
 
 fn ensure_log_data(state: &mut AppState) {
+    state.ensure_ref_evidence();
     for id in visible_root_ids(state) {
         if !state.caches.refs_loaded(&id) {
             state.fetch_refs(id);
@@ -159,8 +160,10 @@ fn ensure_log_data(state: &mut AppState) {
     {
         state.ensure_log(&root, LogScope::Path(path));
     }
-    if let Some((root, ref_name)) = state.ui.log_ref_scope.clone() {
-        state.ensure_log(&root, LogScope::Ref(ref_name));
+    if let Some(ref_name) = state.ui.log_ref_scope.clone() {
+        for id in visible_root_ids(state) {
+            state.ensure_log(&id, LogScope::Ref(ref_name.clone()));
+        }
     }
     let query = state.ui.log_filter.trim().to_string();
     if !query.is_empty() {
@@ -201,12 +204,10 @@ fn listed_windows(state: &AppState) -> Vec<ListedWindow> {
             .collect();
     }
     let mut windows = match (&state.ui.log_ref_scope, &state.ui.log_path_scope) {
-        (Some((root, ref_name)), _) => {
-            vec![ListedWindow::Scoped(
-                root.clone(),
-                LogScope::Ref(ref_name.clone()),
-            )]
-        }
+        (Some(ref_name), _) => visible_root_ids(state)
+            .into_iter()
+            .map(|root| ListedWindow::Scoped(root, LogScope::Ref(ref_name.clone())))
+            .collect(),
         (None, Some(path)) => state
             .selected_root
             .clone()
@@ -233,10 +234,21 @@ fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a 
             .combined_log(root, &key)
             .and_then(|commits| commits.iter().find(|c| c.id == cid));
     }
-    if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
-        && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
-    {
-        return commits.iter().find(|c| c.id == cid);
+    if let Some(ref_name) = &state.ui.log_ref_scope {
+        // The scoped name owns the answer: read this root's own ref window when
+        // it is in the view's read set, and say "not in this view" (`None`)
+        // otherwise. Falling through to the plain window would let a stale
+        // `selected_root × selected_commit` pair show a row the listing hid.
+        if !visible_root_ids(state)
+            .iter()
+            .any(|candidate| candidate == root)
+        {
+            return None;
+        }
+        return state
+            .caches
+            .ref_log(root, ref_name)
+            .and_then(|commits| commits.iter().find(|c| c.id == cid));
     }
     if let Some(path) = &state.ui.log_path_scope
         && let Some(commits) = state.caches.path_log(root, path)
@@ -290,11 +302,6 @@ fn ref_kind(kind: GitRefKind) -> RefKind {
 }
 
 pub fn show_log(ui: &mut Ui, state: &mut AppState) {
-    if let Some((root, _)) = &state.ui.log_ref_scope
-        && state.selected_root.as_ref() != Some(root)
-    {
-        state.ui.log_ref_scope = None;
-    }
     ensure_log_data(state);
 
     let avail_w = ui.available_width();
@@ -401,6 +408,9 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         }
         deco_by_root.insert(root.id.clone(), deco);
     }
+    // Every `tags_by_root()` reader must warm first: the cache is on-demand,
+    // and an un-warmed map is indistinguishable from a tagless repository.
+    state.warm_branch_tags();
     let tags_by_root = state.caches.tags_by_root();
     let mut view = build_branch_view(&roots, tags_by_root, &|_| state.ui.log_tree.show_remotes);
     for repo in &mut view.repos {
@@ -445,7 +455,11 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
     }
     match event {
         TreeEvent::RowClicked { root, branch } | TreeEvent::RowActivated { root, branch } => {
-            state.ui.log_ref_scope = Some((root.clone(), branch));
+            // A pane tree row still means "this repository's branch": the name
+            // goes into the scope and the selection narrows to that root. The
+            // scope itself keeps no root axis.
+            state.ui.log_ref_scope = Some(branch);
+            state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root.clone()]);
             state.selected_root = Some(root);
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
@@ -481,7 +495,9 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
     widgets::group_title(ui, "Roots");
 
-    let all_active = state.ui.log_root_filter.is_none();
+    // The `All` row is a command, not a checkbox: a checked box whose click
+    // only re-selects everything breaks the contract the checkbox rows keep.
+    let all_active = state.ui.log_roots.is_all();
     let (rect, response) = allocate_row(ui);
     paint_log_row(ui, rect, all_active, response.hovered());
     let galley = ui
@@ -495,45 +511,15 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "All roots"));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        state.ui.log_root_filter = None;
+        state.ui.log_roots.select_all();
     }
 
     for (idx, root) in state.multi.roots.iter().enumerate() {
-        let active = state.ui.log_root_filter.as_ref() == Some(&root.id);
         let label = format!("Root {}", root.id.name());
-        let (rect, response) = allocate_row(ui);
-        paint_log_row(ui, rect, active, response.hovered());
-        if std::env::var("TG_PROBE_TRACE").as_deref() == Ok("1") {
-            eprintln!(
-                "[root {label}] pointer={:?} rect={rect:?} hovered={}",
-                ui.input(|i| i.pointer.hover_pos()),
-                response.hovered()
-            );
-        }
-        let child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        let cy = rect.center().y;
-        child
-            .painter()
-            .circle_filled(Pos2::new(rect.left() + 7.0, cy), 3.5, root_color(idx));
-        let text_galley =
-            child
-                .painter()
-                .layout_no_wrap(label.clone(), body_font(), row_name_ink());
-        child.painter().galley(
-            Pos2::new(rect.left() + 16.0, cy - text_galley.size().y / 2.0),
-            text_galley,
-            row_name_ink(),
-        );
-        response.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::Button, true, format!("Root {}", root.id.name()))
-        });
-        widgets::focus_ring(ui, &response);
+        let checked = state.ui.log_roots.carries(&root.id);
+        let response = widgets::check_row(ui, &label, checked, Some(root_color(idx)));
         if response.clicked() {
-            state.ui.log_root_filter = Some(root.id.clone());
+            state.ui.log_roots.toggle(&root.id, &state.multi.roots);
         }
     }
 }
@@ -639,7 +625,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 );
             });
         }
-        if let Some((_, ref_name)) = state.ui.log_ref_scope.clone() {
+        if let Some(ref_name) = state.ui.log_ref_scope.clone() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let remove = ui
                     .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
@@ -650,8 +636,17 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 if remove.clicked() {
                     state.ui.log_ref_scope = None;
                 }
+                let text = match (
+                    state.ui.log_roots.selected(&state.multi.roots).len(),
+                    turbogit_app::log_display::listing_roots(state).len(),
+                ) {
+                    (selected, carriers) if carriers < selected => {
+                        format!("Ref filter: {ref_name} · {carriers} of {selected} repos")
+                    }
+                    _ => format!("Ref filter: {ref_name}"),
+                };
                 ui.label(
-                    RichText::new(format!("Ref filter: {ref_name}"))
+                    RichText::new(text)
                         .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::BRAND),
                 );
@@ -1002,10 +997,17 @@ pub(crate) fn paint_log_row(ui: &Ui, rect: Rect, selected: bool, hovered: bool) 
 }
 
 pub(crate) fn shows_root_gutter(state: &AppState) -> bool {
-    state.multi.roots.len() > 1
-        && state.ui.log_root_filter.is_none()
-        && state.ui.log_path_scope.is_none()
+    // Stripes show when the READ SET has more than one member — "2 of 4 repos
+    // ticked" is the exact state where distinguishing histories matters most,
+    // and it cannot exist under a single-root filter. A bare path scope is that
+    // single-root read: its listing is one repository's path window.
+    if state.ui.log_path_scope.is_some()
         && state.ui.log_ref_scope.is_none()
+        && state.log_filter_key().is_none()
+    {
+        return false;
+    }
+    turbogit_app::log_display::listing_roots(state).len() > 1
 }
 
 fn header_cells(ui: &mut Ui, multi_root: bool) {

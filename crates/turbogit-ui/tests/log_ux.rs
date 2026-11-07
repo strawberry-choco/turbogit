@@ -475,7 +475,7 @@ fn load_more_is_painted_inside_a_scope_while_the_scope_continues() {
     );
 
     harness.state_mut().ui.log_path_scope = None;
-    harness.state_mut().ui.log_ref_scope = Some((root_id.clone(), "main".to_owned()));
+    harness.state_mut().ui.log_ref_scope = Some("main".to_owned());
     settle(&mut harness);
     let by_ref = LogScope::Ref("main".to_owned());
     assert_eq!(
@@ -716,7 +716,7 @@ fn activating_a_ref_scopes_the_graph_to_its_history() {
 
     assert_eq!(
         harness.state().ui.log_ref_scope,
-        Some((root_id.clone(), "topic".to_string())),
+        Some("topic".to_string()),
         "row activation sets the ref scope"
     );
     assert_painted(&harness, "Ref filter:");
@@ -731,7 +731,7 @@ fn activating_a_ref_scopes_the_graph_to_its_history() {
 }
 
 #[test]
-fn switching_repository_drops_the_ref_scope() {
+fn changing_the_selection_keeps_the_ref_scope() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     let alpha = project.join("alpha");
@@ -769,7 +769,14 @@ fn switching_repository_drops_the_ref_scope() {
     settle(&mut harness);
     assert_eq!(
         harness.state().ui.log_ref_scope,
-        Some((beta_root.clone(), "topic".to_string()))
+        Some("topic".to_string()),
+        "the name is the whole scope; no repository rides in it"
+    );
+    assert_eq!(
+        harness.state().ui.log_roots,
+        turbogit_app::log_filters::RootFilter::Only(vec![beta_root.clone()]),
+        "a pane tree row still means this repository's branch: the selection narrows \
+         to beta, which is where the read stays"
     );
     assert_eq!(
         harness.state().selected_root.as_ref(),
@@ -781,7 +788,10 @@ fn switching_repository_drops_the_ref_scope() {
     settle(&mut harness);
     assert_eq!(
         harness.state().ui.log_ref_scope,
-        None,
-        "the scope must never outlive its repository"
+        Some("topic".to_string()),
+        "an external `selected_root` write no longer evicts the scope — the read set, \
+         not the selection, owns which repositories are asked"
     );
+    assert_painted(&harness, "topic commit");
+    assert_not_painted(&harness, "alpha commit");
 }

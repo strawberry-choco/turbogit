@@ -2,6 +2,9 @@
 //! name the same thing, so someone moving between the two tools does not have to
 //! learn a second vocabulary.
 
+use std::collections::HashMap;
+use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
+
 pub const LABEL_ALL: &str = "All";
 pub const LABEL_SELECT: &str = "Select\u{2026}";
 pub const LABEL_BRANCH: &str = "Branch";
@@ -73,6 +76,223 @@ pub fn parse_day(text: &str) -> Result<Option<i64>, &'static str> {
             .and_utc()
             .timestamp(),
     ))
+}
+
+/// One band of the `Branch` dropdown's ref list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RefGroup {
+    Local,
+    Remote,
+    Tag,
+}
+
+/// A band's header copy and the polarity it starts in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupSpec {
+    pub title: &'static str,
+    pub starts_open: bool,
+}
+
+/// The single owner of band paint order, default polarity and header copy.
+pub const GROUP_TABLE: [(RefGroup, GroupSpec); 3] = [
+    (
+        RefGroup::Local,
+        GroupSpec {
+            title: "Local branches",
+            starts_open: true,
+        },
+    ),
+    (
+        RefGroup::Remote,
+        GroupSpec {
+            title: "Remote branches",
+            starts_open: false,
+        },
+    ),
+    (
+        RefGroup::Tag,
+        GroupSpec {
+            title: "Tag refs",
+            starts_open: false,
+        },
+    ),
+];
+
+/// The checked set of repositories the Log reads. `All` is the rest state and
+/// adopts a later-attached repository; collapse-on-write keeps those the same
+/// thing: ticking every box lands back on `All`, which is what makes a
+/// later-attached repository join.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RootFilter {
+    #[default]
+    All,
+    Only(Vec<RootId>),
+}
+
+impl RootFilter {
+    pub fn is_all(&self) -> bool {
+        matches!(self, Self::All)
+    }
+
+    /// Whether the checkbox for `id` paints ticked.
+    pub fn carries(&self, id: &RootId) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(ids) => ids.contains(id),
+        }
+    }
+
+    /// The selected repositories in registration order, pruned of any id that
+    /// is no longer registered.
+    pub fn selected<'a>(&self, registered: &'a [Root]) -> Vec<&'a Root> {
+        match self {
+            Self::All => registered.iter().collect(),
+            Self::Only(ids) => registered
+                .iter()
+                .filter(|root| ids.contains(&root.id))
+                .collect(),
+        }
+    }
+
+    pub fn toggle(&mut self, id: &RootId, registered: &[Root]) {
+        let mut ids: Vec<RootId> = self
+            .selected(registered)
+            .into_iter()
+            .map(|root| root.id.clone())
+            .collect();
+        match ids.iter().position(|candidate| candidate == id) {
+            Some(pos) => {
+                ids.remove(pos);
+            }
+            None => ids.push(id.clone()),
+        }
+        // The pruned set has no stale members, so its length answers "is this
+        // everything" and a full set is written as `All`, not as `Only`.
+        *self = if ids.len() == registered.len() {
+            Self::All
+        } else {
+            Self::Only(ids)
+        };
+    }
+
+    pub fn select_all(&mut self) {
+        *self = Self::All;
+    }
+}
+
+/// One band's fold, remembered per surface for the session and never durable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fold {
+    Open,
+    Closed,
+}
+
+pub type RefFolds = HashMap<RefGroup, Fold>;
+
+/// One kind band. `revs` is painted AND handed to git. No root axis, no
+/// per-row label: a name picked from a band is read in every selected
+/// repository that carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefBand {
+    pub group: RefGroup,
+    pub title: &'static str,
+    pub open: bool,
+    pub revs: Vec<String>,
+}
+
+/// The tag inventory the band model reads, in the spelling `RootCaches` stores.
+pub type RefTags = HashMap<RootId, Vec<(String, RefState)>>;
+
+/// The rev a listing row must hand a read.
+///
+/// A remote-tracking `Branch` arrives with a BARE `name` and the remote in its own field
+/// (`crates/turbogit-engine/src/cli.rs:681-692`, and `git2_exec.rs:442-450` delegates the
+/// listing to that parser), so the qualified spelling has to be rebuilt here. It is not a
+/// nicety: `crates/turbogit-engine/tests/rev_spellings.rs` measures `origin/solo` resolving
+/// on both adapters with no local twin while a bare `solo` errors on both, because a
+/// revision argument resolves against ref names and git's branch-name shorthand is a
+/// checkout rule that never reaches it. A `Remote` row with no remote keeps its bare name,
+/// so the read fails loudly instead of inventing one.
+pub fn rev_of(branch: &Branch) -> String {
+    if branch.kind != BranchKind::Remote {
+        return branch.name.clone();
+    }
+    match &branch.remote {
+        // `branches_tree.rs:206-211` tolerates both spellings for the same row, so a
+        // hand-seeded qualified name must not be doubled here.
+        Some(remote) if branch.name.starts_with(&format!("{remote}/")) => branch.name.clone(),
+        Some(remote) => format!("{remote}/{}", branch.name),
+        None => branch.name.clone(),
+    }
+}
+
+/// The one answer to "does this repository have this rev": a local branch
+/// name, a `rev_of`-qualified remote name, or a tag name, by exact string
+/// equality. No git call and no DWIM — a rev git would resolve through a
+/// remote-tracking default is not carried here.
+pub fn carries_ref(root: &Root, tags: &RefTags, rev: &str) -> bool {
+    root.branches.iter().any(|b| rev_of(b) == rev)
+        || tags
+            .get(&root.id)
+            .is_some_and(|list| list.iter().any(|(name, _)| name == rev))
+}
+
+/// The bands the dropdown paints: the kinds of the SELECTED repositories only,
+/// in [`GROUP_TABLE`] order, unioned and deduped by rev, with empty kinds
+/// contributing no band at all.
+pub fn ref_bands(selected: &[&Root], tags: &RefTags, folds: &RefFolds) -> Vec<RefBand> {
+    let mut bands = Vec::new();
+    for (group, spec) in GROUP_TABLE {
+        let mut revs: Vec<String> = Vec::new();
+        for root in selected {
+            for rev in group_revs(root, group, tags) {
+                if !revs.contains(&rev) {
+                    revs.push(rev);
+                }
+            }
+        }
+        if revs.is_empty() {
+            continue;
+        }
+        revs.sort();
+        bands.push(RefBand {
+            group,
+            title: spec.title,
+            open: fold_of(folds, group, spec.starts_open),
+            revs,
+        });
+    }
+    bands
+}
+
+fn group_revs(root: &Root, group: RefGroup, tags: &RefTags) -> Vec<String> {
+    match group {
+        RefGroup::Local => root
+            .branches
+            .iter()
+            .filter(|b| b.kind == BranchKind::Local)
+            .map(|b| b.name.clone())
+            .collect(),
+        RefGroup::Remote => root
+            .branches
+            .iter()
+            .filter(|b| b.kind == BranchKind::Remote)
+            .map(rev_of)
+            .collect(),
+        RefGroup::Tag => tags
+            .get(&root.id)
+            .map(|list| list.iter().map(|(name, _)| name.clone()).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// The effective polarity: the recorded fold when there is one, the table's when there
+/// is not.
+fn fold_of(folds: &RefFolds, group: RefGroup, starts_open: bool) -> bool {
+    match folds.get(&group) {
+        Some(fold) => *fold == Fold::Open,
+        None => starts_open,
+    }
 }
 
 #[cfg(test)]

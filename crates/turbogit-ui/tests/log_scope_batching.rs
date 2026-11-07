@@ -518,9 +518,13 @@ fn a_scopes_batches_survive_the_roots_filter_and_re_entering_it() {
         "one read from the front of the listing"
     );
 
-    harness.get_by_label("Root alpha").click();
+    harness.get_by_label("Root beta").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.log_root_filter.as_ref(), Some(&alpha));
+    assert_eq!(
+        harness.state().ui.log_roots,
+        turbogit_app::log_filters::RootFilter::Only(vec![alpha.clone()]),
+        "unchecking beta leaves exactly alpha ticked"
+    );
     assert_scope_untouched(
         &harness,
         &recorder,
@@ -530,7 +534,7 @@ fn a_scopes_batches_survive_the_roots_filter_and_re_entering_it() {
     );
     harness.get_by_label("All roots").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.log_root_filter, None);
+    assert!(harness.state().ui.log_roots.is_all());
     assert_scope_untouched(
         &harness,
         &recorder,
@@ -633,7 +637,7 @@ fn scoping_still_replaces_or_narrows_the_listing_with_the_gate_open() {
     assert_not_painted(&harness, &subject(&repo, "only: off the path"));
 
     harness.state_mut().ui.log_path_scope = None;
-    harness.state_mut().ui.log_ref_scope = Some((root_id.clone(), "topic".to_owned()));
+    harness.state_mut().ui.log_ref_scope = Some("topic".to_owned());
     let by_ref = LogScope::Ref("topic".to_owned());
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &by_ref) == LOG_BATCH_SIZE
@@ -831,9 +835,12 @@ fn a_combined_listing_batches_and_the_roots_filter_still_narrows_it() {
     assert_painted(&harness, &subject(beta_repo, "c99"));
     assert_stripes(&harness);
 
-    harness.get_by_label("Root alpha").click();
+    harness.get_by_label("Root beta").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.log_root_filter.as_ref(), Some(&alpha));
+    assert_eq!(
+        harness.state().ui.log_roots,
+        turbogit_app::log_filters::RootFilter::Only(vec![alpha.clone()])
+    );
     assert_painted(&harness, &format!("{} shown", 2 * LOG_BATCH_SIZE));
     assert_painted(&harness, &subject(alpha_repo, "c99"));
     assert_not_painted(&harness, &subject(beta_repo, "c99"));
@@ -851,7 +858,7 @@ fn a_combined_listing_batches_and_the_roots_filter_still_narrows_it() {
 
     harness.get_by_label("All roots").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.log_root_filter, None);
+    assert!(harness.state().ui.log_roots.is_all());
     assert_eq!(
         window(harness.state(), &alpha) + window(harness.state(), &beta),
         2 * (2 * LOG_BATCH_SIZE + 1),

@@ -9,9 +9,9 @@ use egui::{
 };
 use std::path::PathBuf;
 use turbogit_app::log_filters::{
-    DateFilter, LABEL_AFTER, LABEL_ALL, LABEL_BEFORE, LABEL_BRANCH, LABEL_DATE, LABEL_LAST_DAY,
-    LABEL_LAST_WEEK, LABEL_PATHS, LABEL_ROOTS, LABEL_SELECT, LABEL_SELECT_PERIOD, LABEL_USER,
-    parse_day,
+    DateFilter, Fold, LABEL_AFTER, LABEL_ALL, LABEL_BEFORE, LABEL_BRANCH, LABEL_DATE,
+    LABEL_LAST_DAY, LABEL_LAST_WEEK, LABEL_PATHS, LABEL_ROOTS, LABEL_SELECT, LABEL_SELECT_PERIOD,
+    LABEL_USER, RefBand, parse_day, ref_bands,
 };
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
@@ -25,13 +25,15 @@ const SALT_DATE_BEFORE: &str = "date_before";
 
 const APPLY: &str = "Apply";
 const CLEAR: &str = "Clear";
-const ALL_ROOTS: &str = "All roots";
+const ALL_REPOS: &str = "All repositories";
 const DATE_HINT: &str = "YYYY-MM-DD";
 
 const BUTTON_PAD_X: f32 = 8.0;
 const CARET_SIZE: f32 = 12.0;
 const POPUP_WIDTH: f32 = 240.0;
 const LIST_MAX_HEIGHT: f32 = 200.0;
+const BRANCH_LIST_MAX_HEIGHT: f32 = 320.0;
+const ROOTS_LIST_MAX_HEIGHT: f32 = 200.0;
 
 // Matches log_window.rs's private graph swatches so a root reads the same in both panes.
 const ROOT_COLORS: &[Color32] = &[
@@ -76,7 +78,14 @@ fn set_open(ui: &Ui, salt: Option<&'static str>) {
 
 /// One horizontal row of IntelliJ's four Git Log filter dropdowns and Clear.
 pub fn filter_bar(ui: &mut egui::Ui, state: &mut AppState) {
-    let branch = state.ui.log_ref_scope.as_ref().map(|(_, n)| n.clone());
+    let branch = state
+        .ui
+        .log_ref_scope
+        .as_ref()
+        .map(|name| match carrier_count(state) {
+            Some((carriers, selected)) => format!("{name} · {carriers} of {selected} repos"),
+            None => name.clone(),
+        });
     let user = state.ui.log_author_filter.clone();
     let date = match state.ui.log_date_filter {
         DateFilter::All => None,
@@ -92,11 +101,7 @@ pub fn filter_bar(ui: &mut egui::Ui, state: &mut AppState) {
         }
         other => Some(other.label().to_owned()),
     };
-    let paths = state
-        .ui
-        .log_path_scope
-        .as_ref()
-        .map(|p| p.display().to_string());
+    let paths = paths_readback(state);
 
     filter_dropdown(ui, state, LABEL_BRANCH, branch, SALT_BRANCH, branch_menu);
     filter_dropdown(ui, state, LABEL_USER, user, SALT_USER, user_menu);
@@ -329,18 +334,6 @@ fn date_field(ui: &mut Ui, label: &str, text: &mut String, id: Id, enter: bool) 
     commit
 }
 
-fn branch_names(state: &AppState) -> Vec<String> {
-    let mut names: Vec<String> = state
-        .multi
-        .roots
-        .iter()
-        .flat_map(|root| root.branches.iter().map(|b| b.name.clone()))
-        .collect();
-    names.sort();
-    names.dedup();
-    names
-}
-
 fn author_names(state: &AppState) -> Vec<String> {
     let mut names: Vec<String> = state
         .multi
@@ -354,21 +347,49 @@ fn author_names(state: &AppState) -> Vec<String> {
     names
 }
 
-fn set_branch(state: &mut AppState, name: &str) {
-    let root = state
-        .selected_root
-        .clone()
-        .or_else(|| state.multi.roots.first().map(|r| r.id.clone()));
-    state.ui.log_ref_scope = root.map(|r| (r, name.to_owned()));
+fn set_branch(state: &mut AppState, rev: &str) {
+    // A typed rev IS the scope: the read fans out to the carriers at paint, so
+    // the text needs no root and no resolution against the bands.
+    state.ui.log_ref_scope = Some(rev.to_owned());
+    state.ui.log_branch_input.clear();
+    state.ui.selected_commit = None;
+    state.ui.log_selected_file = None;
 }
 
-fn apply_branch(state: &mut AppState) {
-    let text = state.ui.log_branch_input.trim().to_owned();
-    if text.is_empty() {
-        state.ui.log_ref_scope = None;
+/// Some((carriers, selected)) while some selected repositories do NOT carry the
+/// scoped name; `None` at rest or when every selection carries it.
+fn carrier_count(state: &AppState) -> Option<(usize, usize)> {
+    let selected = state.ui.log_roots.selected(&state.multi.roots).len();
+    let carriers = turbogit_app::log_display::listing_roots(state).len();
+    (carriers < selected).then_some((carriers, selected))
+}
+
+fn paths_readback(state: &AppState) -> Option<String> {
+    let roots_note = if state.ui.log_roots.is_all() {
+        None
     } else {
-        set_branch(state, &text);
+        let count = state.ui.log_roots.selected(&state.multi.roots).len();
+        Some(if count == 0 {
+            "No repos".to_owned()
+        } else {
+            format!("{count} of {} repos", state.multi.roots.len())
+        })
+    };
+    match (&state.ui.log_path_scope, roots_note) {
+        (Some(path), None) => Some(path.display().to_string()),
+        (Some(path), Some(note)) => Some(format!("{} · {note}", path.display())),
+        (None, note) => note,
     }
+}
+
+fn branch_bands(state: &mut AppState) -> Vec<RefBand> {
+    state.warm_branch_tags();
+    let selected = state.ui.log_roots.selected(&state.multi.roots);
+    ref_bands(
+        &selected,
+        state.caches.tags_by_root(),
+        &state.ui.log_ref_folds,
+    )
 }
 
 fn apply_date(state: &mut AppState, now: i64) -> bool {
@@ -402,16 +423,59 @@ fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
         &mut state.ui.log_branch_input,
         "Branch name",
     ) {
-        apply_branch(state);
+        let text = state.ui.log_branch_input.trim().to_owned();
+        if text.is_empty() {
+            state.ui.log_ref_scope = None;
+            state.ui.log_branch_input.clear();
+        } else {
+            set_branch(state, &text);
+        }
         close = true;
     }
     widgets::menu_rule(ui);
-    let names = branch_names(state);
-    let current = state.ui.log_ref_scope.as_ref().map(|(_, n)| n.as_str());
-    if let Some(name) = value_list(ui, SALT_BRANCH, &names, current, "branch") {
-        set_branch(state, &name);
-        close = true;
+    let bands = branch_bands(state);
+    if bands.is_empty() {
+        widgets::empty_state(ui, "No values available.");
+        return close;
     }
+    let scope = state.ui.log_ref_scope.clone();
+    // The list box is reserved rather than fitted to its contents. An `Area` keeps the size
+    // it was first laid out with, so a popup that grows when a folded band is revealed
+    // leaves its new rows outside the popup's own rect, where they paint but take no click.
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), BRANCH_LIST_MAX_HEIGHT),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ScrollArea::vertical()
+                .id_salt(("tg_log_filter_list", SALT_BRANCH))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for band in &bands {
+                        let header = components::section_header(
+                            ui,
+                            band.title,
+                            band.revs.len(),
+                            band.open,
+                            |_| {},
+                        );
+                        if header.clicked() {
+                            let fold = if band.open { Fold::Closed } else { Fold::Open };
+                            state.ui.log_ref_folds.insert(band.group, fold);
+                        }
+                        if !band.open {
+                            continue;
+                        }
+                        for rev in &band.revs {
+                            let active = scope.as_deref() == Some(rev.as_str());
+                            if menu_row(ui, rev, active, None).clicked() {
+                                set_branch(state, rev);
+                                close = true;
+                            }
+                        }
+                    }
+                });
+        },
+    );
     close
 }
 
@@ -526,10 +590,10 @@ fn paths_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     }
     widgets::menu_rule(ui);
     widgets::group_title(ui, LABEL_ROOTS);
-    if menu_row(ui, ALL_ROOTS, state.ui.log_root_filter.is_none(), None).clicked() {
-        state.ui.log_root_filter = None;
-        close = true;
-    }
+    // The Roots block edits a set and never closes; the Path axis commits one
+    // value and closes. The box is reserved like the branch list because the
+    // popup is now long-lived and a repository attached while it is open grows
+    // these rows below the area's first-frame size.
     let roots: Vec<(Color32, String, RootId)> = state
         .multi
         .roots
@@ -537,13 +601,29 @@ fn paths_menu(ui: &mut Ui, state: &mut AppState) -> bool {
         .enumerate()
         .map(|(idx, root)| (root_color(idx), root.id.name(), root.id.clone()))
         .collect();
-    for (color, name, id) in roots {
-        let active = state.ui.log_root_filter.as_ref() == Some(&id);
-        if menu_row(ui, &name, active, Some(color)).clicked() {
-            state.ui.log_root_filter = Some(id);
-            close = true;
-        }
-    }
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), ROOTS_LIST_MAX_HEIGHT),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ScrollArea::vertical()
+                .id_salt(("tg_log_filter_list", SALT_PATHS))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // The `All` row is a command, not a checkbox: a checked box
+                    // whose click only re-selects everything breaks the
+                    // contract its four checkbox neighbours keep.
+                    if menu_row(ui, ALL_REPOS, state.ui.log_roots.is_all(), None).clicked() {
+                        state.ui.log_roots.select_all();
+                    }
+                    for (color, name, id) in &roots {
+                        let checked = state.ui.log_roots.carries(id);
+                        if widgets::check_row(ui, name, checked, Some(*color)).clicked() {
+                            state.ui.log_roots.toggle(id, &state.multi.roots);
+                        }
+                    }
+                });
+        },
+    );
     close
 }
 
@@ -552,7 +632,7 @@ fn filters_active(state: &AppState) -> bool {
         || state.ui.log_author_filter.is_some()
         || !state.ui.log_date_filter.is_all()
         || state.ui.log_path_scope.is_some()
-        || state.ui.log_root_filter.is_some()
+        || !state.ui.log_roots.is_all()
         || !state.ui.log_filter.trim().is_empty()
 }
 

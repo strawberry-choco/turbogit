@@ -1423,7 +1423,8 @@ mod surface {
             "the dirty root's worktree really is dirty once read"
         );
 
-        harness.state_mut().ui.log_root_filter = Some(clean_id);
+        harness.state_mut().ui.log_roots =
+            turbogit_app::log_filters::RootFilter::Only(vec![clean_id]);
         settle(&mut harness);
         right_click_row(&mut harness, "clean work commit");
         assert!(
@@ -1442,7 +1443,8 @@ mod surface {
 
         harness.key_press(egui::Key::Escape);
         settle(&mut harness);
-        harness.state_mut().ui.log_root_filter = Some(dirty_id);
+        harness.state_mut().ui.log_roots =
+            turbogit_app::log_filters::RootFilter::Only(vec![dirty_id]);
         settle(&mut harness);
         right_click_row(&mut harness, "dirty work commit");
         assert_menu_item_gated(&mut harness, "Copy hash", "Cherry-pick to…");
@@ -2106,7 +2108,7 @@ mod surface {
 
             let (_tmp, mut harness, root) = menu_over(case.tag);
             if let Some(branch) = case.scope {
-                harness.state_mut().ui.log_ref_scope = Some((root.clone(), branch.into()));
+                harness.state_mut().ui.log_ref_scope = Some(branch.into());
                 wait_for(&mut harness, |s| s.caches.ref_log(&root, branch).is_some());
                 settle(&mut harness);
             }

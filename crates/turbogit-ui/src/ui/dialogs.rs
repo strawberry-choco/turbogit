@@ -348,7 +348,7 @@ fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
                 .ui
                 .log_ref_scope
                 .as_ref()
-                .and_then(|(r, name)| state.caches.ref_log(r, name))
+                .and_then(|name| state.caches.ref_log(root, name))
         })
         .or_else(|| {
             state

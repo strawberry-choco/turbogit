@@ -433,21 +433,21 @@ fn root_stripes_appear_and_roots_filter_narrows_displayed_commits() {
         "expected distinct root stripes for two roots, got {stripe_colors:?}"
     );
 
-    harness.get_by_label("Root alpha").click();
+    harness.get_by_label("Root beta").click();
     settle(&mut harness);
 
     assert_not_painted(&harness, "beta: root commit");
     assert_painted(&harness, "alpha: second commit");
     assert_eq!(
-        harness.state().ui.log_root_filter,
-        Some(RootId(seed.alpha.clone().into())),
-        "roots filter state must track the selection"
+        harness.state().ui.log_roots,
+        turbogit_app::log_filters::RootFilter::Only(vec![RootId(seed.alpha.clone().into())]),
+        "unchecking beta ticks exactly alpha; the checkbox rows edit a set"
     );
 
     harness.get_by_label("All roots").click();
     settle(&mut harness);
     assert_painted(&harness, "beta: root commit");
-    assert_eq!(harness.state().ui.log_root_filter, None);
+    assert!(harness.state().ui.log_roots.is_all());
 }
 
 #[test]

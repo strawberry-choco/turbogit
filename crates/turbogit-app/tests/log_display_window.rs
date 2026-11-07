@@ -115,12 +115,12 @@ fn the_roots_filter_narrowing_and_widening_rebuilds() {
     let both = state.sync_log_display();
     assert_eq!(ids(&both), ["a1", "b1"], "the union is newest first");
 
-    state.ui.log_root_filter = Some(beta.clone());
+    state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![beta.clone()]);
     let narrowed = state.sync_log_display();
     assert!(!Arc::ptr_eq(&both, &narrowed));
     assert_eq!(ids(&narrowed), ["b1"], "narrowed to the one root");
 
-    state.ui.log_root_filter = None;
+    state.ui.log_roots = turbogit_app::log_filters::RootFilter::All;
     let widened = state.sync_log_display();
     assert!(!Arc::ptr_eq(&narrowed, &widened));
     assert_eq!(ids(&widened), ["a1", "b1"], "widened back to the union");

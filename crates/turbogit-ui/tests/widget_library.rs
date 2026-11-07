@@ -2252,7 +2252,13 @@ fn a_tool_pane_paints_at_most_one_brand_fill_and_it_is_its_primary_action() {
     }
 }
 
-const STROKE_SITES: [(&str, usize, &str); 7] = [
+const STROKE_SITES: [(&str, usize, &str); 8] = [
+    (
+        "widgets/menu.rs",
+        1,
+        "the `check_row` box's own border — a control's resting edge, the same \
+         category as a text field's; the tick box IS the control",
+    ),
     (
         "widgets/containers.rs",
         2,

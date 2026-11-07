@@ -762,11 +762,12 @@ pub struct UiState {
     pub branches_repo_filter: Option<RootId>,
     pub branches_scope_picker_open: bool,
     pub log_branch_filter: String,
-    pub log_root_filter: Option<RootId>,
+    pub log_roots: crate::log_filters::RootFilter,
     pub log_selected_file: Option<PathBuf>,
     pub log_file_filter: String,
     pub log_path_scope: Option<PathBuf>,
-    pub log_ref_scope: Option<(RootId, String)>,
+    pub log_ref_scope: Option<String>,
+    pub log_ref_folds: crate::log_filters::RefFolds,
     pub log_author_filter: Option<String>,
     pub log_date_filter: crate::log_filters::DateFilter,
     pub log_author_input: String,
@@ -1311,7 +1312,7 @@ impl AppState {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
-        let branch = self.ui.log_ref_scope.as_ref().map(|(_, name)| name.clone());
+        let branch = self.ui.log_ref_scope.clone();
         let path = self.ui.log_path_scope.clone();
         let query = self.ui.log_filter.trim();
         let pickaxe = (!query.is_empty()).then(|| query.to_owned());
@@ -1337,12 +1338,9 @@ impl AppState {
 
     pub fn reset_log_filters(&mut self) {
         let query = self.ui.log_filter.trim().to_owned();
-        let mut roots = crate::log_display::visible_roots(self);
-        if let Some((root, _)) = &self.ui.log_ref_scope
-            && !roots.iter().any(|r| r == root)
-        {
-            roots.push(root.clone());
-        }
+        // A name-only scope can have been read in any registered root, so the
+        // forget sweep is wider than the current selection.
+        let roots: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
         for root in &roots {
             if !query.is_empty() {
                 self.caches.forget_log_read(&LogRead::Scope(
@@ -1354,7 +1352,7 @@ impl AppState {
                 self.caches
                     .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Path(path.clone())));
             }
-            if let Some((_, name)) = &self.ui.log_ref_scope {
+            if let Some(name) = &self.ui.log_ref_scope {
                 self.caches
                     .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Ref(name.clone())));
             }
@@ -1362,7 +1360,7 @@ impl AppState {
         self.ui.log_filter.clear();
         self.ui.log_path_scope = None;
         self.ui.log_ref_scope = None;
-        self.ui.log_root_filter = None;
+        self.ui.log_roots = crate::log_filters::RootFilter::All;
         self.ui.log_author_filter = None;
         self.ui.log_date_filter = crate::log_filters::DateFilter::All;
         self.ui.log_author_input.clear();

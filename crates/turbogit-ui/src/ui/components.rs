@@ -329,11 +329,18 @@ pub fn section_header<R>(
     };
     icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
     child.add_space(6.0);
-    child.add(egui::Label::new(
-        RichText::new(section_label(title))
-            .font(chrome_font(TYPE_SECTION))
-            .color(Palette::T_SECONDARY),
-    ));
+    child.add(
+        egui::Label::new(
+            RichText::new(section_label(title))
+                .font(chrome_font(TYPE_SECTION))
+                .color(Palette::T_SECONDARY),
+        )
+        // A selectable Label claims `click_and_drag`, and it is added after the strip's
+        // own click target, so egui's hit test hands the whole title to it and clicking
+        // the header text never toggles the band. Lists elsewhere in the kit already
+        // paint their labels this way.
+        .selectable(false),
+    );
 
     child.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_LIST);

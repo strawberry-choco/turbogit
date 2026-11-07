@@ -8,9 +8,8 @@ use crate::state::AppState;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LogInputs {
-    pub root_filter: Option<RootId>,
     pub path_scope: Option<std::path::PathBuf>,
-    pub ref_scope: Option<(RootId, String)>,
+    pub ref_scope: Option<String>,
     /// The live search text (`ui.log_filter`) verbatim. The pickaxe cache is
     /// keyed by its TRIMMED form, so a difference of leading or trailing
     /// whitespace must rebuild; the filter itself matches case-insensitively.
@@ -23,7 +22,6 @@ pub struct LogInputs {
 impl LogInputs {
     pub fn of(state: &AppState) -> Self {
         Self {
-            root_filter: state.ui.log_root_filter.clone(),
             path_scope: state.ui.log_path_scope.clone(),
             ref_scope: state.ui.log_ref_scope.clone(),
             filter: state.ui.log_filter.clone(),
@@ -38,22 +36,21 @@ impl LogInputs {
     }
 }
 
-pub fn visible_roots(state: &AppState) -> Vec<RootId> {
-    match &state.ui.log_root_filter {
-        Some(id) => vec![id.clone()],
-        None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
-    }
-}
-
-/// Roots the active filter set reads from. A ref scope names one repository, so
-/// its branch must not be looked up in siblings that do not carry that branch.
+/// The single owner of "which repositories are read": the checked set, cut down
+/// to the carriers when a ref scope names one. `roots` is then the only root
+/// fact in the rebuild fingerprint, deliberately — ticking a repository that
+/// does not carry the scoped rev cannot change the answer, so it must not
+/// rebuild.
 pub fn listing_roots(state: &AppState) -> Vec<RootId> {
-    if state.log_filter_key().is_some()
-        && let Some((root, _)) = &state.ui.log_ref_scope
-    {
-        return vec![root.clone()];
+    let selected = state.ui.log_roots.selected(&state.multi.roots);
+    match &state.ui.log_ref_scope {
+        Some(name) => selected
+            .into_iter()
+            .filter(|root| crate::log_filters::carries_ref(root, state.caches.tags_by_root(), name))
+            .map(|root| root.id.clone())
+            .collect(),
+        None => selected.into_iter().map(|root| root.id.clone()).collect(),
     }
-    visible_roots(state)
 }
 
 pub type LogRow = Arc<Commit>;
@@ -193,8 +190,8 @@ pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<Log
             Vec::new(),
         );
     }
-    let loaded: Vec<LogRow> = if let Some((root, ref_name)) = &inputs.ref_scope {
-        owned(caches.ref_log(root, ref_name).unwrap_or_default())
+    let loaded: Vec<LogRow> = if let Some(ref_name) = &inputs.ref_scope {
+        union(&inputs.roots, |id| caches.ref_log(id, ref_name))
     } else if inputs.path_scope.is_some() {
         match &inputs.scope_root {
             Some(root) => scoped_window(caches, inputs, root),
@@ -516,9 +513,12 @@ mod tests {
         let held = derive(4, &base, rows.clone(), Vec::new());
         let changes: Vec<(&str, LogInputs)> = vec![
             (
-                "the roots filter narrows",
+                "a composite filter key arrives",
                 LogInputs {
-                    root_filter: Some(other.clone()),
+                    combined: Some(LogFilterKey {
+                        branch: Some("main".to_owned()),
+                        ..LogFilterKey::default()
+                    }),
                     ..base.clone()
                 },
             ),
@@ -532,7 +532,7 @@ mod tests {
             (
                 "a ref scope opens",
                 LogInputs {
-                    ref_scope: Some((r.clone(), "main".to_owned())),
+                    ref_scope: Some("main".to_owned()),
                     ..base.clone()
                 },
             ),

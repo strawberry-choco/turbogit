@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::events::{AppEvent, LogBatchMode};
+use turbogit_app::log_filters::RootFilter;
 use turbogit_app::log_states::{self, LogRecovery, LogState, named_states};
 use turbogit_app::root_caches::{Affected, LogRead, LogScope};
 use turbogit_app::state::AppState;
@@ -269,7 +270,7 @@ fn an_empty_ref_scoped_listing_reads_as_filters_not_as_no_history() {
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
     let scope = LogScope::Ref("main".to_owned());
-    state.ui.log_ref_scope = Some((root.clone(), "main".to_owned()));
+    state.ui.log_ref_scope = Some("main".to_owned());
     assert_eq!(
         log_states::commit_list(&state, true),
         LogState::LoadingCommits,
@@ -579,13 +580,69 @@ fn a_multi_root_listing_never_collapses_to_one_root() {
         "beta has never been read, and that must not leave the union 'loading' \
          while alpha's rows are on screen"
     );
-    state.ui.log_root_filter = Some(RootId(beta.into()));
+    state.ui.log_roots = RootFilter::Only(vec![RootId(beta.into())]);
     assert_eq!(log_states::commit_list(&state, true), LogState::LoadingLog);
-    state.ui.log_root_filter = None;
+    state.ui.log_roots = RootFilter::All;
     fail(&mut state, &LogRead::Commits(alpha_id), "offline");
     assert_eq!(
         log_states::commit_list(&state, false),
         LogState::Ready,
         "rows are on screen, so a failed re-read does not claim the message slot"
+    );
+}
+
+#[test]
+fn one_settled_carrier_does_not_answer_filtered_out_while_another_is_loading() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let alpha = seeded(&project, 3);
+    git_with_env(&alpha, &["branch", "topic"], &GitEnv::fixture());
+    let beta = project.join("beta");
+    std::fs::create_dir_all(&beta).unwrap();
+    git_with_env(&beta, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(
+        &beta,
+        &["commit", "-q", "--allow-empty", "-m", "b0"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&beta, &["branch", "topic"], &GitEnv::fixture());
+    let mut state = AppState::for_roots(&project, &[alpha, beta]);
+    state.ui.log_ref_scope = Some("topic".to_owned());
+
+    let roots = turbogit_app::log_display::listing_roots(&state);
+    assert_eq!(
+        roots.len(),
+        2,
+        "`topic` is a local branch of both repositories, so both are carriers"
+    );
+    let (alpha, beta) = (roots[0].clone(), roots[1].clone());
+
+    state
+        .tx
+        .send(AppEvent::LogBatchLoaded {
+            root: alpha.clone(),
+            scope: LogScope::Ref("topic".to_owned()),
+            commits: Ok(Vec::new()),
+            mode: LogBatchMode::Replace,
+        })
+        .expect("send settling alpha's scoped read");
+    state.drain_events();
+    assert!(
+        state
+            .caches
+            .scoped_log(&alpha, &LogScope::Ref("topic".to_owned()))
+            .is_some_and(|rows| rows.is_empty()),
+        "alpha's window settled empty"
+    );
+    assert!(
+        state.caches.ref_log(&beta, "topic").is_none(),
+        "beta has never been asked"
+    );
+
+    assert_eq!(
+        log_states::commit_list(&state, true),
+        LogState::LoadingCommits,
+        "one settled carrier must not let the read set answer `FilteredOut` \
+         while another carrier is still in flight"
     );
 }

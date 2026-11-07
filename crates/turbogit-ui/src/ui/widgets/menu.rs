@@ -1,4 +1,7 @@
-use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType};
+use egui::{
+    Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,
+    WidgetType,
+};
 
 use crate::theme::{
     CONTROL_RADIUS, GROUP_ROW_HEIGHT, Palette, TYPE_CHIP, TYPE_CONTROL, chrome_font, data_font,
@@ -212,6 +215,82 @@ pub fn menu_rule(ui: &mut Ui) {
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::RULE_STRUCTURAL);
     ui.add_space(4.0);
+}
+
+const CHECK_BOX_SIZE: f32 = 14.0;
+
+/// A menu-surface checkbox row. One hazard this shape is built around: composing
+/// `menu_row` with `ui.checkbox` gives TWO nodes ONE label, and kittest's
+/// `get_by_label` panics on two hits rather than arbitrating. This paints one node
+/// and registers it `WidgetInfo::selected(Checkbox, ..)`, which is how a headless
+/// test reads the tick state and the label from the same hit.
+pub fn check_row(ui: &mut Ui, label: &str, checked: bool, swatch: Option<Color32>) -> Response {
+    let width = ui.available_width();
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, GROUP_ROW_HEIGHT), Sense::click());
+
+    // A ticked row is not a selected row. `menu_row` fills on `active` because active IS
+    // its whole state; here the box and its tick already carry the state, and borrowing
+    // `Palette::SELECTION` would make every checked repository look like the pane's one
+    // selected row at the same time.
+    let fill = if response.hovered() {
+        Palette::SURFACE_2
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), fill);
+    }
+
+    let box_rect = Rect::from_min_size(
+        Pos2::new(rect.left() + 8.0, rect.center().y - CHECK_BOX_SIZE / 2.0),
+        Vec2::splat(CHECK_BOX_SIZE),
+    );
+    let radius = CornerRadius::same(crate::theme::CHIP_RADIUS);
+    ui.painter()
+        .rect_filled(box_rect, radius, Palette::RAISED_ON_CARD);
+    let border = if checked || response.hovered() {
+        Palette::INK
+    } else {
+        Palette::INK_2
+    };
+    ui.painter().rect_stroke(
+        box_rect,
+        radius,
+        Stroke::new(1.0, border),
+        StrokeKind::Inside,
+    );
+    if checked {
+        let check = Stroke::new(1.6, Palette::BRAND_INK);
+        let p1 = Pos2::new(box_rect.left() + 3.5, box_rect.center().y - 1.0);
+        let p2 = Pos2::new(box_rect.left() + 6.0, box_rect.center().y + 2.0);
+        let p3 = Pos2::new(box_rect.left() + 11.5, box_rect.center().y - 3.5);
+        ui.painter().line_segment([p1, p2], check);
+        ui.painter().line_segment([p2, p3], check);
+    }
+
+    // The tick box and the row tint carry the state; the label keeps the shared
+    // row grammar's selection-independent identity ink.
+    let ink = Palette::INK;
+    let mut text_x = box_rect.right() + 8.0;
+    if let Some(color) = swatch {
+        ui.painter()
+            .circle_filled(Pos2::new(text_x + 4.0, rect.center().y), 3.5, color);
+        text_x += 14.0;
+    }
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), chrome_font(TYPE_CONTROL), ink);
+    ui.painter().galley(
+        Pos2::new(text_x, rect.center().y - galley.size().y / 2.0),
+        galley,
+        ink,
+    );
+
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, true, checked, label));
+    focus_ring(ui, &response);
+    response
 }
 
 pub fn menu_surface(ui: &Ui) -> egui::Frame {

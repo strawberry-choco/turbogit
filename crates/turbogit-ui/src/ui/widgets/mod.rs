@@ -32,7 +32,7 @@ pub use controls::{
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
 pub use inputs::{filter_matches, search_input, text_input};
 pub use menu::{
-    MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface,
+    MenuItemKind, MenuItemProps, MenuItemState, check_row, menu_item, menu_rule, menu_surface,
     take_status_hint,
 };
 pub use menu_host::{MenuId, target_of};
