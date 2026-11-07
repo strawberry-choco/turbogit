@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use test_support::git_seed::{commit, git, repo_with_one_commit};
 use turbogit_app::confirm::{ConfirmAction, apply};
 use turbogit_app::state::{AppState, Dialog, PendingConfirm, UnmergedCommit, UnmergedCommits};
-use turbogit_domain::model::{BranchKind, Change, ChangeStatus};
+use turbogit_domain::model::{BranchKind, Change, ChangeStatus, RootId};
 
 fn tracking_project() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
@@ -256,6 +256,7 @@ fn the_discard_questions_shelve_first_parks_the_changes_rather_than_destroying_t
     apply(
         &mut state,
         &PendingConfirm::Discard {
+            root: RootId(alpha.clone().into()),
             changes: changes.clone(),
         },
         ConfirmAction::ShelveFirst,

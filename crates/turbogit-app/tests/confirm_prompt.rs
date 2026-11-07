@@ -40,6 +40,7 @@ fn the_discard_question_names_the_count_the_first_eight_paths_and_the_remainder(
     let prompt = prompt(
         &state,
         &PendingConfirm::Discard {
+            root: RootId(PathBuf::from("/repo").into()),
             changes: modified(11),
         },
     );

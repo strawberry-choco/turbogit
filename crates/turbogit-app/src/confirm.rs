@@ -45,7 +45,10 @@ pub struct Disclosure {
 
 pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
     match c {
-        PendingConfirm::Discard { changes } => {
+        PendingConfirm::Discard {
+            root: _,
+            changes,
+        } => {
             let n = changes.len();
             let mut named: Vec<String> = changes
                 .iter()
@@ -199,18 +202,16 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
 /// a verb with its controls, so there is no such pair to arrive.
 pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
     match c {
-        PendingConfirm::Discard { changes } => match action {
+        PendingConfirm::Discard { root, changes } => match action {
             ConfirmAction::ShelveFirst => {
                 let changes_owned = changes.clone();
                 let n = changes.len();
                 state.ui.confirm = None;
-                if let Some(root) = state.selected_root.clone() {
-                    state.dispatch(Operation::shelve(
-                        root,
-                        changes_owned,
-                        format!("Shelved {n} file(s) before discard"),
-                    ));
-                }
+                state.dispatch(Operation::shelve(
+                    root.clone(),
+                    changes_owned,
+                    format!("Shelved {n} file(s) before discard"),
+                ));
             }
             ConfirmAction::Confirm => {
                 if let Some(live) = state.ui.confirm.clone() {
@@ -292,10 +293,7 @@ pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
 
 pub fn run(state: &mut AppState, c: PendingConfirm) {
     match c {
-        PendingConfirm::Discard { changes } => {
-            let Some(root) = state.selected_root.clone() else {
-                return;
-            };
+        PendingConfirm::Discard { root, changes } => {
             state.dispatch(Operation::custom(
                 "Discard changes",
                 Affected::Root(root.clone()),

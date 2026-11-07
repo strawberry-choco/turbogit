@@ -209,6 +209,8 @@ pub struct DialogState {
     pub tag_signing_key: Option<String>,
     pub tag_signing_key_fetched: bool,
     pub shelve_name: String,
+    /// The repository the Shelve dialog will park.
+    pub shelve_root: Option<RootId>,
     pub stash_msg: String,
     pub stash_keep: bool,
     pub unshelve_shelf: Option<String>,
@@ -421,7 +423,11 @@ pub struct RewordDraft {
 
 #[derive(Clone)]
 pub enum PendingConfirm {
+    /// Carries its `root` for the reason the delete confirms carry theirs: the
+    /// Changes list paints every repository, so the row a discard was asked for
+    /// and the workspace focus are not guaranteed to agree.
     Discard {
+        root: RootId,
         changes: Vec<Change>,
     },
     /// The delete confirms carry their `root` because `AppState::selected_root` is
@@ -781,6 +787,7 @@ pub struct UiState {
     pub pending_reselect: Option<PendingReselect>,
     pub log_commit_menu: Option<(RootId, CommitId)>,
     pub log_file_menu: Option<(RootId, CommitId, std::path::PathBuf)>,
+    pub changes_menu: Option<(RootId, std::path::PathBuf)>,
     pub diff: Option<DiffTarget>,
     pub blame: Option<BlameTarget>,
     pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
@@ -1831,6 +1838,11 @@ impl AppState {
             .collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.created_at));
         rows
+    }
+
+    pub fn open_shelve_dialog(&mut self, root: Option<RootId>) {
+        self.ui.dlg.shelve_root = root;
+        self.ui.dialog = Some(Dialog::Shelve);
     }
 
     pub fn open_unshelve_dialog(&mut self) {

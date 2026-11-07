@@ -349,7 +349,7 @@ fn shelve_one_change(repo: &Path, name: &str) {
     let mut state = app_state(&[repo.to_path_buf()]);
     select_in_commit_list(&mut state, "base.txt");
     state.ui.dlg.shelve_name = name.to_string();
-    state.ui.dialog = Some(Dialog::Shelve);
+    state.open_shelve_dialog(state.selected_root.clone());
     let mut h = harness(state);
     h.get_by_label("Shelve selected").click();
     h.run();

@@ -229,13 +229,16 @@ _Avoid_: include box, commit checkbox, tick
 **Changes selection**:
 The set of file rows a developer is looking at, and the only input the changes
 list's verbs read: Discard Changes, Shelve and Create Patch act on it, while
-Commit acts on the index. A row-body click is its only writer, and the modifier
+Commit acts on the index. A row-body click is its writer, and the modifier
 held at that click picks the rule: a plain click leaves just that row in the
 set, Command/Ctrl moves one row in or out of it, and Shift+Click replaces it
 with the contiguous run of painted rows from the **Range anchor**. Painted means
 visible, so the file filter and a collapsed repository group both bound a range
 without any further rule. A Merge conflicts row never joins the set, because no
-verb above refuses an unmerged path.
+verb above refuses an unmerged path. The row's context menu is the other writer,
+and it keeps what is already there: right-clicking a row outside the set acts as
+a plain click, and right-clicking a row inside it leaves the set alone, so the
+menu of one selected file can still be told to discard ten. See ADR-0034.
 _Avoid_: marked files, picked files, highlighted set
 
 **Range anchor**:

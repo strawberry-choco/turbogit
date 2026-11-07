@@ -10,6 +10,7 @@ pub mod branches;
 pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
+pub mod changes_menu;
 pub mod changes_selection;
 pub mod cherry_across;
 pub(crate) mod column_table;

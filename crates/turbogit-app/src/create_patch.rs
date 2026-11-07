@@ -42,19 +42,28 @@ pub fn open_on(state: &mut AppState, root: RootId, origin: PatchOrigin) {
 }
 
 pub fn open_from_selection(state: &mut AppState) {
-    let origin = local_changes_origin(state);
+    let origin = local_changes_origin(state, state.selected_root.as_ref());
     open(state, origin);
 }
 
 pub fn copy_from_selection(state: &mut AppState) {
-    let origin = local_changes_origin(state);
+    let origin = local_changes_origin(state, state.selected_root.as_ref());
     copy_to_clipboard(state, origin);
 }
 
-fn local_changes_origin(state: &AppState) -> PatchOrigin {
-    let paths = state
-        .selected_root
-        .as_ref()
+/// The Changes row menu's routes, aimed at the repository the row belongs to.
+pub fn open_from_selection_in(state: &mut AppState, root: &RootId) {
+    let origin = local_changes_origin(state, Some(root));
+    open_on(state, root.clone(), origin);
+}
+
+pub fn copy_from_selection_in(state: &mut AppState, root: &RootId) {
+    let origin = local_changes_origin(state, Some(root));
+    copy_on(state, root.clone(), origin);
+}
+
+fn local_changes_origin(state: &AppState, root: Option<&RootId>) -> PatchOrigin {
+    let paths = root
         .and_then(|id| state.multi.by_id(id))
         .map(|root| {
             root.status
@@ -352,6 +361,10 @@ pub fn copy_to_clipboard(state: &mut AppState, origin: PatchOrigin) {
         ));
         return;
     };
+    copy_on(state, root, origin);
+}
+
+fn copy_on(state: &mut AppState, root: RootId, origin: PatchOrigin) {
     let payload = state
         .executor
         .patch_bytes(root.as_path(), &origin, false)

@@ -1640,7 +1640,7 @@ fn rollback_icon_confirms_discard_and_toasts_when_empty() {
     h.get_by_label("Rollback").click();
     h.run();
     match &h.state().ui.confirm {
-        Some(turbogit_app::state::PendingConfirm::Discard { changes }) => {
+        Some(turbogit_app::state::PendingConfirm::Discard { root: _, changes }) => {
             assert_eq!(changes.len(), 1, "one selected file enters the confirm");
         }
         None => panic!("expected a Discard confirm, got none"),

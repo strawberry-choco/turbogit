@@ -1165,20 +1165,18 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
         }
         if ui.button("Shelve selected").clicked() {
             let name = state.ui.dlg.shelve_name.clone();
+            let Some(root) = state.ui.dlg.shelve_root.clone() else {
+                close(state);
+                return;
+            };
             let mut changes = Vec::new();
-            if let Some(id) = &state.selected_root
-                && let Some(root) = state.multi.by_id(id)
-            {
-                for c in &root.status.changes {
-                    if state.ui.selected.contains(&root.canonical_key(c)) {
+            if let Some(repo) = state.multi.by_id(&root) {
+                for c in &repo.status.changes {
+                    if state.ui.selected.contains(&repo.canonical_key(c)) {
                         changes.push(c.clone());
                     }
                 }
             }
-            let Some(root) = state.selected_root.clone() else {
-                close(state);
-                return;
-            };
             let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
             if state.add_shelf(shelf).is_err() {
                 close(state);

@@ -81,8 +81,14 @@ fn make_changes(paths: &[&str]) -> Vec<Change> {
 }
 
 fn plant_discard(harness: &mut Harness<'_, AppState>) {
+    let root = harness
+        .state()
+        .selected_root
+        .clone()
+        .expect("the harness has the repository whose files the discard names");
     let st = harness.state_mut();
     st.ui.confirm = Some(PendingConfirm::Discard {
+        root,
         changes: make_changes(&["a.txt", "b.txt", "c.txt"]),
     });
 }

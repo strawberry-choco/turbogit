@@ -647,7 +647,7 @@ fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
         .confirm
         .as_ref()
         .map(|c| match c {
-            turbogit_app::state::PendingConfirm::Discard { changes } => changes
+            turbogit_app::state::PendingConfirm::Discard { root: _, changes } => changes
                 .iter()
                 .map(|c| c.path.display().to_string())
                 .collect(),

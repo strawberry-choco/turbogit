@@ -1,4 +1,5 @@
 use crate::theme::Palette;
+use crate::ui::changes_menu;
 use crate::ui::changes_selection::{self, ClickKind, RowSlot};
 use crate::ui::column_table::{self, PaneTable};
 use crate::ui::components;
@@ -14,7 +15,7 @@ use egui::{
 use std::path::{Path, PathBuf};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
-use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
+use turbogit_app::state::{AppState, BlameTarget, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeRef, ChangeStatus, DisplayName, Root, RootId};
 
 pub const COMMIT_PANEL_WIDTH: f32 = 340.0;
@@ -44,6 +45,17 @@ impl StageState {
             _ => Self::None,
         }
     }
+
+    /// The verb that leaves this state, and the index state the a11y label names
+    /// after the path. One table, so the checkbox, its label and the row menu
+    /// cannot spell the same state differently.
+    fn words(self) -> (&'static str, &'static str) {
+        match self {
+            Self::None => ("Stage", "unstaged"),
+            Self::Partial => ("Stage all of", "partially staged"),
+            Self::All => ("Unstage", "staged"),
+        }
+    }
 }
 
 enum RowAction {
@@ -57,6 +69,11 @@ enum RowAction {
         root: RootId,
         path: PathBuf,
         kind: ClickKind,
+    },
+    OpenMenu {
+        key: PathBuf,
+        root: RootId,
+        path: PathBuf,
     },
 }
 
@@ -106,6 +123,23 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot
                 );
                 state.ui.preview_change = Some(ChangeRef { root, path });
             }
+            RowAction::OpenMenu { key, root, path } => {
+                // ADR-0034: a row already inside the set leaves the set alone.
+                if !state.ui.selected.contains(&key) {
+                    changes_selection::apply(
+                        &mut state.ui.selected,
+                        &mut state.ui.selection_anchor,
+                        order,
+                        &key,
+                        ClickKind::Replace,
+                    );
+                }
+                state.ui.preview_change = Some(ChangeRef {
+                    root: root.clone(),
+                    path: path.clone(),
+                });
+                state.ui.changes_menu = Some((root, path));
+            }
             RowAction::ToggleGroup(id) => {
                 if state.ui.changes_expanded.contains(&id) {
                     state.ui.changes_expanded.remove(&id);
@@ -140,11 +174,9 @@ pub fn toggle_previewed_row_checkbox(state: &mut AppState) {
     set_file_staged(state, &change.root, &change.path);
 }
 
-fn selected_changes(state: &AppState) -> Vec<Change> {
+fn selected_changes(state: &AppState, root: &RootId) -> Vec<Change> {
     let mut out = Vec::new();
-    if let Some(id) = &state.selected_root
-        && let Some(root) = state.multi.by_id(id)
-    {
+    if let Some(root) = state.multi.by_id(root) {
         for c in &root.status.changes {
             if state.ui.selected.contains(&root.canonical_key(c)) {
                 out.push(c.clone());
@@ -152,6 +184,27 @@ fn selected_changes(state: &AppState) -> Vec<Change> {
         }
     }
     out
+}
+
+/// The one route from "discard this repository's selected files" to the confirm,
+/// shared by the header's Rollback and the row menu's Discard item.
+///
+/// An `Unversioned` row is dropped rather than passed on: the discard is
+/// `git checkout -- <paths>`, which reads the index, so one path git never held
+/// fails the whole call and the tracked files beside it come back untouched.
+fn discard_selected_changes(state: &mut AppState, root: &RootId) {
+    let changes: Vec<Change> = selected_changes(state, root)
+        .into_iter()
+        .filter(|c| c.status != ChangeStatus::Unversioned)
+        .collect();
+    if changes.is_empty() {
+        state.ui.toast = Some(Toast::warning("Select files to discard."));
+        return;
+    }
+    state.ui.confirm = Some(PendingConfirm::Discard {
+        root: root.clone(),
+        changes,
+    });
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
@@ -305,7 +358,7 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
                     .on_hover_text("Shelve selected changes")
                     .clicked()
                 {
-                    state.ui.dialog = Some(Dialog::Shelve);
+                    state.open_shelve_dialog(state.selected_root.clone());
                 }
                 if widgets::ghost_button(ui, None, "Import Patches\u{2026}")
                     .on_hover_text("Park a patch file on this repository's shelf")
@@ -492,6 +545,13 @@ fn commit_card_body(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn changes_card_body(ui: &mut Ui, state: &mut AppState, fills: bool) {
+    changes_card(ui, state, fills);
+    // `changes_card` returns early when no repository answers, so a root that
+    // vanished under an open menu would strand it.
+    changes_context_menu(ui, state);
+}
+
+fn changes_card(ui: &mut Ui, state: &mut AppState, fills: bool) {
     changes_card_header(ui, state);
 
     let Some(root_id) = state.selected_root.clone() else {
@@ -557,6 +617,83 @@ fn changes_tree(
                 widgets::empty_state(ui, empty_text);
             }
         });
+}
+
+fn changes_context_menu(ui: &mut Ui, state: &mut AppState) {
+    let Some((root_id, path)) = state.ui.changes_menu.clone() else {
+        return;
+    };
+    let Some(change) = state
+        .multi
+        .by_id(&root_id)
+        .and_then(|r| r.resolve_change(&path))
+        .cloned()
+    else {
+        // A refresh, a filter, or the repository closing took the row away.
+        state.ui.changes_menu = None;
+        return;
+    };
+    let order: &[(changes_menu::ChangesMenuAction, changes_menu::Rule)] =
+        if change.status == ChangeStatus::Conflicted {
+            &changes_menu::CONFLICT_ORDER
+        } else {
+            &changes_menu::FILE_ORDER
+        };
+    let stage_label = format!("{} file", StageState::of(&change).words().0);
+    let parkable = state.multi.by_id(&root_id).is_some_and(|r| {
+        r.status.changes.iter().any(|c| {
+            c.status != ChangeStatus::Unversioned && state.ui.selected.contains(&r.canonical_key(c))
+        })
+    });
+
+    let target = widgets::menu_host::target_of(&root_id, &path.to_string_lossy());
+    widgets::menu_host::host_row_menu(
+        ui,
+        state,
+        CHANGES_MENU_SALT,
+        target,
+        |ui, _| {
+            changes_menu::changes_menu(
+                ui,
+                &changes_menu::ChangesMenuProps {
+                    change: &change,
+                    stage_label: &stage_label,
+                    parkable,
+                },
+                order,
+            )
+        },
+        |state| state.ui.changes_menu = None,
+        |state, action| apply_changes_action(state, &root_id, &path, action),
+    );
+}
+
+fn apply_changes_action(
+    state: &mut AppState,
+    root: &RootId,
+    path: &Path,
+    action: changes_menu::ChangesMenuAction,
+) {
+    use changes_menu::ChangesMenuAction as A;
+    match action {
+        A::StageToggle => set_file_staged(state, root, path),
+        A::Discard => discard_selected_changes(state, root),
+        A::Shelve => state.open_shelve_dialog(Some(root.clone())),
+        A::CreatePatch => turbogit_app::create_patch::open_from_selection_in(state, root),
+        A::CopyPatch => turbogit_app::create_patch::copy_from_selection_in(state, root),
+        // Blame at HEAD is the only side with an author per line, which is the
+        // same reason F4 reads HEAD: the working tree has no committed author.
+        A::ShowBlame => {
+            state.ui.blame = Some(BlameTarget {
+                root: root.clone(),
+                path: path.to_path_buf(),
+                rev: "HEAD".to_owned(),
+            });
+        }
+        A::Resolve => crate::ui::conflict_resolver::open_resolver(state, root.as_path(), path),
+        A::TakeOurs => state.dispatch(shell_writes::conflict::accept_ours(root, path)),
+        A::TakeTheirs => state.dispatch(shell_writes::conflict::accept_theirs(root, path)),
+    }
 }
 
 struct GroupHeader<'a> {
@@ -842,12 +979,8 @@ fn row_display(path: &Path) -> (String, Option<String>) {
 }
 
 fn stage_label(path: &Path, stage: StageState) -> String {
-    let name = path.display();
-    match stage {
-        StageState::None => format!("Stage {name} (unstaged)"),
-        StageState::Partial => format!("Stage all of {name} (partially staged)"),
-        StageState::All => format!("Unstage {name} (staged)"),
-    }
+    let (verb, state) = stage.words();
+    format!("{verb} {} ({state})", path.display())
 }
 
 fn paint_checkbox(ui: &Ui, rect: Rect, stage: StageState, resp: &egui::Response) {
@@ -900,6 +1033,33 @@ const GROUP_COUNT_SLOT: f32 = 44.0;
 fn row_click_kind(ui: &Ui) -> ClickKind {
     let modifiers = ui.ctx().input(|i| i.modifiers);
     changes_selection::click_kind(modifiers.shift, modifiers.command)
+}
+
+const CHANGES_MENU_SALT: &str = "changes_file_row";
+
+/// Anchor a menu at the pointer and queue it for the row.
+fn open_menu_at(
+    ui: &Ui,
+    row: Rect,
+    root: &RootId,
+    path: &Path,
+    key: &Path,
+    actions: &mut Vec<RowAction>,
+) {
+    let target = widgets::menu_host::target_of(root, &path.to_string_lossy());
+    let pos = ui
+        .input(|i| i.pointer.interact_pos())
+        .unwrap_or_else(|| row.left_bottom());
+    widgets::menu_host::note_anchor(
+        ui,
+        widgets::menu_host::MenuId::new(CHANGES_MENU_SALT, &target),
+        pos,
+    );
+    actions.push(RowAction::OpenMenu {
+        key: key.to_path_buf(),
+        root: root.clone(),
+        path: path.to_path_buf(),
+    });
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1081,6 +1241,9 @@ fn change_row(
         key: key.clone(),
         selectable: true,
     });
+    if body.secondary_clicked() {
+        open_menu_at(ui, row, &root.id, &c.path, &key, actions);
+    }
     if body.clicked() {
         actions.push(RowAction::Select {
             key,
@@ -1151,6 +1314,9 @@ fn conflict_row(
         key: key.clone(),
         selectable: false,
     });
+    if response.secondary_clicked() {
+        open_menu_at(ui, row, root, &c.path, key, actions);
+    }
     if response.clicked() {
         actions.push(RowAction::Select {
             key: key.clone(),
@@ -1228,11 +1394,9 @@ fn changes_card_header(ui: &mut Ui, state: &mut AppState) {
         let rollback = widgets::icon_button(ui, Icon::UNDO);
         rollback.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Rollback"));
         if rollback.clicked() {
-            let ch = selected_changes(state);
-            if ch.is_empty() {
-                state.ui.toast = Some(Toast::warning("Select files to discard."));
-            } else {
-                state.ui.confirm = Some(PendingConfirm::Discard { changes: ch });
+            match state.selected_root.clone() {
+                Some(root) => discard_selected_changes(state, &root),
+                None => state.ui.toast = Some(Toast::warning("Select files to discard.")),
             }
         }
 
@@ -1614,7 +1778,7 @@ fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
             .on_hover_text("Shelve selected changes")
             .clicked()
         {
-            state.ui.dialog = Some(Dialog::Shelve);
+            state.open_shelve_dialog(state.selected_root.clone());
         }
         if widgets::ghost_button(ui, None, "Stash\u{2026}")
             .on_hover_text("Stash all changes")
