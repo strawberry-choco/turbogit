@@ -392,6 +392,31 @@ fn branch_bands(state: &mut AppState) -> Vec<RefBand> {
     )
 }
 
+/// The Branch menu's own width, fitted to the refs its open bands paint. A folded band
+/// paints no row, so it must not count; the reveal that adds one is what widens the menu.
+fn branch_menu_width(ui: &Ui, bands: &[RefBand]) -> f32 {
+    let widest = std::iter::once(LABEL_ALL)
+        .chain(
+            bands
+                .iter()
+                .filter(|band| band.open)
+                .flat_map(|band| band.revs.iter().map(String::as_str)),
+        )
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CONTROL), Palette::INK)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    // The text starts `BUTTON_PAD_X` in from the row's left and the same inset stays on
+    // the right; the frame's margin lives outside this content width.
+    let margin = ui.style().spacing.menu_margin.sum().x;
+    let floor = POPUP_WIDTH - margin;
+    let ceiling = (ui.ctx().content_rect().width() - margin).max(floor);
+    (widest + 2.0 * BUTTON_PAD_X).clamp(floor, ceiling)
+}
+
 fn apply_date(state: &mut AppState, now: i64) -> bool {
     let (Ok(after), Ok(before)) = (
         parse_day(&state.ui.log_date_after),
@@ -411,6 +436,10 @@ fn apply_date(state: &mut AppState, now: i64) -> bool {
 }
 
 fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
+    let bands = branch_bands(state);
+    // Set every frame so the `Area` follows a reveal or a fold, not only its first size.
+    ui.set_width(branch_menu_width(ui, &bands));
+
     let mut close = false;
     if menu_row(ui, LABEL_ALL, state.ui.log_ref_scope.is_none(), None).clicked() {
         state.ui.log_ref_scope = None;
@@ -433,7 +462,6 @@ fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
         close = true;
     }
     widgets::menu_rule(ui);
-    let bands = branch_bands(state);
     if bands.is_empty() {
         widgets::empty_state(ui, "No values available.");
         return close;

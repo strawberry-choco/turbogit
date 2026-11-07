@@ -5,8 +5,8 @@ use egui_kittest::kittest::Queryable as _;
 use tempfile::TempDir;
 use test_support::git_seed::{git, repo_with_one_commit, repo_with_origin};
 use test_support::harness::{
-    assert_painted, filled_circles, filled_rects, painted_text, repo_shell_harness, settle_quiet,
-    settle_reads, shell_harness_over,
+    assert_painted, filled_circles, filled_rects, painted_galleys, painted_text,
+    repo_shell_harness, settle_quiet, settle_reads, shell_harness_over,
 };
 use turbogit_app::log_filters::{DateFilter, Fold, RefGroup, RootFilter};
 use turbogit_app::root_caches::{LogRead, LogScope};
@@ -415,6 +415,106 @@ fn the_branch_dropdown_groups_by_kind_only_with_remotes_and_tags_collapsed() {
         popup_nodes(&harness, LOCAL_BAND, "v1"),
         0,
         "revealing one band leaves the other folded"
+    );
+}
+
+/// A ref longer than the fixed menu width used to paint past the popup's own frame.
+#[test]
+fn a_long_branch_name_widens_the_dropdown_instead_of_overflowing_it() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().to_path_buf();
+    let alpha = repo_with_one_commit(&project, "alpha");
+    let long = "feature/a-branch-name-far-wider-than-the-old-fixed-popup";
+    git(&alpha, &["branch", long]);
+
+    let mut harness = seeded_log_harness(&project, &[alpha]);
+    open_branch_dropdown(&mut harness);
+
+    let left = harness.get_by_label(LOCAL_BAND).rect().min.x;
+    let row_rect = harness
+        .query_all_by_label(long)
+        .find(|node| (node.rect().min.x - left).abs() < 2.0)
+        .expect("the long ref is a row of the open dropdown")
+        .rect();
+    let painted = painted_galleys(&harness)
+        .into_iter()
+        .find(|galley| {
+            galley.text == long
+                && (galley.rect.center().y - row_rect.center().y).abs() < 2.0
+                && (galley.rect.min.x - row_rect.min.x - 8.0).abs() < 2.0
+        })
+        .expect("the long ref's label is painted on its row");
+
+    assert!(
+        painted.rect.right() <= row_rect.right(),
+        "the dropdown must widen to fit its longest ref: the label ends at {:.1}, \
+         its row at {:.1}",
+        painted.rect.right(),
+        row_rect.right()
+    );
+}
+
+/// A band that starts folded paints no row, so its longest ref must not widen the menu.
+/// The reveal is what brings that ref into the layout and widens it.
+#[test]
+fn a_folded_band_does_not_widen_the_dropdown_until_it_is_revealed() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().to_path_buf();
+    let alpha = repo_with_one_commit(&project, "alpha");
+    let long = "release/a-tag-name-far-wider-than-the-filter-popup";
+    git(&alpha, &["tag", long]);
+
+    let mut harness = seeded_log_harness(&project, &[alpha]);
+    open_branch_dropdown(&mut harness);
+
+    let left = harness.get_by_label(LOCAL_BAND).rect().min.x;
+    let main_rect = harness
+        .query_all_by_label("main")
+        .find(|node| (node.rect().min.x - left).abs() < 2.0)
+        .expect("the open local band paints main")
+        .rect();
+    assert!(
+        main_rect.width() <= 240.0,
+        "a folded tag paints no row, so it must not widen the menu: the visible row \
+         spans {:.1}",
+        main_rect.width()
+    );
+
+    reveal_band(&mut harness, TAG_BAND);
+
+    let tag_rect = harness
+        .query_all_by_label(long)
+        .find(|node| (node.rect().min.x - left).abs() < 2.0)
+        .expect("the revealed tag is a row of the dropdown")
+        .rect();
+    let painted = painted_galleys(&harness)
+        .into_iter()
+        .find(|galley| {
+            galley.text == long
+                && (galley.rect.center().y - tag_rect.center().y).abs() < 2.0
+                && (galley.rect.min.x - tag_rect.min.x - 8.0).abs() < 2.0
+        })
+        .expect("the revealed tag's label is painted on its row");
+
+    assert!(
+        painted.rect.right() <= tag_rect.right(),
+        "revealing the tag must widen the menu to fit it: the label ends at {:.1}, \
+         its row at {:.1}",
+        painted.rect.right(),
+        tag_rect.right()
+    );
+
+    reveal_band(&mut harness, TAG_BAND);
+    let refolded_rect = harness
+        .query_all_by_label("main")
+        .find(|node| (node.rect().min.x - left).abs() < 2.0)
+        .expect("the local band is still open")
+        .rect();
+    assert!(
+        refolded_rect.width() <= 240.0,
+        "folding the tag again must shrink the menu back to what it paints: the \
+         visible row spans {:.1}",
+        refolded_rect.width()
     );
 }
 
