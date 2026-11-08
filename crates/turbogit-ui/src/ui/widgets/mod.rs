@@ -1,6 +1,7 @@
 mod chips;
 mod containers;
 mod controls;
+mod date_picker;
 mod feedback;
 mod inputs;
 mod menu;
@@ -29,6 +30,7 @@ pub use controls::{
     ghost_icon_button, icon_button, icon_button_enabled, mix, primary_button, segmented_control,
     tint_over_bg,
 };
+pub use date_picker::instant_picker;
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
 pub use inputs::{filter_matches, search_input, text_input};
 pub use menu::{

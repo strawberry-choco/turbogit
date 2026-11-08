@@ -2,6 +2,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use tempfile::TempDir;
@@ -55,6 +56,88 @@ fn a_date_preset_changes_the_button_and_asks_for_a_composite_read() {
     assert_eq!(key.until, None);
     assert_eq!(key.author, None);
     assert_painted(&harness, "Date: Last 7 days");
+}
+
+fn at(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
+}
+
+fn local_wall(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(y, m, d)
+        .unwrap()
+        .and_hms_opt(h, min, s)
+        .unwrap()
+}
+
+fn utc_of_wall(wall: NaiveDateTime) -> DateTime<Utc> {
+    Local
+        .from_local_datetime(&wall)
+        .earliest()
+        .unwrap_or_else(|| Local.from_utc_datetime(&wall))
+        .with_timezone(&Utc)
+}
+
+#[test]
+fn a_picked_day_sets_the_after_bound_and_asks_git_for_unix_seconds() {
+    let mut harness = log_harness();
+    harness.state_mut().ui.log_date_filter =
+        DateFilter::from_bounds(Some(utc_of_wall(local_wall(2026, 11, 7, 9, 30, 0))), None);
+    settle_quiet(&mut harness);
+
+    harness.get_by_label("Date").click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("2026-11-07").click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("8").click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("Save").click();
+    settle_quiet(&mut harness);
+
+    let key = harness
+        .state()
+        .log_filter_key()
+        .expect("a picked day must ask git for a filtered window");
+    assert_eq!(key.until, None);
+    let since_wall = Utc
+        .timestamp_opt(key.since.expect("a lower bound"), 0)
+        .single()
+        .unwrap()
+        .with_timezone(&Local)
+        .naive_local();
+    assert_eq!(since_wall, local_wall(2026, 11, 8, 9, 30, 0));
+    assert_painted(&harness, "Date: Since 2026-11-08 09:30");
+}
+
+#[test]
+fn clearing_one_bound_leaves_the_other_open() {
+    let mut harness = log_harness();
+    let after = at(2026, 11, 7, 9, 30, 0);
+    harness.state_mut().ui.log_date_filter =
+        DateFilter::from_bounds(Some(after), Some(at(2026, 11, 8, 23, 59, 59)));
+    settle_quiet(&mut harness);
+
+    harness.get_by_label("Date").click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("Clear before").click();
+    settle_quiet(&mut harness);
+
+    assert_eq!(harness.state().ui.log_date_filter.before(), None);
+    assert_eq!(harness.state().ui.log_date_filter.after(), Some(after));
+    let key = harness
+        .state()
+        .log_filter_key()
+        .expect("the surviving bound must still ask git for a window");
+    assert_eq!(key.until, None);
+}
+
+#[test]
+fn the_date_popup_has_no_manual_date_input() {
+    let mut harness = log_harness();
+    harness.get_by_label("Date").click();
+    settle_quiet(&mut harness);
+
+    assert_not_painted(&harness, "YYYY-MM-DD");
+    assert_not_painted(&harness, "Use YYYY-MM-DD");
 }
 
 #[test]

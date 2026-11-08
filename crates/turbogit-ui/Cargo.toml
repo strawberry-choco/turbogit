@@ -7,7 +7,9 @@ publish = false
 [dependencies]
 chrono = { workspace = true }
 egui = { workspace = true }
+egui_extras = { workspace = true, features = ["datepicker"] }
 image = { workspace = true }
+jiff = { workspace = true }
 log = { workspace = true }
 nucleo-matcher = { workspace = true }
 turbogit-app = { workspace = true }

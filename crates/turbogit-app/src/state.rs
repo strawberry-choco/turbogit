@@ -779,8 +779,6 @@ pub struct UiState {
     pub log_author_input: String,
     pub log_branch_input: String,
     pub log_path_input: String,
-    pub log_date_after: String,
-    pub log_date_before: String,
     pub selected_commit: Option<CommitId>,
     pub log_scroll_to: Option<CommitId>,
     pub log_hidden_jump: Option<(RootId, CommitId)>,
@@ -1394,8 +1392,6 @@ impl AppState {
         self.ui.log_author_input.clear();
         self.ui.log_branch_input.clear();
         self.ui.log_path_input.clear();
-        self.ui.log_date_after.clear();
-        self.ui.log_date_before.clear();
     }
 
     fn scoped_log_batch_plan(&self, root: &RootId, scope: &LogScope) -> (LogOpts, LogBatchMode) {

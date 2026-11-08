@@ -2,6 +2,7 @@
 //! name the same thing, so someone moving between the two tools does not have to
 //! learn a second vocabulary.
 
+use chrono::{DateTime, Local, Utc};
 use std::collections::{BTreeSet, HashMap};
 use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
 
@@ -18,8 +19,18 @@ pub const LABEL_ROOTS: &str = "Roots";
 pub const LABEL_AFTER: &str = "After";
 pub const LABEL_BEFORE: &str = "Before";
 
-/// A picked period carries its own timestamps. Resolving "Last 24 hours" at
-/// click time keeps the cache key stable across frames and keeps reads pure.
+/// A hand-picked UTC period. Three shapes, so both ends can never be open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatePeriod {
+    Since(DateTime<Utc>),
+    Until(DateTime<Utc>),
+    Between {
+        after: DateTime<Utc>,
+        before: DateTime<Utc>,
+    },
+}
+
+/// Presets resolve at click time so the composite cache key stays fixed across frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DateFilter {
     #[default]
@@ -30,10 +41,7 @@ pub enum DateFilter {
     Last7Days {
         since: i64,
     },
-    Period {
-        after: i64,
-        before: i64,
-    },
+    Period(DatePeriod),
 }
 
 impl DateFilter {
@@ -46,7 +54,7 @@ impl DateFilter {
             Self::All => LABEL_ALL,
             Self::Last24Hours { .. } => LABEL_LAST_DAY,
             Self::Last7Days { .. } => LABEL_LAST_WEEK,
-            Self::Period { .. } => LABEL_SELECT_PERIOD,
+            Self::Period(_) => LABEL_SELECT_PERIOD,
         }
     }
 
@@ -54,28 +62,62 @@ impl DateFilter {
         match self {
             Self::All => (None, None),
             Self::Last24Hours { since } | Self::Last7Days { since } => (Some(since), None),
-            Self::Period { after, before } => (Some(after), Some(before)),
+            Self::Period(DatePeriod::Since(a)) => (Some(a.timestamp()), None),
+            Self::Period(DatePeriod::Until(b)) => (None, Some(b.timestamp())),
+            Self::Period(DatePeriod::Between { after, before }) => {
+                (Some(after.timestamp()), Some(before.timestamp()))
+            }
         }
     }
-}
 
-/// Parse one `YYYY-MM-DD` bound into unix seconds at the UTC start of that day.
-/// A blank bound means no bound, which is how IntelliJ's Select Period dialog
-/// lets you ask only for "after" or only for "until". Malformed text is an
-/// error, not a blank, so the popup can say which field is wrong.
-pub fn parse_day(text: &str) -> Result<Option<i64>, &'static str> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(None);
+    pub fn readback(self) -> Option<String> {
+        const FMT: &str = "%Y-%m-%d %H:%M";
+        match self {
+            Self::All => None,
+            Self::Last24Hours { .. } => Some(LABEL_LAST_DAY.to_owned()),
+            Self::Last7Days { .. } => Some(LABEL_LAST_WEEK.to_owned()),
+            Self::Period(DatePeriod::Since(a)) => {
+                Some(format!("Since {}", a.with_timezone(&Local).format(FMT)))
+            }
+            Self::Period(DatePeriod::Until(b)) => {
+                Some(format!("Until {}", b.with_timezone(&Local).format(FMT)))
+            }
+            Self::Period(DatePeriod::Between { after, before }) => Some(format!(
+                "{} - {}",
+                after.with_timezone(&Local).format(FMT),
+                before.with_timezone(&Local).format(FMT)
+            )),
+        }
     }
-    let date =
-        chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|_| "expected YYYY-MM-DD")?;
-    Ok(Some(
-        date.and_hms_opt(0, 0, 0)
-            .ok_or("expected YYYY-MM-DD")?
-            .and_utc()
-            .timestamp(),
-    ))
+
+    pub fn after(self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Period(DatePeriod::Since(a))
+            | Self::Period(DatePeriod::Between { after: a, .. }) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn before(self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Period(DatePeriod::Until(b))
+            | Self::Period(DatePeriod::Between { before: b, .. }) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn from_bounds(after: Option<DateTime<Utc>>, before: Option<DateTime<Utc>>) -> Self {
+        match (after, before) {
+            (None, None) => Self::All,
+            (Some(a), None) => Self::Period(DatePeriod::Since(a)),
+            (None, Some(b)) => Self::Period(DatePeriod::Until(b)),
+            (Some(a), Some(b)) => {
+                // Git returns nothing when --since is later than --until, so the pair is ordered.
+                let (after, before) = if a <= b { (a, b) } else { (b, a) };
+                Self::Period(DatePeriod::Between { after, before })
+            }
+        }
+    }
 }
 
 /// One band of the `Branch` dropdown's ref list.
@@ -295,26 +337,74 @@ fn fold_of(folds: &RefFolds, group: RefGroup, starts_open: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
-    #[test]
-    fn a_blank_bound_is_open_and_a_bad_one_is_an_error() {
-        assert_eq!(parse_day(""), Ok(None));
-        assert_eq!(parse_day("   "), Ok(None));
-        assert!(parse_day("06/11/2026").is_err());
+    fn at(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
     }
 
     #[test]
-    fn a_day_is_read_at_utc_midnight() {
+    fn from_bounds_keeps_open_ends_open() {
+        let after = at(2026, 11, 7, 9, 30, 0);
+        let before = at(2026, 11, 8, 23, 59, 59);
+        assert_eq!(DateFilter::from_bounds(None, None), DateFilter::All);
         assert_eq!(
-            parse_day("2026-11-06"),
-            Ok(Some(
-                chrono::NaiveDate::from_ymd_opt(2026, 11, 6)
-                    .unwrap()
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-                    .and_utc()
-                    .timestamp()
-            ))
+            DateFilter::from_bounds(Some(after), None).bounds(),
+            (Some(after.timestamp()), None)
+        );
+        assert_eq!(
+            DateFilter::from_bounds(None, Some(before)).bounds(),
+            (None, Some(before.timestamp()))
+        );
+    }
+
+    #[test]
+    fn from_bounds_sorts_an_inverted_pair_into_a_window() {
+        let early = at(2026, 11, 7, 9, 30, 0);
+        let late = at(2026, 11, 8, 23, 59, 59);
+        let filter = DateFilter::from_bounds(Some(late), Some(early));
+        assert_eq!(
+            filter.bounds(),
+            (Some(early.timestamp()), Some(late.timestamp()))
+        );
+        assert_eq!(filter.after(), Some(early));
+        assert_eq!(filter.before(), Some(late));
+    }
+
+    #[test]
+    fn an_open_bound_omits_its_git_flag_entirely() {
+        assert_eq!(DateFilter::All.bounds(), (None, None));
+        assert_eq!(
+            DateFilter::from_bounds(Some(at(2026, 11, 7, 0, 0, 0)), None)
+                .bounds()
+                .1,
+            None
+        );
+        assert_eq!(
+            DateFilter::from_bounds(None, Some(at(2026, 11, 7, 23, 59, 59)))
+                .bounds()
+                .0,
+            None
+        );
+    }
+
+    #[test]
+    fn readback_names_the_period_in_local_time() {
+        let after = at(2026, 11, 7, 9, 30, 0);
+        let before = at(2026, 11, 8, 23, 59, 59);
+        let local = |t: DateTime<Utc>| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string();
+        assert_eq!(DateFilter::All.readback(), None);
+        assert_eq!(
+            DateFilter::from_bounds(Some(after), None).readback(),
+            Some(format!("Since {}", local(after)))
+        );
+        assert_eq!(
+            DateFilter::from_bounds(None, Some(before)).readback(),
+            Some(format!("Until {}", local(before)))
+        );
+        assert_eq!(
+            DateFilter::from_bounds(Some(after), Some(before)).readback(),
+            Some(format!("{} - {}", local(after), local(before)))
         );
     }
 
@@ -326,12 +416,12 @@ mod tests {
             (Some(10), None)
         );
         assert_eq!(
-            DateFilter::Period {
-                after: 10,
-                before: 20
-            }
-            .bounds(),
-            (Some(10), Some(20))
+            DateFilter::Last7Days { since: 20 }.bounds(),
+            (Some(20), None)
+        );
+        assert_eq!(
+            DateFilter::Last7Days { since: 20 }.readback(),
+            Some(LABEL_LAST_WEEK.to_owned())
         );
     }
 }

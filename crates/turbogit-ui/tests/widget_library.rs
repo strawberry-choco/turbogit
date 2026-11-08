@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Color32, Shape};
 use egui_kittest::{
     Harness,
@@ -2497,4 +2498,68 @@ fn the_ref_chip_is_produced_by_one_function_in_one_file_and_no_screen_paints_one
             );
         }
     }
+}
+
+fn wall(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(y, m, d)
+        .unwrap()
+        .and_hms_opt(h, min, s)
+        .unwrap()
+}
+
+fn instant_picker_harness(
+    captured: &Rc<Cell<Option<NaiveDateTime>>>,
+    seed: NaiveDateTime,
+) -> Harness<'static, ()> {
+    let sink = captured.clone();
+    widget_harness(egui::vec2(420.0, 460.0), move |ui| {
+        if let Some(dt) = instant_picker(ui, egui::Id::new("tg_test_picker"), seed) {
+            sink.set(Some(dt));
+        }
+    })
+}
+
+#[test]
+fn instant_picker_emits_the_picked_local_wall_time() {
+    let captured = Rc::new(Cell::new(None::<NaiveDateTime>));
+    let mut harness = instant_picker_harness(&captured, wall(2026, 11, 7, 9, 30, 0));
+    settle(&mut harness);
+    assert_painted(&harness, "2026-11-07");
+
+    harness.get_by_label("2026-11-07").click();
+    settle(&mut harness);
+    harness.get_by_label("8").click();
+    settle(&mut harness);
+    harness.get_by_label("Save").click();
+    settle(&mut harness);
+
+    assert_eq!(captured.get(), Some(wall(2026, 11, 8, 9, 30, 0)));
+}
+
+#[test]
+fn instant_picker_month_navigation_emits_no_value() {
+    let captured = Rc::new(Cell::new(None::<NaiveDateTime>));
+    let mut harness = instant_picker_harness(&captured, wall(2026, 11, 7, 9, 30, 0));
+    settle(&mut harness);
+
+    harness.get_by_label("2026-11-07").click();
+    settle(&mut harness);
+    harness.get_by_label(">>").click();
+    settle(&mut harness);
+    harness.get_by_label("Cancel").click();
+    settle(&mut harness);
+
+    assert_eq!(captured.get(), None);
+}
+
+#[test]
+fn instant_picker_time_steps_change_only_the_time() {
+    let captured = Rc::new(Cell::new(None::<NaiveDateTime>));
+    let mut harness = instant_picker_harness(&captured, wall(2026, 11, 7, 9, 30, 0));
+    settle(&mut harness);
+
+    harness.get_by_label("Hour plus").click();
+    settle(&mut harness);
+
+    assert_eq!(captured.get(), Some(wall(2026, 11, 7, 10, 30, 0)));
 }

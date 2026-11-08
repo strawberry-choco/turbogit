@@ -563,8 +563,13 @@ it is retired); `card`, `card_header`, `note` and `alert_box` (the container rol
 described above, where a page needing different containment may keep a local frame
 but must not call it `note`, `alert` or `card` merely because it looks similar);
 and the presentation helpers `focus_ring`, `mix`, `tint_over_bg` and
-`paint_centered_text`, which own no interaction. Two distinctions the widget layer
-cannot state about itself, because they are about what these names are *not*:
+`paint_centered_text`, which own no interaction. `instant_picker` wraps
+`egui_extras::DatePickerButton` for the calendar and adds local-wall-time steppers;
+the caller owns the wall time and its conversion to a UTC instant. The third-party
+calendar paints from egui's `Visuals`, which `theme::configure_style` sets from the
+same tokens, and its weekend highlight is off so it adds no second palette. Two
+distinctions the widget layer cannot state about itself, because they are about
+what these names are *not*:
 
 - **`segmented_control` is not a branch group header and not a selectable row.**
   It is a general token-exact two- or three-way picker; each caller still owns its

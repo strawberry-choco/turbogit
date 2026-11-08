@@ -2,16 +2,16 @@ use crate::theme::{CONTROL_RADIUS, GROUP_ROW_HEIGHT, Palette, TYPE_CONTROL, chro
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
-use chrono::Utc;
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use egui::{
-    Align, Color32, CornerRadius, Id, Key, Layout, Popup, PopupCloseBehavior, Pos2, Response,
-    ScrollArea, Sense, TextEdit, Ui, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, Id, Key, Layout, Order, Popup, PopupCloseBehavior, Pos2,
+    Response, ScrollArea, Sense, TextEdit, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::PathBuf;
 use turbogit_app::log_filters::{
     DateFilter, Fold, LABEL_AFTER, LABEL_ALL, LABEL_BEFORE, LABEL_BRANCH, LABEL_DATE,
     LABEL_LAST_DAY, LABEL_LAST_WEEK, LABEL_PATHS, LABEL_ROOTS, LABEL_SELECT, LABEL_SELECT_PERIOD,
-    LABEL_USER, RefBand, parse_day, ref_bands,
+    LABEL_USER, RefBand, ref_bands,
 };
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
@@ -20,13 +20,10 @@ const SALT_BRANCH: &str = "branch";
 const SALT_USER: &str = "user";
 const SALT_DATE: &str = "date";
 const SALT_PATHS: &str = "paths";
-const SALT_DATE_AFTER: &str = "date_after";
-const SALT_DATE_BEFORE: &str = "date_before";
 
 const APPLY: &str = "Apply";
 const CLEAR: &str = "Clear";
 const ALL_REPOS: &str = "All repositories";
-const DATE_HINT: &str = "YYYY-MM-DD";
 
 const BUTTON_PAD_X: f32 = 8.0;
 const CARET_SIZE: f32 = 12.0;
@@ -87,20 +84,7 @@ pub fn filter_bar(ui: &mut egui::Ui, state: &mut AppState) {
             None => name.clone(),
         });
     let user = state.ui.log_author_filter.clone();
-    let date = match state.ui.log_date_filter {
-        DateFilter::All => None,
-        DateFilter::Period { .. } => {
-            let after = state.ui.log_date_after.trim();
-            let before = state.ui.log_date_before.trim();
-            Some(match (after.is_empty(), before.is_empty()) {
-                (false, false) => format!("{after} - {before}"),
-                (false, true) => format!("Since {after}"),
-                (true, false) => format!("Until {before}"),
-                (true, true) => LABEL_SELECT_PERIOD.to_owned(),
-            })
-        }
-        other => Some(other.label().to_owned()),
-    };
+    let date = state.ui.log_date_filter.readback();
     let paths = paths_readback(state);
 
     filter_dropdown(ui, state, LABEL_BRANCH, branch, SALT_BRANCH, branch_menu);
@@ -146,15 +130,24 @@ fn filter_dropdown(
     if let Some(inner) = shown {
         close_requested = inner.inner;
         let popup_rect = inner.response.rect;
-        if was_open
-            && ui.input(|i| {
-                i.key_pressed(Key::Escape)
-                    || (i.pointer.any_click()
-                        && i.pointer
-                            .interact_pos()
-                            .is_some_and(|p| !popup_rect.contains(p) && !response.rect.contains(p)))
-            })
-        {
+        let escape = ui.input(|i| i.key_pressed(Key::Escape));
+        let click_pos = ui.input(|i| {
+            i.pointer
+                .any_click()
+                .then(|| i.pointer.interact_pos())
+                .flatten()
+        });
+        // A nested picker paints in its own foreground layer; a click inside it
+        // is not a click away from this dropdown.
+        let clicked_away = click_pos.is_some_and(|p| {
+            !popup_rect.contains(p)
+                && !response.rect.contains(p)
+                && !ui
+                    .ctx()
+                    .layer_id_at(p)
+                    .is_some_and(|layer| layer.order != Order::Background)
+        });
+        if was_open && (escape || clicked_away) {
             open = false;
         }
     }
@@ -319,21 +312,6 @@ fn select_group(ui: &mut Ui, id: Id, text: &mut String, hint: &'static str) -> b
     commit
 }
 
-fn date_field(ui: &mut Ui, label: &str, text: &mut String, id: Id, enter: bool) -> bool {
-    let mut commit = false;
-    ui.horizontal(|ui| {
-        ui.label(label);
-        let field = ui.add(
-            TextEdit::singleline(text)
-                .id(id)
-                .hint_text(DATE_HINT)
-                .desired_width(POPUP_WIDTH - 110.0),
-        );
-        commit = enter && (field.has_focus() || field.lost_focus());
-    });
-    commit
-}
-
 fn author_names(state: &AppState) -> Vec<String> {
     let mut names: Vec<String> = state
         .multi
@@ -415,24 +393,6 @@ fn branch_menu_width(ui: &Ui, bands: &[RefBand]) -> f32 {
     let floor = POPUP_WIDTH - margin;
     let ceiling = (ui.ctx().content_rect().width() - margin).max(floor);
     (widest + 2.0 * BUTTON_PAD_X).clamp(floor, ceiling)
-}
-
-fn apply_date(state: &mut AppState, now: i64) -> bool {
-    let (Ok(after), Ok(before)) = (
-        parse_day(&state.ui.log_date_after),
-        parse_day(&state.ui.log_date_before),
-    ) else {
-        return false;
-    };
-    // A blank bound is an open end: epoch for "after", now for "before".
-    state.ui.log_date_filter = match (after, before) {
-        (None, None) => DateFilter::All,
-        (a, b) => DateFilter::Period {
-            after: a.unwrap_or(0),
-            before: b.unwrap_or(now),
-        },
-    };
-    true
 }
 
 enum BandRow<'a> {
@@ -554,8 +514,102 @@ fn user_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     close
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundSlot {
+    After,
+    Before,
+}
+
+fn bound_of(filter: DateFilter, slot: BoundSlot) -> Option<DateTime<Utc>> {
+    match slot {
+        BoundSlot::After => filter.after(),
+        BoundSlot::Before => filter.before(),
+    }
+}
+
+fn bound_seed(slot: BoundSlot, now: DateTime<Utc>) -> NaiveDateTime {
+    let (h, m, s) = match slot {
+        BoundSlot::After => (0, 0, 0),
+        // `--until` is inclusive. End the seeded upper bound at 23:59:59, not midnight.
+        BoundSlot::Before => (23, 59, 59),
+    };
+    let local = now.with_timezone(&Local);
+    local
+        .date_naive()
+        .and_hms_opt(h, m, s)
+        .unwrap_or_else(|| local.naive_local())
+}
+
+fn wall_of(filter: DateFilter, slot: BoundSlot) -> Option<NaiveDateTime> {
+    bound_of(filter, slot).map(|instant| instant.with_timezone(&Local).naive_local())
+}
+
+fn utc_of(wall: NaiveDateTime) -> DateTime<Utc> {
+    // A local wall time can be ambiguous or missing across a DST change, so take
+    // the earliest reading and fall back to interpreting it as UTC.
+    Local
+        .from_local_datetime(&wall)
+        .earliest()
+        .unwrap_or_else(|| Local.from_utc_datetime(&wall))
+        .with_timezone(&Utc)
+}
+
+fn bound_row(ui: &mut Ui, slot: BoundSlot, active: bool, value: Option<DateTime<Utc>>) -> bool {
+    let label = match slot {
+        BoundSlot::After => LABEL_AFTER,
+        BoundSlot::Before => LABEL_BEFORE,
+    };
+    let width = ui.available_width();
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, GROUP_ROW_HEIGHT), Sense::click());
+    let fill = if active {
+        Palette::SELECTION
+    } else if response.hovered() {
+        Palette::SURFACE_2
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), fill);
+    }
+    let ink = if active {
+        Palette::BRAND_INK
+    } else {
+        Palette::INK
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), chrome_font(TYPE_CONTROL), ink);
+    ui.painter().galley(
+        Pos2::new(
+            rect.left() + BUTTON_PAD_X,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        ink,
+    );
+    let value_text = value
+        .map(|v| v.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "Any".to_owned());
+    let value_galley = ui
+        .painter()
+        .layout_no_wrap(value_text, chrome_font(TYPE_CONTROL), ink);
+    ui.painter().galley(
+        Pos2::new(
+            rect.right() - BUTTON_PAD_X - value_galley.size().x,
+            rect.center().y - value_galley.size().y / 2.0,
+        ),
+        value_galley,
+        ink,
+    );
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+    widgets::focus_ring(ui, &response);
+    response.clicked()
+}
+
 fn date_menu(ui: &mut Ui, state: &mut AppState) -> bool {
-    let now = Utc::now().timestamp();
+    let now = Utc::now();
     let current = state.ui.log_date_filter;
     let mut close = false;
 
@@ -572,7 +626,9 @@ fn date_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     )
     .clicked()
     {
-        state.ui.log_date_filter = DateFilter::Last24Hours { since: now - 86400 };
+        state.ui.log_date_filter = DateFilter::Last24Hours {
+            since: now.timestamp() - 86400,
+        };
         close = true;
     }
     if menu_row(
@@ -584,37 +640,51 @@ fn date_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     .clicked()
     {
         state.ui.log_date_filter = DateFilter::Last7Days {
-            since: now - 7 * 86400,
+            since: now.timestamp() - 7 * 86400,
         };
         close = true;
     }
     widgets::menu_rule(ui);
-    widgets::group_title(ui, LABEL_SELECT_PERIOD);
+    widgets::group_title(ui, &format!("{LABEL_SELECT_PERIOD} (local time)"));
 
-    let enter = ui.input(|i| i.key_pressed(Key::Enter));
-    let after_commit = date_field(
-        ui,
-        LABEL_AFTER,
-        &mut state.ui.log_date_after,
-        field_id(SALT_DATE_AFTER),
-        enter,
-    );
-    let before_commit = date_field(
-        ui,
-        LABEL_BEFORE,
-        &mut state.ui.log_date_before,
-        field_id(SALT_DATE_BEFORE),
-        enter,
-    );
-    let malformed = parse_day(&state.ui.log_date_after).is_err()
-        || parse_day(&state.ui.log_date_before).is_err();
-    if malformed {
-        widgets::inline_error(ui, "Use YYYY-MM-DD.");
+    let slot_id = Id::new("tg_log_filter_date_active_bound");
+    let mut slot = ui
+        .ctx()
+        .data(|d| d.get_temp::<BoundSlot>(slot_id))
+        .unwrap_or(BoundSlot::After);
+    let after = current.after();
+    let before = current.before();
+    if bound_row(ui, BoundSlot::After, slot == BoundSlot::After, after) {
+        slot = BoundSlot::After;
     }
-    let apply = ui.button(APPLY);
-    apply.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, APPLY));
-    if (apply.clicked() || after_commit || before_commit) && apply_date(state, now) {
-        close = true;
+    if bound_row(ui, BoundSlot::Before, slot == BoundSlot::Before, before) {
+        slot = BoundSlot::Before;
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(slot_id, slot));
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(after.is_some(), egui::Button::new("Clear after"))
+            .clicked()
+        {
+            state.ui.log_date_filter = DateFilter::from_bounds(None, before);
+        }
+        if ui
+            .add_enabled(before.is_some(), egui::Button::new("Clear before"))
+            .clicked()
+        {
+            state.ui.log_date_filter = DateFilter::from_bounds(after, None);
+        }
+    });
+
+    let wall = wall_of(current, slot).unwrap_or_else(|| bound_seed(slot, now));
+    if let Some(picked) = widgets::instant_picker(ui, field_id(SALT_DATE), wall) {
+        let instant = utc_of(picked);
+        let (after, before) = (current.after(), current.before());
+        state.ui.log_date_filter = match slot {
+            BoundSlot::After => DateFilter::from_bounds(Some(instant), before),
+            BoundSlot::Before => DateFilter::from_bounds(after, Some(instant)),
+        };
     }
     close
 }
