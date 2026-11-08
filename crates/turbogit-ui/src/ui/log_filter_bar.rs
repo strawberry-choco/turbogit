@@ -383,7 +383,7 @@ fn paths_readback(state: &AppState) -> Option<String> {
 }
 
 fn branch_bands(state: &mut AppState) -> Vec<RefBand> {
-    state.warm_branch_tags();
+    state.request_branch_tags();
     let selected = state.ui.log_roots.selected(&state.multi.roots);
     ref_bands(
         &selected,

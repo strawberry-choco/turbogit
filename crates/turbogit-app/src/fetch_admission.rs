@@ -9,6 +9,7 @@ pub enum InflightFetch {
     Log(RootId),
     ScopedLog(RootId, LogScope),
     Refs(RootId),
+    Tags(RootId),
     FileStats(RootId, CommitId),
     Submodules(RootId),
     Stashes(RootId),
@@ -28,5 +29,9 @@ impl FetchAdmission {
 
     pub fn release(&mut self, key: InflightFetch) {
         self.in_flight.remove(&key);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.in_flight.is_empty()
     }
 }

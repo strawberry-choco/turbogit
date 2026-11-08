@@ -29,13 +29,16 @@
 //! keyboard path and the actions stay on the surface.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use egui::{
     Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui,
     UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
+use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::state::TreeState;
-use turbogit_domain::model::{Branch, BranchKind, RootId};
+use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
 
 use crate::theme::{
     Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font,
@@ -131,8 +134,192 @@ pub struct TreeProps<'a> {
     pub allows_context_menu: bool,
     /// egui id salt for the scroll area, unique per surface.
     pub id_salt: &'a str,
+    /// The fingerprint of the view this frame (roots, tags, decorations and
+    /// toggles). The filtered-row cache is keyed by it, so a diff view or a
+    /// fresh model from another surface can never repaint stale rows.
+    pub view_fingerprint: u64,
     pub full_height: bool,
     pub collapse_remotes_by_default: bool,
+}
+
+#[derive(Clone)]
+struct HeldBranchView {
+    fingerprint: u64,
+    view: Arc<BranchView>,
+}
+
+#[derive(Clone)]
+struct HeldFiltered {
+    key: u64,
+    pane: Arc<FilteredPane>,
+}
+
+/// The identity of one built tree as a value: every root fact the model reads,
+/// the tag evidence, and the toggles that shape the model. A caller hashes this
+/// once per frame; on a match the held view is still the answer and the build
+/// does not run again.
+pub fn branch_view_fingerprint(
+    roots: &[&Root],
+    tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
+    show_remotes: &dyn Fn(&RootId) -> bool,
+    options: &BranchesViewOptions,
+    evidence_revision: u64,
+) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    options.group_by_directory.hash(&mut hash);
+    options.group_by_repository.hash(&mut hash);
+    options.show_tags.hash(&mut hash);
+    evidence_revision.hash(&mut hash);
+    roots.len().hash(&mut hash);
+    for root in roots {
+        root.id.as_path().hash(&mut hash);
+        root.current_branch.hash(&mut hash);
+        root.status.conflicted.len().hash(&mut hash);
+        root.status.changes.len().hash(&mut hash);
+        for change in &root.status.changes {
+            change.status.short().hash(&mut hash);
+            change.staged.hash(&mut hash);
+            change.unstaged.hash(&mut hash);
+        }
+        root.remotes.len().hash(&mut hash);
+        show_remotes(&root.id).hash(&mut hash);
+        root.branches.len().hash(&mut hash);
+        for branch in &root.branches {
+            branch.name.hash(&mut hash);
+            branch.kind.hash(&mut hash);
+            branch
+                .tracking
+                .as_ref()
+                .map(|upstream| (&upstream.remote, &upstream.branch))
+                .hash(&mut hash);
+            branch.favorite.hash(&mut hash);
+            branch.ahead.hash(&mut hash);
+            branch.behind.hash(&mut hash);
+            branch.gone.hash(&mut hash);
+            branch.last_touched.map(|t| t.timestamp()).hash(&mut hash);
+            branch.tip.as_ref().map(|tip| &tip.message).hash(&mut hash);
+            branch.remote.hash(&mut hash);
+        }
+        for (name, state) in tags_by_root
+            .get(&root.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            name.hash(&mut hash);
+            (*state as u8).hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
+/// The build-once half of the branch pane: a held view answers every frame
+/// whose fingerprint matches, and only a changed fingerprint pays for
+/// `build`.
+pub fn cached_branch_view(
+    ui: &Ui,
+    id_salt: &str,
+    fingerprint: u64,
+    build: impl FnOnce() -> BranchView,
+) -> Arc<BranchView> {
+    let id = egui::Id::new(("branch_view", id_salt));
+    let held = ui
+        .ctx()
+        .data_mut(|data| data.get_persisted::<HeldBranchView>(id))
+        .filter(|held| held.fingerprint == fingerprint);
+    if let Some(held) = held {
+        return held.view;
+    }
+    let view = Arc::new(build());
+    ui.ctx().data_mut(|data| {
+        data.insert_persisted(
+            id,
+            HeldBranchView {
+                fingerprint,
+                view: view.clone(),
+            },
+        );
+    });
+    view
+}
+
+/// One section's rows, filtered and sorted once per (view, query) pair.
+struct FilteredRemote {
+    children: Vec<BranchNode>,
+    count: usize,
+}
+
+struct FilteredSection {
+    locals: Vec<BranchNode>,
+    locals_count: usize,
+    remotes: Vec<FilteredRemote>,
+    tags: Vec<branches_tree::TagLeaf>,
+}
+
+struct FilteredPane {
+    sections: Vec<FilteredSection>,
+}
+
+impl FilteredPane {
+    fn build(view: &BranchView, filter: &str) -> Self {
+        let sections = view
+            .repos
+            .iter()
+            .map(|section| {
+                let locals = filter_nodes(&section.locals, filter);
+                let locals_count = leaf_count(&locals);
+                let remotes = section
+                    .remote_groups
+                    .iter()
+                    .map(|group| {
+                        let children = filter_nodes(&group.children, filter);
+                        FilteredRemote {
+                            count: leaf_count(&children),
+                            children,
+                        }
+                    })
+                    .collect();
+                FilteredSection {
+                    locals,
+                    locals_count,
+                    remotes,
+                    tags: section_tags(section, filter),
+                }
+            })
+            .collect();
+        Self { sections }
+    }
+}
+
+fn filtered_pane(
+    ui: &Ui,
+    id_salt: &str,
+    view_fingerprint: u64,
+    filter: &str,
+    view: &BranchView,
+) -> Arc<FilteredPane> {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    view_fingerprint.hash(&mut hash);
+    filter.hash(&mut hash);
+    let key = hash.finish();
+    let id = egui::Id::new(("branch_filtered", id_salt));
+    let held = ui
+        .ctx()
+        .data_mut(|data| data.get_persisted::<HeldFiltered>(id))
+        .filter(|held| held.key == key);
+    if let Some(held) = held {
+        return held.pane;
+    }
+    let pane = Arc::new(FilteredPane::build(view, filter));
+    ui.ctx().data_mut(|data| {
+        data.insert_persisted(
+            id,
+            HeldFiltered {
+                key,
+                pane: pane.clone(),
+            },
+        );
+    });
+    pane
 }
 
 /// Paint the branch tree and report what the user did.
@@ -157,6 +344,13 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
 
     let filter = props.filter.to_string();
     let filtering = !filter.trim().is_empty();
+    let filtered = filtered_pane(
+        ui,
+        props.id_salt,
+        props.view_fingerprint,
+        &filter,
+        props.view,
+    );
 
     let was_filtering = !tree.previous_filter.trim().is_empty();
     if filtering && !was_filtering {
@@ -172,12 +366,13 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
     let mut target_y: Option<f32> = None;
     let mut y_cursor = 0.0;
 
-    let in_scope: Vec<&RepoSection> = props
+    let in_scope: Vec<(&RepoSection, &FilteredSection)> = props
         .view
         .repos
         .iter()
-        .filter(|s| match props.repo_filter {
-            Some(f) => &s.root_id == f,
+        .zip(&filtered.sections)
+        .filter(|(section, _)| match props.repo_filter {
+            Some(f) => &section.root_id == f,
             None => true,
         })
         .collect();
@@ -189,11 +384,10 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
         .vertical_scroll_offset(scroll)
         .show(ui, |ui| {
             if filtering
-                && in_scope.iter().all(|s| {
+                && in_scope.iter().all(|&(section, filtered)| {
                     section_match_count(
-                        s,
-                        &filter,
-                        remotes_revealed(tree, &s.root_id),
+                        filtered,
+                        remotes_revealed(tree, &section.root_id),
                         props.view.options.show_tags,
                     ) == 0
                 })
@@ -202,13 +396,14 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                 return;
             }
             if props.view.options.group_by_repository {
-                for section in &in_scope {
+                for &(section, filtered) in &in_scope {
                     paint_repo_section(
                         ui,
                         props,
                         tree,
                         section,
-                        &filter,
+                        filtered,
+                        filtering,
                         invisible,
                         &scroll_target,
                         &mut y_cursor,
@@ -222,7 +417,7 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                     props,
                     tree,
                     &in_scope,
-                    &filter,
+                    filtering,
                     &scroll_target,
                     &mut y_cursor,
                     &mut target_y,
@@ -240,32 +435,14 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
     events
 }
 
-fn section_match_count(
-    section: &RepoSection,
-    filter: &str,
-    remotes: bool,
-    show_tags: bool,
-) -> usize {
-    let locals = leaf_count(&filter_nodes(&section.locals, filter));
+fn section_match_count(filtered: &FilteredSection, remotes: bool, show_tags: bool) -> usize {
     let remotes = if remotes {
-        section
-            .remote_groups
-            .iter()
-            .map(|g| leaf_count(&filter_nodes(&g.children, filter)))
-            .sum()
+        filtered.remotes.iter().map(|group| group.count).sum()
     } else {
         0
     };
-    let tags = if show_tags {
-        section
-            .tags
-            .iter()
-            .filter(|t| matches_query(&t.name, filter))
-            .count()
-    } else {
-        0
-    };
-    locals + remotes + tags
+    let tags = if show_tags { filtered.tags.len() } else { 0 };
+    filtered.locals_count + remotes + tags
 }
 
 fn filter_nodes(nodes: &[BranchNode], filter: &str) -> Vec<BranchNode> {
@@ -305,26 +482,26 @@ fn paint_repo_section(
     props: &TreeProps<'_>,
     tree: &mut TreeState,
     section: &RepoSection,
-    filter: &str,
+    filtered: &FilteredSection,
+    filtering: bool,
     invisible: bool,
     scroll_target: &Option<String>,
     y_cursor: &mut f32,
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    let collapsed = !invisible && repo_collapsed(tree, !filter.trim().is_empty(), &section.root_id);
+    let collapsed = !invisible && repo_collapsed(tree, filtering, &section.root_id);
     repo_header(ui, section, !invisible, collapsed, events);
     *y_cursor += REPO_HEADER_H;
     if collapsed {
         return;
     }
 
-    let locals = filter_nodes(&section.locals, filter);
     paint_local_group(
         ui,
         props,
         tree,
-        &[&locals],
+        &[&filtered.locals],
         scroll_target,
         y_cursor,
         target_y,
@@ -335,18 +512,18 @@ fn paint_repo_section(
         props,
         tree,
         section,
-        filter,
+        filtered,
+        filtering,
         scroll_target,
         y_cursor,
         target_y,
         events,
     );
-    let tags = section_tags(section, filter);
     paint_tags_group(
         ui,
         props,
         tree,
-        &[&tags],
+        &[&filtered.tags],
         scroll_target,
         y_cursor,
         target_y,
@@ -359,50 +536,50 @@ fn paint_ungrouped_sections(
     ui: &mut Ui,
     props: &TreeProps<'_>,
     tree: &mut TreeState,
-    sections: &[&RepoSection],
-    filter: &str,
+    sections: &[(&RepoSection, &FilteredSection)],
+    filtering: bool,
     scroll_target: &Option<String>,
     y_cursor: &mut f32,
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    let locals: Vec<Vec<BranchNode>> = sections
+    let locals: Vec<&[BranchNode]> = sections
         .iter()
-        .map(|s| filter_nodes(&s.locals, filter))
+        .map(|(_, filtered)| filtered.locals.as_slice())
         .collect();
-    let local_refs: &[&[BranchNode]] = &locals.iter().map(Vec::as_slice).collect::<Vec<_>>();
     paint_local_group(
         ui,
         props,
         tree,
-        local_refs,
+        &locals,
         scroll_target,
         y_cursor,
         target_y,
         events,
     );
-    for section in sections {
+    for &(section, filtered) in sections {
         paint_remote_area(
             ui,
             props,
             tree,
             section,
-            filter,
+            filtered,
+            filtering,
             scroll_target,
             y_cursor,
             target_y,
             events,
         );
     }
-    let tags: Vec<Vec<branches_tree::TagLeaf>> =
-        sections.iter().map(|s| section_tags(s, filter)).collect();
-    let tag_refs: &[&[branches_tree::TagLeaf]] =
-        &tags.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let tags: Vec<&[branches_tree::TagLeaf]> = sections
+        .iter()
+        .map(|(_, filtered)| filtered.tags.as_slice())
+        .collect();
     paint_tags_group(
         ui,
         props,
         tree,
-        tag_refs,
+        &tags,
         scroll_target,
         y_cursor,
         target_y,
@@ -451,7 +628,8 @@ fn paint_remote_area(
     props: &TreeProps<'_>,
     tree: &mut TreeState,
     section: &RepoSection,
-    filter: &str,
+    filtered: &FilteredSection,
+    filtering: bool,
     scroll_target: &Option<String>,
     y_cursor: &mut f32,
     target_y: &mut Option<f32>,
@@ -468,9 +646,8 @@ fn paint_remote_area(
             }
             *y_cursor += SECTION_H;
         }
-        for rg in &section.remote_groups {
-            let children = filter_nodes(&rg.children, filter);
-            if leaf_count(&children) == 0 && !filter.trim().is_empty() {
+        for (rg, filtered) in section.remote_groups.iter().zip(&filtered.remotes) {
+            if filtered.count == 0 && filtering {
                 continue;
             }
             remote_group_header(ui, props, tree, section, rg, events);
@@ -480,7 +657,7 @@ fn paint_remote_area(
                     ui,
                     props,
                     tree,
-                    &children,
+                    &filtered.children,
                     1,
                     scroll_target,
                     y_cursor,
@@ -1309,5 +1486,5 @@ pub fn keyboard_order<'a>(rows: &mut [LocalRow<'a>]) {
 }
 
 pub fn warm_tags(state: &mut turbogit_app::state::AppState) {
-    state.warm_branch_tags();
+    state.request_branch_tags();
 }

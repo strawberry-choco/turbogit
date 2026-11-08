@@ -112,13 +112,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         });
 
-    // While an async op or a keyed read is in flight, keep frames coming so its
+    // While an async op or a read is in flight, keep frames coming so its
     // completion (OpCompleted → refresh → reload, or a settled cache value)
     // lands without waiting for unrelated input, the headless harness relies
     // on the same signal `app.rs` gets from drain_events in production
-    // (spec R2 story 8). `busy` is dispatch's; `read_pending` is the reads',
-    // and it says only that *a* surface is working, not which.
-    if state.ui.busy || state.read_pending() {
+    // (spec R2 story 8). `busy` is dispatch's; `read_pending` is the keyed
+    // reads'; `has_inflight_reads` is the executor pump's, refs and tags
+    // among them.
+    if state.ui.busy || state.read_pending() || state.has_inflight_reads() {
         ui.ctx().request_repaint();
     }
 }

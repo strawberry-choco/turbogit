@@ -549,6 +549,113 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
     );
 }
 
+#[test]
+fn tags_loaded_event_populates_the_tag_reader_for_a_root() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha));
+    assert!(!state.caches.tags_loaded(&alpha_id), "a cold tag cache");
+
+    state
+        .tx
+        .send(AppEvent::TagsLoaded {
+            root: alpha_id.clone(),
+            tags: Ok(vec!["v1.0".to_string(), "v2.0".to_string()]),
+        })
+        .expect("send TagsLoaded");
+    state.drain_events();
+
+    assert!(state.caches.tags_loaded(&alpha_id));
+    assert_eq!(
+        state.caches.tags(&alpha_id),
+        Some(
+            [
+                ("v1.0".to_string(), RefState::Default),
+                ("v2.0".to_string(), RefState::Default),
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn tags_loaded_error_stores_an_empty_list_and_stops_retrying() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let recorder: Arc<RecordingExecutor> =
+        Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
+            settings: VcsSettings::default(),
+        })));
+    let mut state =
+        AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha)).with_executor(recorder.clone());
+
+    state
+        .tx
+        .send(AppEvent::TagsLoaded {
+            root: alpha_id.clone(),
+            tags: Err(turbogit_domain::error::TgError::Other(
+                "offline".to_string(),
+            )),
+        })
+        .expect("send failing TagsLoaded");
+    state.drain_events();
+
+    assert!(
+        state.caches.tags_loaded(&alpha_id),
+        "an error settles as a known-empty tag list, the same answer the blocking read gives"
+    );
+    assert_eq!(state.caches.tags(&alpha_id), Some([].as_slice()));
+
+    state.fetch_tags(alpha_id.clone());
+    state.drain_events();
+    assert_eq!(
+        recorder.tag_call_count(),
+        0,
+        "a settled empty list is not a reason to read again"
+    );
+}
+
+#[test]
+fn tags_fetch_guard_dedupes_and_releases_on_tags_loaded() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let recorder: Arc<RecordingExecutor> =
+        Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
+            settings: VcsSettings::default(),
+        })));
+    let mut state =
+        AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha)).with_executor(recorder.clone());
+
+    state.fetch_tags(alpha_id.clone());
+    state.fetch_tags(alpha_id.clone());
+    assert!(
+        state.has_inflight_reads(),
+        "the shell schedules frames while the tag read is out"
+    );
+    state.drain_events();
+    assert!(state.caches.tags_loaded(&alpha_id), "tags settled");
+    assert!(
+        !state.has_inflight_reads(),
+        "the drain releases the read that kept frames coming"
+    );
+    assert_eq!(
+        recorder.tag_call_count(),
+        1,
+        "two same-frame fetches must produce exactly one tag_list call"
+    );
+
+    state.fetch_tags(alpha_id.clone());
+    state.drain_events();
+    assert_eq!(
+        recorder.tag_call_count(),
+        1,
+        "a loaded tag list is never read again"
+    );
+}
+
 fn commit_as(root: &RootId, id: &str) -> Commit {
     Commit {
         id: id.to_string(),

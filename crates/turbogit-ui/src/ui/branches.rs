@@ -4,7 +4,7 @@ use turbogit_app::operation::Operation;
 use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, NewBranchBase, PendingConfirm, Toast};
-use turbogit_domain::model::{Branch, BranchKind, BranchSpec, RootId, Upstream};
+use turbogit_domain::model::{Branch, BranchKind, BranchSpec, Root, RootId, Upstream};
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
 use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
@@ -88,12 +88,24 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         return;
     }
     branch_tree_view::warm_tags(state);
-    let view = branches_tree::build_branch_view_with(
-        &state.multi.roots,
+    let roots: Vec<&Root> = state.multi.roots.iter().collect();
+    let show_remotes =
+        |root: &RootId| branch_tree_view::remotes_revealed(&state.ui.branches_tree, root);
+    let fingerprint = branch_tree_view::branch_view_fingerprint(
+        &roots,
         state.caches.tags_by_root(),
-        &|root| branch_tree_view::remotes_revealed(&state.ui.branches_tree, root),
+        &show_remotes,
         &state.ui.branches_view,
+        state.caches.evidence_revision(),
     );
+    let view = branch_tree_view::cached_branch_view(ui, "branches_view", fingerprint, || {
+        branches_tree::build_branch_view_with(
+            &state.multi.roots,
+            state.caches.tags_by_root(),
+            &show_remotes,
+            &state.ui.branches_view,
+        )
+    });
 
     // The same stand-down `handle_keys` keeps while a dialog or a confirm is open.
     // Without it one `Escape` folds the New Branch list and also clears this
@@ -134,7 +146,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .max_rect(list_rect)
             .layout(Layout::top_down(Align::Min)),
     );
-    list_area(&mut list_ui, state, &view);
+    list_area(&mut list_ui, state, &view, fingerprint);
     ui.advance_cursor_after_rect(list_rect);
 
     let mut dismiss = false;
@@ -373,7 +385,7 @@ fn scope_chip(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
+fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView, view_fingerprint: u64) {
     let has_any_data = state
         .multi
         .roots
@@ -418,6 +430,7 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         allows_rename: true,
         allows_context_menu: true,
         id_salt: "branches_list",
+        view_fingerprint,
         full_height: true,
         collapse_remotes_by_default: false,
     };

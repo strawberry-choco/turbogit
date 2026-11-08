@@ -1160,6 +1160,27 @@ impl AppState {
         });
     }
 
+    pub fn fetch_tags(&mut self, root: RootId) {
+        if self.caches.tags_loaded(&root)
+            || !self
+                .fetch_admission
+                .admit(InflightFetch::Tags(root.clone()))
+        {
+            return;
+        }
+        self.pump_read(move |executor, tx| {
+            let tags = executor.tag_list(&root.0);
+            let _ = tx.send(AppEvent::TagsLoaded { root, tags });
+        });
+    }
+
+    /// Whether a read on the executor's pump is still in flight. The shell
+    /// keeps a frame scheduled while this holds, so an answer that lands
+    /// between inputs is drained instead of waiting for the next mouse move.
+    pub fn has_inflight_reads(&self) -> bool {
+        !self.fetch_admission.is_empty()
+    }
+
     pub fn fetch_file_stats(&mut self, root: RootId, commit: CommitId) {
         if self.caches.file_stats_loaded(&root, &commit)
             || !self
@@ -2722,6 +2743,16 @@ impl AppState {
                         Ok(d) => self.caches.store_refs(root, d),
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
+                }
+                AppEvent::TagsLoaded { root, tags } => {
+                    self.fetch_admission
+                        .release(InflightFetch::Tags(root.clone()));
+                    let list = tags
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|name| (name, turbogit_domain::model::RefState::Default))
+                        .collect();
+                    self.caches.store_tags(root, list);
                 }
                 AppEvent::FileStatsLoaded {
                     root,

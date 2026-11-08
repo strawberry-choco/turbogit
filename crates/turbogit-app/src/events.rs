@@ -56,6 +56,10 @@ pub enum AppEvent {
         root: RootId,
         deco: TgResult<Vec<(CommitId, Vec<CommitRef>)>>,
     },
+    TagsLoaded {
+        root: RootId,
+        tags: TgResult<Vec<String>>,
+    },
     FileStatsLoaded {
         root: RootId,
         commit: CommitId,

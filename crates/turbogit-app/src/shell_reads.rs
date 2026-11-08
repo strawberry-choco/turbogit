@@ -88,6 +88,17 @@ impl AppState {
         }
     }
 
+    /// The non-blocking counterpart of [`Self::warm_branch_tags`]: a tags read
+    /// over tens of thousands of refs takes about a second, so a surface
+    /// requests it and repaints when `TagsLoaded` lands rather than stalling
+    /// the frame that opened the pane.
+    pub fn request_branch_tags(&mut self) {
+        let ids: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
+        for id in ids {
+            self.fetch_tags(id);
+        }
+    }
+
     /// The tag evidence a derived carrier set reads for the scoped rev, warmed
     /// before `listing_roots` is consulted. The trigger is narrow: a rev a
     /// selected root's branch inventory already holds needs no tag read there,

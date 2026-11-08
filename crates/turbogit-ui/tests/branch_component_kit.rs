@@ -15,7 +15,7 @@ use test_support::srcscan;
 use turbogit_app::state::{AppState, TreeState};
 use turbogit_domain::model::{Branch, BranchKind, Remote, Root, RootId, RootStatus, Upstream};
 use turbogit_ui::theme::{Palette, RAIL_WIDTH};
-use turbogit_ui::ui::branch_tree_view::{TreeProps, branch_tree};
+use turbogit_ui::ui::branch_tree_view::{TreeProps, branch_tree, branch_view_fingerprint};
 use turbogit_ui::ui::branches_tree::build_branch_view;
 use turbogit_ui::ui::components::{
     CLICK_TARGET_MIN, KIT_ICON_LARGE, KitButton, RowShell, RowState, SyncKind, current_row_fill,
@@ -355,6 +355,14 @@ fn branch_tree_harness(
                 fonts_installed = true;
             }
             let view = build_branch_view(&fx.roots, &fx.tags, &|_root: &RootId| false);
+            let roots: Vec<&Root> = fx.roots.iter().collect();
+            let fingerprint = branch_view_fingerprint(
+                &roots,
+                &fx.tags,
+                &|_root: &RootId| false,
+                &turbogit_app::persistence::BranchesViewOptions::default(),
+                0,
+            );
             let props = TreeProps {
                 view: &view,
                 filter: "",
@@ -369,6 +377,7 @@ fn branch_tree_harness(
                 allows_rename: false,
                 allows_context_menu: false,
                 id_salt,
+                view_fingerprint: fingerprint,
                 full_height: true,
                 collapse_remotes_by_default: true,
             };

@@ -108,6 +108,11 @@ pub struct RootCaches {
     tag_cache: HashMap<RootId, Vec<(String, RefState)>>,
     hunk_stats: HashMap<RootId, RootHunkStats>,
     revision: u64,
+    /// Bumped whenever the ref/tag decoration caches change. Separate from
+    /// `revision` because the branch tree paints ref states and repaints on
+    /// this alone; folding it into `revision` would rebuild the commit display
+    /// after every refs load for a marker it never reads.
+    evidence_revision: u64,
 }
 
 #[derive(Default)]
@@ -381,6 +386,10 @@ impl RootCaches {
         &self.tag_cache
     }
 
+    pub fn tags_loaded(&self, root: &RootId) -> bool {
+        self.tag_cache.contains_key(root)
+    }
+
     pub fn hunk_stats(&self, root: &RootId) -> Option<&RootHunkStats> {
         self.hunk_stats.get(root)
     }
@@ -389,8 +398,17 @@ impl RootCaches {
         self.revision
     }
 
+    /// The decoration generation a held branch view fingerprints against.
+    pub fn evidence_revision(&self) -> u64 {
+        self.evidence_revision
+    }
+
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn bump_evidence(&mut self) {
+        self.evidence_revision = self.evidence_revision.wrapping_add(1);
     }
 
     pub fn log_failure(&self, read: &LogRead) -> Option<&str> {
@@ -499,6 +517,7 @@ impl RootCaches {
             .map(|name| (name, RefState::Default))
             .collect();
         self.tag_cache.insert(root.clone(), tags);
+        self.bump_evidence();
     }
 
     pub fn ensure_log(
@@ -686,6 +705,7 @@ impl RootCaches {
 
     pub fn store_refs(&mut self, root: RootId, deco: Vec<(CommitId, Vec<CommitRef>)>) {
         self.ref_cache.insert(root, deco.into_iter().collect());
+        self.bump_evidence();
     }
 
     pub fn store_file_stats(&mut self, root: RootId, commit: CommitId, stats: Vec<FileStat>) {
@@ -718,10 +738,12 @@ impl RootCaches {
 
     pub fn store_tags(&mut self, root: RootId, tags: Vec<(String, RefState)>) {
         self.tag_cache.insert(root, tags);
+        self.bump_evidence();
     }
 
     pub fn invalidate(&mut self, affected: &Affected) {
         self.bump();
+        self.bump_evidence();
         match affected {
             Affected::All => self.invalidate_all(),
             Affected::Root(root) => {
@@ -754,6 +776,7 @@ impl RootCaches {
 
     pub fn invalidate_all(&mut self) {
         self.bump();
+        self.bump_evidence();
         self.log_cache.clear();
         self.ref_cache.clear();
         self.files_cache.clear();

@@ -18,6 +18,7 @@ use egui::{
 use std::ops::Range;
 use std::path::PathBuf;
 use turbogit_app::log_states::{self, LogRecovery, LogState};
+use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::root_caches::{LogScope, file_stat};
 use turbogit_app::state::{
     AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
@@ -383,50 +384,58 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
     state.ui.log_tree.show_remotes = true;
 
     let ids = visible_root_ids(state);
-    let mut roots: Vec<Root> = ids
-        .iter()
-        .filter_map(|id| state.multi.by_id(id).cloned())
-        .collect();
-    let mut deco_by_root: std::collections::HashMap<
-        RootId,
-        std::collections::HashMap<String, RefState>,
-    > = std::collections::HashMap::new();
-    for root in &mut roots {
-        let mut deco: std::collections::HashMap<String, RefState> =
-            std::collections::HashMap::new();
-        for group in state.caches.ref_groups(&root.id) {
-            for r in group {
-                deco.entry(r.name.clone()).or_insert(r.state);
-            }
-        }
-        for b in &mut root.branches {
-            if b.kind == BranchKind::Remote {
-                let full = match &b.remote {
-                    Some(r) => format!("{r}/{}", b.name),
-                    None => b.name.clone(),
-                };
-                b.gone = deco.get(&full).is_some_and(|st| *st == RefState::Gone);
-            }
-        }
-        deco_by_root.insert(root.id.clone(), deco);
-    }
+    let visible_roots: Vec<&Root> = ids.iter().filter_map(|id| state.multi.by_id(id)).collect();
     // Every `tags_by_root()` reader must warm first: the cache is on-demand,
     // and an un-warmed map is indistinguishable from a tagless repository.
-    state.warm_branch_tags();
     let tags_by_root = state.caches.tags_by_root();
-    let mut view = build_branch_view(&roots, tags_by_root, &|_| state.ui.log_tree.show_remotes);
-    for repo in &mut view.repos {
-        if let Some(deco) = deco_by_root.get(&repo.root_id) {
-            for tag in &mut repo.tags {
-                if let Some(d) = deco.get(&tag.name) {
-                    tag.state = *d;
+    let options = BranchesViewOptions::default();
+    let fingerprint = branch_tree_view::branch_view_fingerprint(
+        &visible_roots,
+        tags_by_root,
+        &|_| true,
+        &options,
+        state.caches.evidence_revision(),
+    );
+    let view = branch_tree_view::cached_branch_view(ui, "log_branch_tree", fingerprint, || {
+        let mut roots: Vec<Root> = visible_roots.iter().map(|root| (*root).clone()).collect();
+        let mut deco_by_root: std::collections::HashMap<
+            RootId,
+            std::collections::HashMap<String, RefState>,
+        > = std::collections::HashMap::new();
+        for root in &mut roots {
+            let mut deco: std::collections::HashMap<String, RefState> =
+                std::collections::HashMap::new();
+            for group in state.caches.ref_groups(&root.id) {
+                for r in group {
+                    deco.entry(r.name.clone()).or_insert(r.state);
+                }
+            }
+            for b in &mut root.branches {
+                if b.kind == BranchKind::Remote {
+                    let full = match &b.remote {
+                        Some(r) => format!("{r}/{}", b.name),
+                        None => b.name.clone(),
+                    };
+                    b.gone = deco.get(&full).is_some_and(|st| *st == RefState::Gone);
+                }
+            }
+            deco_by_root.insert(root.id.clone(), deco);
+        }
+        let mut view = build_branch_view(&roots, tags_by_root, &|_| true);
+        for repo in &mut view.repos {
+            if let Some(deco) = deco_by_root.get(&repo.root_id) {
+                for tag in &mut repo.tags {
+                    if let Some(d) = deco.get(&tag.name) {
+                        tag.state = *d;
+                    }
                 }
             }
         }
-    }
+        view
+    });
 
     let props = TreeProps {
-        view: &view,
+        view: view.as_ref(),
         filter: &state.ui.log_branch_filter,
         repo_filter: None,
         tags_by_root,
@@ -439,6 +448,7 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         allows_rename: false,
         allows_context_menu: false,
         id_salt: "log_branch_tree",
+        view_fingerprint: fingerprint,
         full_height: false,
         collapse_remotes_by_default: true,
     };

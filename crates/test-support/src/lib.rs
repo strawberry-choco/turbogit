@@ -110,6 +110,7 @@ pub struct RecordingExecutor {
     pub inner: Arc<dyn GitExecutor>,
     calls: Mutex<Vec<RecordedCall>>,
     ref_calls: Mutex<usize>,
+    tag_calls: Mutex<usize>,
     stats_calls: Mutex<usize>,
     log_opts: Mutex<Vec<LogOpts>>,
     patch_reads: Mutex<Vec<(PatchOrigin, bool)>>,
@@ -121,6 +122,7 @@ impl RecordingExecutor {
             inner,
             calls: Mutex::new(Vec::new()),
             ref_calls: Mutex::new(0),
+            tag_calls: Mutex::new(0),
             stats_calls: Mutex::new(0),
             log_opts: Mutex::new(Vec::new()),
             patch_reads: Mutex::new(Vec::new()),
@@ -141,6 +143,10 @@ impl RecordingExecutor {
 
     pub fn ref_call_count(&self) -> usize {
         *self.ref_calls.lock().expect("ref mutex")
+    }
+
+    pub fn tag_call_count(&self) -> usize {
+        *self.tag_calls.lock().expect("tag mutex")
     }
 
     pub fn stats_call_count(&self) -> usize {
@@ -687,6 +693,7 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn tag_list(&self, root: &Path) -> TgResult<Vec<String>> {
+        *self.tag_calls.lock().expect("tag mutex") += 1;
         self.inner.tag_list(root)
     }
 

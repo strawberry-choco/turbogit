@@ -251,6 +251,14 @@ fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
                 fonts_installed = true;
             }
             let view = fx.view();
+            let roots: Vec<&Root> = fx.roots.iter().collect();
+            let fingerprint = turbogit_ui::ui::branch_tree_view::branch_view_fingerprint(
+                &roots,
+                &fx.tags,
+                &|root| remotes_revealed(&fx.tree, root),
+                &turbogit_app::persistence::BranchesViewOptions::default(),
+                0,
+            );
             let props = TreeProps {
                 view: &view,
                 filter: &fx.filter,
@@ -265,6 +273,7 @@ fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
                 allows_rename: fx.allows_rename,
                 allows_context_menu: fx.allows_context_menu,
                 id_salt: "fixture_tree",
+                view_fingerprint: fingerprint,
                 full_height: true,
                 collapse_remotes_by_default: fx.collapse_remotes_by_default,
             };
