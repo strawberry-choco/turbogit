@@ -2,7 +2,7 @@
 //! name the same thing, so someone moving between the two tools does not have to
 //! learn a second vocabulary.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
 
 pub const LABEL_ALL: &str = "All";
@@ -243,23 +243,20 @@ pub fn carries_ref(root: &Root, tags: &RefTags, rev: &str) -> bool {
 pub fn ref_bands(selected: &[&Root], tags: &RefTags, folds: &RefFolds) -> Vec<RefBand> {
     let mut bands = Vec::new();
     for (group, spec) in GROUP_TABLE {
-        let mut revs: Vec<String> = Vec::new();
+        // A set is the dedupe and the sort in one; scanning a `Vec` for each rev made a
+        // band with thousands of rows quadratic in its own size.
+        let mut revs: BTreeSet<String> = BTreeSet::new();
         for root in selected {
-            for rev in group_revs(root, group, tags) {
-                if !revs.contains(&rev) {
-                    revs.push(rev);
-                }
-            }
+            revs.extend(group_revs(root, group, tags));
         }
         if revs.is_empty() {
             continue;
         }
-        revs.sort();
         bands.push(RefBand {
             group,
             title: spec.title,
             open: fold_of(folds, group, spec.starts_open),
-            revs,
+            revs: revs.into_iter().collect(),
         });
     }
     bands

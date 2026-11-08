@@ -1,4 +1,6 @@
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
@@ -415,6 +417,69 @@ fn the_branch_dropdown_groups_by_kind_only_with_remotes_and_tags_collapsed() {
         popup_nodes(&harness, LOCAL_BAND, "v1"),
         0,
         "revealing one band leaves the other folded"
+    );
+}
+
+#[test]
+fn a_long_ref_band_builds_only_the_rows_its_viewport_shows() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().to_path_buf();
+    let alpha = repo_with_one_commit(&project, "alpha");
+    let mut child = Command::new("git")
+        .args(["update-ref", "--stdin"])
+        .current_dir(&alpha)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("git must be on PATH");
+    {
+        let mut stdin = child.stdin.take().expect("a piped stdin");
+        for i in 0..200 {
+            writeln!(stdin, "create refs/heads/branch-{i:04} HEAD").unwrap();
+        }
+    }
+    assert!(child.wait().expect("update-ref").success());
+
+    let mut harness = seeded_log_harness(&project, &[alpha]);
+    open_branch_dropdown(&mut harness);
+
+    assert_eq!(
+        popup_nodes(&harness, LOCAL_BAND, "branch-0000"),
+        1,
+        "the top of the list is inside the popup's viewport"
+    );
+    assert_eq!(
+        popup_nodes(&harness, LOCAL_BAND, "branch-0199"),
+        0,
+        "a row 199 rows down is outside the 320px popup and must not be built until it \
+         scrolls into view"
+    );
+
+    let left = harness.get_by_label(LOCAL_BAND).rect().min.x;
+    let top = harness
+        .query_all_by_label("branch-0000")
+        .find(|node| (node.rect().min.x - left).abs() < 2.0)
+        .expect("the first row of the popup")
+        .rect()
+        .center();
+    harness.hover_at(top);
+    for _ in 0..12 {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -800.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    settle_quiet(&mut harness);
+
+    let bottom = harness
+        .query_all_by_label("branch-0199")
+        .filter(|node| (node.rect().min.x - left).abs() < 2.0)
+        .count();
+    assert_eq!(
+        bottom, 1,
+        "the same row is built once scrolling brings it into the viewport"
     );
 }
 

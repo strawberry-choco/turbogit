@@ -435,6 +435,24 @@ fn apply_date(state: &mut AppState, now: i64) -> bool {
     true
 }
 
+enum BandRow<'a> {
+    Header(&'a RefBand),
+    Rev(&'a str),
+}
+
+// Both row kinds are exactly `GROUP_ROW_HEIGHT` tall because `show_rows` gives every
+// row one pitch; a header that grew taller than a rev row would drift the whole list.
+fn band_rows(bands: &[RefBand]) -> Vec<BandRow<'_>> {
+    let mut rows = Vec::new();
+    for band in bands {
+        rows.push(BandRow::Header(band));
+        if band.open {
+            rows.extend(band.revs.iter().map(|rev| BandRow::Rev(rev)));
+        }
+    }
+    rows
+}
+
 fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     let bands = branch_bands(state);
     // Set every frame so the `Area` follows a reveal or a fold, not only its first size.
@@ -467,6 +485,7 @@ fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
         return close;
     }
     let scope = state.ui.log_ref_scope.clone();
+    let rows = band_rows(&bands);
     // The list box is reserved rather than fitted to its contents. An `Area` keeps the size
     // it was first laid out with, so a popup that grows when a folded band is revealed
     // leaves its new rows outside the popup's own rect, where they paint but take no click.
@@ -477,27 +496,28 @@ fn branch_menu(ui: &mut Ui, state: &mut AppState) -> bool {
             ScrollArea::vertical()
                 .id_salt(("tg_log_filter_list", SALT_BRANCH))
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for band in &bands {
-                        let header = components::section_header(
-                            ui,
-                            band.title,
-                            band.revs.len(),
-                            band.open,
-                            |_| {},
-                        );
-                        if header.clicked() {
-                            let fold = if band.open { Fold::Closed } else { Fold::Open };
-                            state.ui.log_ref_folds.insert(band.group, fold);
-                        }
-                        if !band.open {
-                            continue;
-                        }
-                        for rev in &band.revs {
-                            let active = scope.as_deref() == Some(rev.as_str());
-                            if menu_row(ui, rev, active, None).clicked() {
-                                set_branch(state, rev);
-                                close = true;
+                .show_rows(ui, GROUP_ROW_HEIGHT, rows.len(), |ui, visible| {
+                    for index in visible {
+                        match rows[index] {
+                            BandRow::Header(band) => {
+                                let header = components::section_header(
+                                    ui,
+                                    band.title,
+                                    band.revs.len(),
+                                    band.open,
+                                    |_| {},
+                                );
+                                if header.clicked() {
+                                    let fold = if band.open { Fold::Closed } else { Fold::Open };
+                                    state.ui.log_ref_folds.insert(band.group, fold);
+                                }
+                            }
+                            BandRow::Rev(rev) => {
+                                let active = scope.as_deref() == Some(rev);
+                                if menu_row(ui, rev, active, None).clicked() {
+                                    set_branch(state, rev);
+                                    close = true;
+                                }
                             }
                         }
                     }
