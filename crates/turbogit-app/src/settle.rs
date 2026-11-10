@@ -208,6 +208,17 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
         crate::bulk_history::record_into(&mut state.ui.bulk_history, record);
         state.save_durable_ui();
     }
+    if let Some(pending) = state.ui.commit_push_dialog_pending.take() {
+        let committed: Vec<RootId> = results
+            .iter()
+            .filter(|(_, result)| result.is_ok())
+            .map(|(root, _)| root.clone())
+            .filter(|root| pending.contains(root))
+            .collect();
+        if !committed.is_empty() {
+            state.open_push_for_roots(&committed);
+        }
+    }
 }
 
 fn skip_reasons(view: &crate::bulk_run_view::BulkRunView) -> Vec<String> {
@@ -257,9 +268,19 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
 }
 
 fn open_push_dialog_owed(state: &mut AppState, rules: RuleSet, affected: &Affected) {
-    if rules.open_push_dialog && state.ui.commit_push_dialog_pending.as_ref() == affected.root() {
+    if !rules.open_push_dialog {
+        return;
+    }
+    let Some(pending) = state.ui.commit_push_dialog_pending.clone() else {
+        return;
+    };
+    let owed = match affected {
+        Affected::All => true,
+        Affected::Root(root) => pending.contains(root),
+    };
+    if owed {
         state.ui.commit_push_dialog_pending = None;
-        state.open_push();
+        state.open_push_for_roots(&pending);
     }
 }
 
@@ -405,7 +426,18 @@ fn clear_reselect(state: &mut AppState, affected: &Affected) {
 }
 
 fn drop_push_dialog_owed(state: &mut AppState, rules: RuleSet, affected: &Affected) {
-    if rules.open_push_dialog && state.ui.commit_push_dialog_pending.as_ref() == affected.root() {
+    if !rules.open_push_dialog {
+        return;
+    }
+    let owed = state
+        .ui
+        .commit_push_dialog_pending
+        .as_ref()
+        .is_some_and(|pending| match affected {
+            Affected::All => true,
+            Affected::Root(root) => pending.contains(root),
+        });
+    if owed {
         state.ui.commit_push_dialog_pending = None;
     }
 }

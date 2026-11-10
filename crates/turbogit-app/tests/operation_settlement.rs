@@ -767,7 +767,7 @@ fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
         std::fs::write(alpha.join("other.txt"), "other\n").unwrap();
         let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
         let root = registered_root(&state, &alpha);
-        state.ui.commit_push_dialog_pending = Some(root.clone());
+        state.ui.commit_push_dialog_pending = Some(vec![root.clone()]);
 
         let op = match kind {
             "a stage" => commit_writes::set_staged(&root, Path::new("other.txt"), true),
@@ -784,8 +784,8 @@ fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
             feed(&state)
         );
         assert_eq!(
-            state.ui.commit_push_dialog_pending.as_ref(),
-            Some(&root),
+            state.ui.commit_push_dialog_pending.as_deref(),
+            Some(std::slice::from_ref(&root)),
             "{kind} cannot spend it either; the feed read {:?}",
             feed(&state)
         );
@@ -802,7 +802,7 @@ fn a_plain_commit_clears_an_owed_open_instead_of_stranding_it() {
         &mut state,
         commit_writes::set_staged(&root, Path::new("plain.txt"), true),
     );
-    state.ui.commit_push_dialog_pending = Some(root.clone());
+    state.ui.commit_push_dialog_pending = Some(vec![root.clone()]);
 
     state.dispatch_commit(&root, "a plain subject", false, false, false);
     state.drain_events();

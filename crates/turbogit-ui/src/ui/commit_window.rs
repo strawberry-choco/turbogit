@@ -1952,8 +1952,14 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.truncate(12);
     }
     if and_push {
-        if let Some(root) = state.selected_root.clone() {
-            state.dispatch_commit(&root, &msg, amend, no_verify, true);
+        let targets = state.commit_targets();
+        match targets.len() {
+            0 => {}
+            1 => {
+                let root = targets[0].id.clone();
+                state.dispatch_commit(&root, &msg, amend, no_verify, true);
+            }
+            _ => state.run_commit_across_roots(targets, &msg, amend, true),
         }
     } else {
         let targets = state.commit_targets();
@@ -1963,7 +1969,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
                 let root = targets[0].id.clone();
                 state.dispatch_commit(&root, &msg, amend, no_verify, false);
             }
-            _ => state.run_commit_across_roots(targets, &msg, amend),
+            _ => state.run_commit_across_roots(targets, &msg, amend, false),
         }
     }
     state.ui.commit_message.clear();

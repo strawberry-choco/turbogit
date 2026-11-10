@@ -805,7 +805,7 @@ pub struct UiState {
     pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
     pub dialog: Option<Dialog>,
     pub push_in_flight: Option<crate::operation::PushRequest>,
-    pub commit_push_dialog_pending: Option<RootId>,
+    pub commit_push_dialog_pending: Option<Vec<RootId>>,
     pub push_rejection: Option<PushRejection>,
     pub vcs_popup: bool,
     pub workspace_picker_open: bool,
@@ -1552,13 +1552,30 @@ impl AppState {
     /// taken here, once: they are the promise the button then has to keep, so a
     /// later read that found more commits would push ones nobody ticked.
     pub fn open_push(&mut self) {
-        let selected = self.selected_root.clone();
-        let rows = self.push_rows(selected.as_ref(), None);
-        let focus = selected
-            .clone()
-            .map_or(crate::push_session::Focus::AllRoots, |id| {
-                crate::push_session::Focus::Root(id)
-            });
+        let consent: std::collections::HashSet<RootId> =
+            self.selected_root.iter().cloned().collect();
+        self.open_push_seeded(&consent, None, crate::push_session::Focus::AllRoots);
+    }
+
+    /// Open the Push dialog for exactly the roots an action acted on, with
+    /// those rows consented. This is the seam Commit-and-push uses: the push
+    /// covers the committed roots and no others.
+    pub fn open_push_for_roots(&mut self, roots: &[RootId]) {
+        let consent: std::collections::HashSet<RootId> = roots.iter().cloned().collect();
+        let focus = match roots {
+            [only] => crate::push_session::Focus::Root(only.clone()),
+            _ => crate::push_session::Focus::AllRoots,
+        };
+        self.open_push_seeded(&consent, None, focus);
+    }
+
+    fn open_push_seeded(
+        &mut self,
+        consent: &std::collections::HashSet<RootId>,
+        branch: Option<(&RootId, &str)>,
+        focus: crate::push_session::Focus,
+    ) {
+        let rows = self.push_rows(consent, branch);
         let generation = self.ui.dlg.push.generation + 1;
         self.ui.dlg.push = crate::push_session::PushSession::open(generation, rows, Some(focus));
         self.ui.dialog = Some(Dialog::Push);
@@ -1567,25 +1584,22 @@ impl AppState {
     /// Open the Push dialog for the branch a row was clicked on. That branch is
     /// not HEAD's, and the batch path which re-derives every root's branch from
     /// `current_branch` drops it, so this verb carries it into the row's own
-    /// field and consents that row.
+    /// field and consents that row alone.
     pub fn open_push_for_branch(&mut self, root: &RootId, branch: &str) {
-        let selected = self.selected_root.clone();
-        let rows = self.push_rows(selected.as_ref(), Some((root, branch)));
-        let generation = self.ui.dlg.push.generation + 1;
-        self.ui.dlg.push = crate::push_session::PushSession::open(
-            generation,
-            rows,
-            Some(crate::push_session::Focus::Root(root.clone())),
+        let consent: std::collections::HashSet<RootId> = [root.clone()].into_iter().collect();
+        self.open_push_seeded(
+            &consent,
+            Some((root, branch)),
+            crate::push_session::Focus::Root(root.clone()),
         );
-        self.ui.dialog = Some(Dialog::Push);
     }
 
-    /// One row per registered root. `branch` is the root-and-branch an invoking
-    /// action pointed the dialog at, when there was one: that row is consented
-    /// alongside the selected root's.
+    /// One row per registered root. `consent` names the rows the invoking
+    /// action consented, and `branch` is the root-and-branch it pointed the
+    /// dialog at, when there was one.
     fn push_rows(
         &self,
-        selected: Option<&RootId>,
+        consent: &std::collections::HashSet<RootId>,
         branch: Option<(&RootId, &str)>,
     ) -> Vec<crate::push_session::PushRow> {
         let outgoing = self.outgoing_per_root();
@@ -1597,7 +1611,7 @@ impl AppState {
                     Some((id, name)) if id == &root.id => Some(name),
                     _ => None,
                 };
-                let consented = seed.is_some() || selected == Some(&root.id);
+                let consented = seed.is_some() || consent.contains(&root.id);
                 let ids = match seed {
                     Some(name) => self.ids_for_branch(root, name),
                     None => outgoing
@@ -1692,7 +1706,7 @@ impl AppState {
         no_verify: bool,
         then_push: bool,
     ) {
-        self.ui.commit_push_dialog_pending = then_push.then(|| root.clone());
+        self.ui.commit_push_dialog_pending = then_push.then(|| vec![root.clone()]);
         self.dispatch(Operation::Commit {
             root: root.clone(),
             message: message.to_string(),
@@ -3036,10 +3050,16 @@ impl AppState {
 
     pub fn run_commit_across(&mut self, message: &str, amend: bool) {
         let roots = self.bulk_selected_roots();
-        self.run_commit_across_roots(roots, message, amend);
+        self.run_commit_across_roots(roots, message, amend, false);
     }
 
-    pub fn run_commit_across_roots(&mut self, roots: Vec<Root>, message: &str, amend: bool) {
+    pub fn run_commit_across_roots(
+        &mut self,
+        roots: Vec<Root>,
+        message: &str,
+        amend: bool,
+        then_push: bool,
+    ) {
         if roots.is_empty() {
             return;
         }
@@ -3057,6 +3077,9 @@ impl AppState {
             });
             return;
         }
+        // The push is owed the roots this commit actually lands in, resolved
+        // from the same plan the run dispatches.
+        self.ui.commit_push_dialog_pending = then_push.then(|| planned_ids.clone());
         let fleet: Vec<(RootId, String, Option<String>)> = rows
             .iter()
             .map(|r| {

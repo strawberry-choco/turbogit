@@ -40,6 +40,42 @@ fn head(repo: &Path) -> String {
 }
 
 #[test]
+fn commit_and_push_owes_a_push_for_exactly_the_committed_roots() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("p");
+    let alpha = temp_repo(&project, "alpha");
+    let ui = temp_repo(&project, "ui");
+    let lib = temp_repo(&project, "lib");
+    let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone(), lib.clone()]);
+
+    stage(&alpha, "feature.txt", "alpha\n");
+    stage(&lib, "feature.txt", "lib\n");
+
+    state.refresh(Affected::All);
+    state.drain_events();
+    let roots = state.commit_targets();
+    assert_eq!(roots.len(), 2, "two staged targets");
+    state.run_commit_across_roots(roots, "push me", false, true);
+    settle_bulk_run(&mut state);
+
+    assert_eq!(state.ui.dialog, Some(turbogit_app::state::Dialog::Push));
+    let consented: Vec<RootId> = state
+        .ui
+        .dlg
+        .push
+        .rows
+        .iter()
+        .filter(|row| row.consented)
+        .map(|row| row.id.clone())
+        .collect();
+    assert_eq!(
+        consented,
+        vec![RootId(alpha.into()), RootId(lib.into())],
+        "the push covers exactly the roots the commit landed in"
+    );
+}
+
+#[test]
 fn cascade_commit_fans_out_across_the_selection_and_reports_per_repo_outcomes() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("p");
@@ -146,7 +182,7 @@ fn run_commit_across_roots_commits_exactly_the_passed_roots() {
 
     let roots = state.commit_targets();
     assert_eq!(roots.len(), 2, "two staged targets");
-    state.run_commit_across_roots(roots, "roots message", false);
+    state.run_commit_across_roots(roots, "roots message", false, false);
     settle_bulk_run(&mut state);
 
     assert_ne!(head(&alpha), alpha_before, "alpha advanced");
