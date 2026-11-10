@@ -365,8 +365,10 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
                         .resizable(false)
                         .frame(Frame::NONE)
                         .show(ui, |ui| pane_card(ui, |ui| details_pane(ui, state)));
-                    ui.add_space(PANE_GAP);
-                    let files_h = (ui.available_height() - PANE_CARD_PAD as f32).max(0.0);
+                    // The gap goes below the card, not above it. Space above drops
+                    // the right column's top edge below the other two panes.
+                    let files_h =
+                        (ui.available_height() - PANE_GAP - PANE_CARD_PAD as f32).max(0.0);
                     ui.allocate_ui_with_layout(
                         Vec2::new(ui.available_width(), files_h),
                         Layout::top_down(Align::Min),
