@@ -39,7 +39,7 @@ flowchart TB
 
     subgraph UICrate["turbogit-ui"]
         THEME["theme.rs — dark-only palette (ADR-0003)"]
-        SHELL["ui/shell.rs — IDE shell<br/>(workspace sidebar / tab strip / status bar)"]
+        SHELL["ui/shell.rs — IDE shell<br/>(tab strip / status bar)"]
         WINDOWS["ui/{welcome,commit_window,log_window,worktrees,submodules}.rs"]
         DIFF["ui/diff/ — specialized diff component"]
         SURFACES["ui/{conflicts,push_dialog,remotes_dialog,popups,branch_widget,dialogs,settings_modal}.rs"]
@@ -154,11 +154,11 @@ responsibility described here does not imply a new edge.
   on the Welcome screen. Wires the native folder-picker seam.
 
 ### 2. UI (`turbogit-ui`)
-- IntelliJ-style IDE shell composed in `shell::render`: a 280px workspace
-  sidebar, 32px tab strip, 24px status bar, with the activity log panel across
-  the bottom of the central body. There is no topbar, the central body starts
-  at the top window edge. Global shortcut dispatch lives here (five frozen
-  shortcuts, ADR-0009).
+- IntelliJ-style IDE shell composed in `shell::render`: a 32px tab strip,
+  24px status bar, with the activity log panel across the bottom of the central
+  body. There is no topbar and no left sidebar, the tool window starts at the
+  top window edge. Global shortcut dispatch lives here (five frozen shortcuts,
+  ADR-0009).
 - Central body routes between Welcome placeholder and the five tool windows
   the tab strip offers (Changes, Log, Branches, Worktrees, Submodules).
   Floating surfaces render on top each frame: Branches popup,
@@ -302,8 +302,8 @@ sequenceDiagram
 | ADR-0014 | Diff rendering virtualizes over `ScrollArea::show_rows`, not `egui_extras::Table` |
 | ADR-0015 | Non-text diffs render outside the display-row model |
 | ADR-0016 | Mockups are the single source of truth for the UI redesign |
-| ADR-0017 | Switching workspaces happens from the sidebar's workspace header, reachable from the palette |
-| ADR-0018 | The sidebar PROJECTS tree nests folders and collapses single-repo chains into path labels |
+| ADR-0017 | Switching workspaces happens from the tab strip's project button, reachable from the palette |
+| ADR-0018 | Superseded: the sidebar PROJECTS tree was removed; the Changes window lists every root |
 | ADR-0019 | Worktree lifecycle owns worktree-list freshness policy |
 | ADR-0020 | `Operation` is the dispatch unit; label text is display-only |
 | ADR-0021 | The keyed read is the diff surface's only way to reach cached git data |

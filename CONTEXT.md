@@ -9,38 +9,13 @@ is the glossary for the language used across code, UI, and docs.
 
 **Project**:
 The directory tree TurboGit was opened on; contains one or more roots. Shown
-on the welcome screen and in recent projects.
-_Avoid_: workspace, solution
-
-**Project tree**:
-The nested tree of the sidebar's PROJECTS section: folder nodes and repo
-nodes arranged by the project's directory structure, rooted at the project
-directory.
-_Avoid_: repo list, flat group list
-
-**Folder node**:
-A project-tree node for a directory that is not itself a repository root.
-Displayed only when its subtree holds at least two repo nodes; a folder whose
-subtree holds exactly one repo collapses and that repo is promoted to the
-folder's parent.
-_Avoid_: folder item, project group
-
-**Repo node**:
-A project-tree node for a repository root, carrying the root's git state
-(status dot, current branch, ahead/behind). A repo node may itself contain
-child nodes when repositories nest.
-_Avoid_: git item, repo row
-
-**Path label**:
-The label of a repo node promoted out of a collapsed folder chain: each
-folder in the chain contributes its first character, joined with the repo's
-own name by `/` (e.g. `f/bar` from `foo/bar`). Applies wherever the collapse
-rule fires, including filtered trees.
-_Avoid_: abbreviated name, short label
+on the welcome screen and in recent projects. The workspace is that same
+project directory with its registered roots.
+_Avoid_: solution
 
 **Repository root (root)**:
 A directory with its own `.git`, identified by its path; one Git repository
-within the scanned project tree. Every piece of mutable Git state (branches,
+within the scanned project directory. Every piece of mutable Git state (branches,
 status, stashes, conflicts) belongs to exactly one root. Multi-root means
 several roots managed in one window with synchronous operations.
 _Avoid_: repo (when the multi-root context matters), project, folder,
@@ -132,19 +107,11 @@ operations refresh root status synchronously. Built via `AppState::for_roots`.
 _Avoid_: test fixture, mock app, fake state
 
 **Shell**:
-The always-present frame of the main window, workspace sidebar, tab strip,
-status bar. Everything else renders inside it, the activity log panel at the
-bottom of the central body; nothing sits above the content, so the central body
-starts at the top window edge.
+The always-present frame of the main window: tab strip, tool window, status bar,
+and the activity log panel at the bottom of the central body. Everything else
+renders inside it; nothing sits above the content, so the tool window starts at
+the top window edge.
 _Avoid_: chrome (too vague), app frame
-
-**Sidebar**:
-The 280px workspace column on the left of the shell: the workspace header (the
-workspace-switch trigger), the repo/branch filter, the SMART GROUPS rules, pinned
-views, and the PROJECTS tree. It chooses which root a surface is about; the tab
-strip, not the sidebar, chooses the tool window.
-_Avoid_: sidebar rail (there is no icon strip; the only rail in the app is the
-2px accent at a selected row's leading edge), activity bar
 
 **Tab**:
 A clickable control in the shell's tab strip that activates a tool window. Not

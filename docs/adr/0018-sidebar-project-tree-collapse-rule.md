@@ -1,5 +1,11 @@
 # The sidebar PROJECTS tree nests folders and collapses single-repo chains into path labels
 
+**Superseded by the `remove-sidebar` change (2026-11-10).** The sidebar project
+tree and the `sidebar_collapsed` durable key were deleted. The Changes window
+now lists every root, grouped by repository, and each group collapses on its
+own. What follows is kept as the record of how the tree was shaped, not as
+current behavior.
+
 The sidebar's PROJECTS section previously rendered a *flat* two-level tree:
 repos grouped by their first path component under the project directory
 (`SidebarGroup` → `SidebarRepo`). A project whose repos sat three levels deep

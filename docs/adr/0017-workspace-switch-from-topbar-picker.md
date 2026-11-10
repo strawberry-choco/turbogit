@@ -6,6 +6,9 @@ file's D1–D6 stand; only *which* surface opens it changed, and it is recorded
 here rather than in a new ADR because nothing about the decision moved. See
 the amendment note at the end.
 
+**Amended again (2026-11-10): the sidebar is gone and the trigger is the tab
+strip's project button.** See the second amendment note at the end.
+
 The topbar's workspace selector shipped as a stub that looked live and
 discarded every click; the only route to another workspace was a three-step
 detour (Ctrl+Shift+A → Open Welcome → a Welcome card). Issue #34 replaces the
@@ -95,3 +98,18 @@ the header a `Popup::menu` would trade the palette's keyboard route for a
 dropdown that can only ever be opened by the one response it is bound to. D2
 (unchanged), D3 (the anchor is now the header row's bottom-left) and D4–D6
 (unchanged) are untouched by this.
+
+## Amendment, the trigger is the tab strip's project button
+
+**Amended (2026-11-10): the sidebar was deleted, so its workspace header is gone
+with it.** The mouse trigger is now a project button in the tab strip: a folder
+icon followed by `<project> · N repos`, with the accessible label "Switch
+project". It opens the same picker, anchored at the tab strip rather than at a
+sidebar row.
+
+D1 still decides for the third time, for the reason it always did: a
+`Popup::menu` bound to one render's response can be opened only by that click,
+so the button records `workspace_picker_open` and the window paints later in
+the same frame, which keeps the palette's keyboard route. D2 and D4–D6 are
+unchanged; D3's anchor is now the tab strip corner the project button occupies,
+still recorded as a position rather than taken from a response.

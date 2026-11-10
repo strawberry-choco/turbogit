@@ -129,7 +129,7 @@ diff module is still a feature component.
 - `widgets::group_title` is a plain uppercase micro-header for a dialog, panel,
   or list. It paints text only: no band, no count, no chevron, and no toggle.
 - `components::section_header` is a branch group **band** for `Local`, `Remote`,
-  or another branch/smart group. It has `SECTION_BG`, a chevron, a live count
+  or another branch group. It has `SECTION_BG`, a chevron, a live count
   pill, an expand/collapse hit target, and an optional trailing action. The
   strip toggle and a trailing action have separate interaction precedence.
 - `widgets::pane_header` is the tool-window title/action strip, the one pane
@@ -241,8 +241,8 @@ is the precedence ladder, and it is stated through the module's own predicates
 because five surfaces used to re-derive it, and the status bar's answer
 contradicted the rail's own dot for the same repository inside a single frame.
 The map's contract is unchanged by that,
-and so is the wording: `RepoState::words()` is the same strings the sidebar's
-smart groups show, because the groups read them from here.
+and so is the wording: `RepoState::words()` is the single spelling of those
+strings, read from here by every surface that names a repository's state.
 
 Two meanings of "diverged" ship on purpose and are named
 (`DivergenceMeaning::Both`, `DivergenceMeaning::AnyDrift`) rather than spelled as
@@ -360,8 +360,8 @@ under v2, one row shell and one rail painter on top of them.
   `CONTROL_RADIUS` corner every such row has always used. It is the shared form
   for the hand-painted tables that allocate a rect, paint behind their content
   and want the one row-state decision. A surface that rounds its rows differently
-  (the sidebar's full-bleed band, blame's dense rows) keeps its own corner; that
-  is a real geometry difference, not a second row role.
+  (blame's dense rows) keeps its own corner; that is a real geometry difference,
+  not a second row role.
 - **`widgets::tree_row` no longer exists, and that decision is not revisited.**
   The fixed-height tree/list row wrapper was retired by the dead-API sweep
   together with the private row implementation it solely owned, because nothing
@@ -405,15 +405,10 @@ roles to the three that are real:
   stays. **No list row resolves to it**, stated on the token and asserted at the
   row-fill decision, which is the only seam that can prove a negative.
 - `RowState::FocusSelected` is the translucent `Palette::selection_bg()` focus
-  band used by the log table, sidebar tree, and blame surfaces, one of the three
-  survivors rather than a duplicate of any of them. **The left rail's active row
-  is one of its consumers, deliberately**: R4's "a selected list row is
-  `ROW_SELECTED` plus a rail" is about a row *of a list*, and what the rail paints
-  is a full-bleed tree selection spanning a workspace tree, which is a *region*
-  that is chosen rather than a row picked out of many. The two fills are also the
-  same colour to the eye (`ui/sidebar.rs:69-75`, pinned by
-  `tests/branch_component_kit.rs`), so the swap would change which *role* the
-  band claims and nothing the user can see.
+  band used by the log table and blame surfaces, one of the three survivors
+  rather than a duplicate of any of them. It is the focus fill for a row picked
+  out of a list, distinct from the current-ref band and from `ROW_SELECTED` plus
+  a rail.
 - A current branch is a repository fact, not a pointer state.
   `components::current_row_fill` keeps its resting brand tint distinct from
   hover and selection, and keeps selection visible when the current row is also
@@ -517,14 +512,13 @@ page.
 ### One structural edge wearing the wrong tone, and the unowned fourth tone
 
 `RULE_STRUCTURAL`'s users were checked to be genuinely structural rather than
-dividers. The commit window's tree indent guide (`commit_window::indent_guide`),
-the multi-selection summary's header rule (`multi_selection`), and the sidebar's
-selection-bar top edge (`sidebar`) all wear `LINE_SUBTLE` and are all chrome;
-but the shell's own panel edge rules (`shell::paint_edge_line` at
-`shell.rs:426-430`, and the tab strip's underline at `shell.rs:481`) wear `LINE`,
-the *footer-rule* value, even though their role is structural. Their role is
-identified here; their value is not re-pointed. `widgets::edge_rule` says so at
-its own definition, do not quietly correct it there.
+dividers. The commit window's tree indent guide (`commit_window::indent_guide`)
+wears `LINE_SUBTLE` and is chrome; but the shell's own panel edge rules
+(`shell::paint_edge_line` at `shell.rs:426-430`, and the tab strip's underline at
+`shell.rs:481`) wear `LINE`, the *footer-rule* value, even though their role is
+structural. Their role is identified here; their value is not re-pointed.
+`widgets::edge_rule` says so at its own definition, do not quietly correct it
+there.
 
 egui's default `ui.separator()` paints a tone **no design token owns**:
 `theme::dark_visuals` starts from `Visuals::dark()` and never assigns
@@ -595,9 +589,8 @@ and rejected alternative at its definition: `accent_bar`, `ghost_icon_button`,
 points of the boundary are visible only from the role contract:
 
 - **`edge_rule` absorbed four hand-rolled copies, one of which had no half-pixel
-  offset**, the branch-multi-selection bar at `multi_selection.rs`, whose
-  hairline moved by half a pixel when it was folded in. That was the one pixel
-  change the extraction made.
+  offset**, so its hairline moved by half a pixel when it was folded in. That
+  was the one pixel change the extraction made.
 - **`empty_state(ui, text)` settled the ink for a role the tree had seven
   conventions for**, and it is the one place a contrast audit will flag a
   sub-AA step that was accepted deliberately. It paints one "there is nothing
