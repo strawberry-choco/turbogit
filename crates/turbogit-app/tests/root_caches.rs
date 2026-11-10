@@ -352,14 +352,13 @@ fn a_tag_created_in_session_is_in_the_cached_tag_list_once_the_op_settles() {
 }
 
 #[test]
-fn op_outside_selected_root_does_not_refetch_selected_log() {
+fn an_op_on_one_root_leaves_another_roots_caches_alone() {
     let p = two_root_project();
     let alpha_id = RootId(p.alpha.clone().into());
     let beta_id = RootId(p.beta.clone().into());
 
     let mut state = AppState::for_roots(&p.dir, &[p.alpha.clone(), p.beta.clone()]);
     prime_fake_entries(&mut state, &[alpha_id.clone(), beta_id.clone()]);
-    state.selected_root = Some(beta_id.clone());
 
     state
         .tx
@@ -372,10 +371,6 @@ fn op_outside_selected_root_does_not_refetch_selected_log() {
         .expect("send OpCompleted");
     state.drain_events();
 
-    assert!(
-        state.caches.log(&alpha_id).is_none(),
-        "out-of-scope invalidation must not trigger a refetch"
-    );
     assert_eq!(
         first_message(&state, &beta_id),
         Some("fake: untouched".to_string())

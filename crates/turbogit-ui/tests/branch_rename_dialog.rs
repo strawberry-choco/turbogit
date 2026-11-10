@@ -44,15 +44,11 @@ fn shell_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
 }
 
 fn branch<'a>(state: &'a AppState, name: &str) -> Option<&'a turbogit_domain::model::Branch> {
-    state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .and_then(|r| {
-            r.branches
-                .iter()
-                .find(|b| b.name == name && b.kind == BranchKind::Local)
-        })
+    state.multi.roots.first().and_then(|r| {
+        r.branches
+            .iter()
+            .find(|b| b.name == name && b.kind == BranchKind::Local)
+    })
 }
 
 fn tracked_and_loaded() -> (TempDir, PathBuf, Harness<'static, AppState>) {
@@ -71,7 +67,7 @@ fn tracked_and_loaded() -> (TempDir, PathBuf, Harness<'static, AppState>) {
 }
 
 fn open_rename(harness: &mut Harness<'_, AppState>) {
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().open_rename_branch(&root, "feature-a");
     settle_quiet(harness);
 }
@@ -154,7 +150,7 @@ fn an_untracked_branch_gets_the_name_field_and_no_upstream_promise() {
             .is_none(),
         "zebra tracks nothing — that is what this test is about"
     );
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().open_rename_branch(&root, "zebra");
     settle_quiet(&mut harness);
 

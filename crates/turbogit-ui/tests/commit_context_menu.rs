@@ -673,10 +673,7 @@ mod surface {
             },
             state,
         );
-        harness.set_size(egui::vec2(
-            1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-            800.0,
-        ));
+        harness.set_size(egui::vec2(1280.0, 800.0));
         settle(&mut harness);
         harness
     }
@@ -1215,8 +1212,7 @@ mod surface {
                 .id
                 .clone()
         };
-        let (selected, row_root) = (id_of(&dirty), id_of(&clean));
-        harness.state_mut().selected_root = Some(selected.clone());
+        let row_root = id_of(&clean);
         harness.state_mut().ui.log_filter = "clean work".to_string();
         settle(&mut harness);
 
@@ -1560,6 +1556,10 @@ mod surface {
             !symbolic.status.success(),
             "HEAD is no longer a symbolic ref to a branch"
         );
+        // The surviving surface that names a detached HEAD is the Changes repo
+        // group's branch label; the Log tab does not paint it.
+        harness.get_by_label("Changes").click();
+        settle(&mut harness);
         assert_painted(&harness, "<detached>");
     }
 
@@ -1770,11 +1770,7 @@ mod surface {
                 .is_disabled(),
             "so the confirm cannot be pressed at all"
         );
-        let root = harness
-            .state()
-            .selected_root
-            .clone()
-            .expect("a selected root");
+        let root = harness.state().multi.roots[0].id.clone();
         let target = git_with_env(&seed.alpha, &["rev-parse", "HEAD~1"], &GitEnv::fixture())
             .trim()
             .to_string();

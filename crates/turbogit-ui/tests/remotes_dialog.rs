@@ -90,22 +90,17 @@ fn settle(h: &mut Harness<'_, AppState>) {
     panic!("layout did not settle within 300 frames");
 }
 
-fn open_popup(h: &mut Harness<'_, AppState>) {
-    h.state_mut().ui.branches_popup = true;
-    settle(h);
-}
-
 fn open_manager(h: &mut Harness<'_, AppState>) {
-    open_popup(h);
-    h.query_all_by_label("Manage remotes…")
-        .next()
-        .expect("footer button painted")
-        .click();
+    // The palette/toolbar entry point: no root supplied, so the dialog starts with
+    // every registered root in scope. The Branches popup names one root through
+    // `action_root`, which a workspace with several repos and no selected change
+    // does not offer, so this fixture opens the manager the way the palette does.
+    h.state_mut().open_dialog(Dialog::ManageRemotes, None);
     settle(h);
     assert_eq!(
         h.state().ui.dialog,
         Some(Dialog::ManageRemotes),
-        "footer click opens the manager"
+        "the opener shows the manager"
     );
 }
 
@@ -141,7 +136,6 @@ fn manager_footer_uses_shared_divider_and_minimum_action_target() {
     let repo = fresh_repo(tmp.path(), "alpha");
     let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     let close = h.get_by_label("Close");
@@ -166,7 +160,6 @@ fn footer_opens_the_manager_listing_fetch_and_push_urls() {
     add_divergent_origin(&repo);
     let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
 
     open_manager(&mut h);
 
@@ -189,7 +182,6 @@ fn add_remote_dispatches_and_refreshes_the_list() {
     let repo = fresh_repo(tmp.path(), "alpha");
     let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     type_into_field(&mut h, "Remote name", "origin");
@@ -208,12 +200,7 @@ fn add_remote_dispatches_and_refreshes_the_list() {
     assert!(dispatched, "expected AddRemote, got {:?}", exec.recorded());
 
     pump_until(&mut h, "add refresh", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .map(|r| r.remotes.len())
-            .unwrap_or(0)
-            == 1
+        s.multi.roots.first().map(|r| r.remotes.len()).unwrap_or(0) == 1
     });
     assert!(h.query_all_by_label("origin").next().is_some());
     assert!(
@@ -230,7 +217,6 @@ fn rename_remote_dispatches_and_refreshes() {
     add_divergent_origin(&repo);
     let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     click_button(&mut h, "Rename");
@@ -255,9 +241,9 @@ fn rename_remote_dispatches_and_refreshes() {
     );
 
     pump_until(&mut h, "rename refresh", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .map(|r| r.remotes.iter().any(|r| r.name == "upstream"))
             .unwrap_or(false)
     });
@@ -271,7 +257,6 @@ fn edit_url_dispatches_and_refreshes() {
     add_divergent_origin(&repo);
     let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     click_button(&mut h, "Edit URL");
@@ -296,9 +281,9 @@ fn edit_url_dispatches_and_refreshes() {
     );
 
     pump_until(&mut h, "edit-url refresh", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.remotes.first())
             .map(|r| r.fetch_url.as_deref() == Some("https://new.git/repo.git"))
             .unwrap_or(false)
@@ -317,7 +302,6 @@ fn remove_remote_dispatches_and_refreshes() {
     add_divergent_origin(&repo);
     let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     click_button(&mut h, "Remove");
@@ -337,9 +321,9 @@ fn remove_remote_dispatches_and_refreshes() {
     );
 
     pump_until(&mut h, "remove refresh", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .map(|r| r.remotes.is_empty())
             .unwrap_or(false)
     });
@@ -360,7 +344,6 @@ fn set_upstream_per_branch_dispatches_through_the_engine_seam() {
     git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
     open_manager(&mut h);
 
     click_button(&mut h, "Set upstream…");

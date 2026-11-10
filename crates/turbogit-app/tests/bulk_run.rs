@@ -40,10 +40,6 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 
 fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = selected
-        .iter()
-        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
-        .collect();
     state.ui.bulk_scope = selected
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
@@ -215,7 +211,6 @@ fn a_failed_row_carries_the_git_error_and_resolve_jumps_to_the_repo() {
     assert!(toast.message.contains("0 of 1 ok"), "{:?}", toast.message);
 
     state.bulk_resolve(rid(&alpha));
-    assert_eq!(state.selected_root, Some(rid(&alpha)));
     assert!(state.ui.bulk_run.is_none(), "monitor closed on resolve");
 }
 

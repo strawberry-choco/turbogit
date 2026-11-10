@@ -7,12 +7,16 @@ use crate::ui::popups::Action;
 use crate::ui::widgets;
 
 /// The one-click target for the workspace as it stands, or `None` when only the
-/// dialog can decide.
+/// dialog can decide. With no global focus, the single-root workspace is the
+/// only unambiguous target; a multi-root project with a selected file resolves
+/// to that file's root.
 pub fn direct_target(state: &AppState) -> Option<DirectPushTarget> {
+    let selection = state.selected_change_roots();
+    let selected = (selection.len() == 1).then(|| selection[0].clone());
     sync_service::direct_push_target(
         &state.multi.roots,
-        state.selected_root.as_ref(),
-        &state.ui.repo_selection,
+        selected.as_ref(),
+        &selection.into_iter().collect(),
         &state.settings,
     )
 }

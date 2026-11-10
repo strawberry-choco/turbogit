@@ -49,15 +49,13 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
 }
 
 fn open_custom_command(h: &mut Harness<'_, AppState>) {
-    h.get_by_label("Select group frontend").click();
-    settle(h);
-    h.get_by_label("Custom command…").click();
+    h.get_by_label("Custom command").click();
     settle(h);
 }
 
 #[test]
-fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
-    let (project, alpha, ui) = two_repo_project("tile");
+fn the_custom_command_fleet_entry_opens_a_modal_that_runs_the_typed_command() {
+    let (project, alpha, ui) = two_repo_project("entry");
     let state =
         AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
     let mut h = harness(state);

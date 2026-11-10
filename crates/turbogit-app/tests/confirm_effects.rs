@@ -31,7 +31,7 @@ fn a_branch_delete_captures_the_tip_and_the_upstream_before_it_removes_them() {
     let (_tmp, project) = tracking_project();
     let alpha = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let tip = git(&alpha, &["rev-parse", "work"]).trim().to_string();
     state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
         root: root.clone(),
@@ -149,7 +149,7 @@ fn the_dirty_checkouts_set_aside_parks_the_changes_and_switches() {
     let (_tmp, project) = dirty_checkout_project();
     let alpha = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
-    let verb = checkout_dirty(state.selected_root.clone().unwrap());
+    let verb = checkout_dirty(state.multi.roots[0].id.clone());
 
     apply(&mut state, &verb, ConfirmAction::SetAside);
     state.drain_events();
@@ -178,7 +178,7 @@ fn the_dirty_checkouts_bring_along_carries_the_changes_and_stashes_nothing() {
     let (_tmp, project) = dirty_checkout_project();
     let alpha = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
-    let verb = checkout_dirty(state.selected_root.clone().unwrap());
+    let verb = checkout_dirty(state.multi.roots[0].id.clone());
 
     apply(&mut state, &verb, ConfirmAction::BringAlong);
     state.drain_events();
@@ -206,7 +206,7 @@ fn the_unmerged_link_opens_the_viewer_over_the_disclosure_it_carried() {
     let (_tmp, project) = tracking_project();
     let alpha = project.join("alpha");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
         root: root.clone(),
         name: "work".to_string(),

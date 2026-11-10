@@ -19,7 +19,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use turbogit_app::log_states::{self, LogRecovery, LogState};
 use turbogit_app::persistence::BranchesViewOptions;
-use turbogit_app::root_caches::{LogScope, file_stat};
+use turbogit_app::root_caches::{LogRead, LogScope, file_stat};
 use turbogit_app::state::{
     AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
 };
@@ -168,6 +168,28 @@ fn ensure_log_data(state: &mut AppState) {
     if !query.is_empty() {
         for id in visible_root_ids(state) {
             state.ensure_log(&id, LogScope::Search(query.clone()));
+        }
+    }
+    let scoped = state.log_filter_key().is_some()
+        || state.ui.log_path_scope.is_some()
+        || state.ui.log_ref_scope.is_some()
+        || !query.is_empty();
+    if scoped {
+        return;
+    }
+    // The unscoped listing has no scope read of its own, so nothing else asks
+    // git for it on first paint. A failed read stays failed until the user
+    // retries, exactly as a scoped one does.
+    let failed: Vec<RootId> = log_states::failed_listing_reads(state)
+        .into_iter()
+        .filter_map(|read| match read {
+            LogRead::Commits(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    for id in visible_root_ids(state) {
+        if state.caches.log(&id).is_none() && !failed.contains(&id) {
+            state.fetch_log(id);
         }
     }
 }
@@ -839,7 +861,7 @@ fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitF
                 .is_some_and(|cs| cs.iter().any(|c| c.id == cid)),
         multi_root: state.multi.roots.len() > 1,
         owner: state.holding_operation(root.as_path()),
-        scope: rewrite_gating::scope_of(&state.ui.repo_selection, root),
+        scope: rewrite_gating::scope_of(&state.selected_change_roots().into_iter().collect(), root),
         repo_name: root
             .as_path()
             .utf8_name()

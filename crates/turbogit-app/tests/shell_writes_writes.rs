@@ -23,7 +23,7 @@ fn create_branch_entry_creates_the_branch_at_its_start_point() {
     let tmp = tempfile::tempdir().unwrap();
     let work: PathBuf = repo_with_history(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let base = git_out(&work, &["rev-parse", "main"]);
 
     let op = branch_writes::create(&root, "topic", Some(&base), true);
@@ -48,7 +48,7 @@ fn create_tag_entry_creates_the_tag_and_leaves_the_push_off_by_default() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let spec = TagSpec {
         name: "v2".into(),
         target: None,
@@ -78,7 +78,7 @@ fn create_tag_entry_pushes_when_asked() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let spec = TagSpec {
         name: "v3".into(),
         target: None,
@@ -109,7 +109,7 @@ fn stash_entry_pushes_and_pop_latest_entry_takes_it_back() {
         "the fixture leaves a change for the stash to take"
     );
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = stash_writes::push(&root, "work in progress", false);
     assert_eq!(op.label(), "Stash");
@@ -144,7 +144,7 @@ fn commit_window_stash_entries_apply_and_pop_by_index() {
     git(&work, &["stash", "push", "-q", "-m", "two"]);
 
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = stash_writes::apply_at(&root, "stash@{0}", 0);
     assert_eq!(op.label(), "Apply stash stash@{0}");
@@ -180,7 +180,7 @@ fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
     let work = repo_with_origin(tmp.path(), "work");
     std::fs::write(work.join("new.txt"), "new\n").unwrap();
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = commit_writes::set_staged(&root, Path::new("new.txt"), true);
     assert_eq!(op.label(), "Stage new.txt");
@@ -240,7 +240,7 @@ fn committing_takes_the_index_and_leaves_an_unstaged_file_out() {
     std::fs::write(work.join("kept.txt"), "edited but unstaged\n").unwrap();
     git_out(&work, &["add", "staged.txt"]);
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = Operation::Commit {
         root: root.clone(),
@@ -276,7 +276,7 @@ fn undo_rewrite_entry_restores_the_branch_from_the_backup_ref() {
     );
 
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = rewrite_writes::undo(&root, RewriteUndoVerb::Drop, &dropped);
     assert_eq!(op.label(), "Undo drop");
@@ -302,7 +302,7 @@ fn abort_interactive_rebase_entry_restores_from_the_backup() {
     git(&work, &["reset", "-q", "--hard", "HEAD~1"]);
 
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = rewrite_writes::abort_interactive_rebase(&root);
     assert_eq!(op.label(), "Abort interactive rebase");

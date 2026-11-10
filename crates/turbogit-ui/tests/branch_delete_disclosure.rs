@@ -57,15 +57,11 @@ fn shell_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
 }
 
 fn branch<'a>(state: &'a AppState, name: &str) -> Option<&'a turbogit_domain::model::Branch> {
-    state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .and_then(|r| {
-            r.branches
-                .iter()
-                .find(|b| b.name == name && b.kind == BranchKind::Local)
-        })
+    state.multi.roots.first().and_then(|r| {
+        r.branches
+            .iter()
+            .find(|b| b.name == name && b.kind == BranchKind::Local)
+    })
 }
 
 /// Is `name` still listed as a remote-tracking branch? A `git push --delete`
@@ -74,27 +70,19 @@ fn branch<'a>(state: &'a AppState, name: &str) -> Option<&'a turbogit_domain::mo
 /// instead of a wall clock. The kind-scoped twin of [`branch_gone`], because the
 /// engine lists `origin/work` under the short name `work`.
 fn remote_listed(state: &AppState, name: &str) -> bool {
-    state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .is_some_and(|r| {
-            r.branches
-                .iter()
-                .any(|b| b.kind == BranchKind::Remote && b.name == name)
-        })
+    state.multi.roots.first().is_some_and(|r| {
+        r.branches
+            .iter()
+            .any(|b| b.kind == BranchKind::Remote && b.name == name)
+    })
 }
 
 fn branch_gone(state: &AppState, name: &str) -> bool {
-    state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .is_some_and(|r| {
-            !r.branches
-                .iter()
-                .any(|b| b.name == name && b.kind == BranchKind::Local)
-        })
+    state.multi.roots.first().is_some_and(|r| {
+        !r.branches
+            .iter()
+            .any(|b| b.name == name && b.kind == BranchKind::Local)
+    })
 }
 
 fn pump_until(h: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&AppState) -> bool) {
@@ -218,7 +206,7 @@ fn the_link_counts_one_unmerged_commit_in_the_singular() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "edge one"]);
     git(&repo, &["checkout", "-q", "main"]);
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().refresh(Affected::Root(root));
     pump_until(&mut harness, "edge listed", |s| branch(s, "edge").is_some());
     settle_quiet(&mut harness);

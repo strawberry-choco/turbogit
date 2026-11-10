@@ -1,6 +1,4 @@
-use egui::{
-    Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Ui, Vec2, Visuals,
-};
+use egui::{Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Vec2, Visuals};
 
 pub struct Palette;
 
@@ -74,8 +72,6 @@ impl Palette {
     pub fn selection_bg() -> Color32 {
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40)
     }
-
-    pub const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
 }
 
 pub const SECTION_TINT: f32 = 0.12;
@@ -214,19 +210,6 @@ pub fn data_font(size: f32) -> FontId {
 
 pub fn chrome_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
-}
-
-pub fn two_space_indent(ui: &Ui) -> f32 {
-    ui.painter()
-        .layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
-        .size()
-        .x
-}
-
-pub const INDENT_STEPS_PER_LEVEL: f32 = 2.0;
-
-pub fn indent_step(ui: &Ui) -> f32 {
-    two_space_indent(ui) * INDENT_STEPS_PER_LEVEL
 }
 
 fn dark_visuals() -> Visuals {

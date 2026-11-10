@@ -112,10 +112,7 @@ fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     state.drain_events();
     state.ui.tab = Tab::Log;
 
-    let mut harness = shell_harness_over(
-        state,
-        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
-    );
+    let mut harness = shell_harness_over(state, egui::vec2(1280.0, 800.0));
     settle_quiet(&mut harness);
     harness
 }
@@ -179,7 +176,7 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
 
     wait_for(&mut harness, |s| {
         s.caches
-            .log(&s.selected_root.clone().unwrap())
+            .log(&s.multi.roots[0].id.clone())
             .is_some_and(|cs| {
                 cs.iter()
                     .any(|c| c.message.to_lowercase().starts_with("revert"))
@@ -531,11 +528,7 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
 fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
     let mut harness = log_harness_over(project);
-    let root = harness
-        .state()
-        .selected_root
-        .clone()
-        .expect("the log selected a repository");
+    let root = harness.state().multi.roots[0].id.clone();
 
     open_reword_preflight(
         &mut harness,
@@ -589,11 +582,7 @@ fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
 fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places() {
     let (_tmp, project, repo, target, descendant_before) = history_to_rewrite();
     let mut harness = log_harness_over(project);
-    let root = harness
-        .state()
-        .selected_root
-        .clone()
-        .expect("the log selected a repository");
+    let root = harness.state().multi.roots[0].id.clone();
 
     open_rewrite_preflight(&mut harness, &target, "feature-2");
     harness.get_by_label("Drop this commit").click();
@@ -637,11 +626,7 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
 fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
     let (_tmp, project, repo, target, _descendant) = history_to_rewrite();
     let mut harness = log_harness_over(project);
-    let root = harness
-        .state()
-        .selected_root
-        .clone()
-        .expect("the log selected a repository");
+    let root = harness.state().multi.roots[0].id.clone();
     let head_before = git(&repo, &["rev-parse", "feature"]).trim().to_string();
 
     harness
@@ -845,7 +830,7 @@ fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
     reword_and_arm_undo(&mut harness, &target);
 
     commit(&repo, "e.txt", "4\n", "a second operation");
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness
         .state_mut()
         .dispatch(turbogit_app::operation::Operation::Fetch { roots: vec![root] });

@@ -407,7 +407,9 @@ pub fn direct_push_target(
         return None;
     }
     let root = roots.first()?;
-    if selected != Some(&root.id) {
+    if let Some(selected) = selected
+        && selected != &root.id
+    {
         return None;
     }
     if !selection.is_empty() && (selection.len() != roots.len() || !selection.contains(&root.id)) {

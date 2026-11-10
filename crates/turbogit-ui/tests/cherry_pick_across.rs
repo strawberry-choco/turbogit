@@ -86,10 +86,7 @@ fn harness_with_log(seed: &Seed) -> Harness<'static, AppState> {
     state.drain_events();
     state.ui.tab = Tab::Log;
 
-    let mut harness = shell_harness_over(
-        state,
-        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
-    );
+    let mut harness = shell_harness_over(state, egui::vec2(1280.0, 800.0));
     settle_quiet(&mut harness);
     harness
 }

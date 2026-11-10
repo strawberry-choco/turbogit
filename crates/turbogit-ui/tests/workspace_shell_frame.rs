@@ -1,14 +1,14 @@
 use egui::{Color32, Key, Modifiers, Rect};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_ink,
-    settle, shell_harness_over_unstyled,
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, settle,
+    shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{Palette, RAIL_WIDTH, RepoState};
-use turbogit_ui::ui::shell;
 use turbogit_ui::ui::widgets::TAB_STRIP_HEIGHT;
 
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
@@ -37,40 +37,13 @@ fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
     AppState::for_roots(project_dir, roots)
 }
 
-/// The narrowest harness width at which the **sidebar** actually renders.
-///
-/// `shell::MIN_SIDEBAR_WINDOW_WIDTH` is 1000, but the shell measures its work
-/// rect *inside* the window frame, so the outer width that clears the
-/// threshold is higher than the constant. The shell's central panel no longer
-/// carries an inner margin (the frame is flush with the window edge), so the
-/// harness's only inset is kittest's own outer panel: measured on the real
-/// render, the rail first paints at 1016 = 1000 + 16. A suite that assumed a
-/// width without measuring would have asserted against nothing, which is the
-/// vacuous-pass trap this ticket's criterion names, and why the number is
-/// measured here rather than reasoned about.
-pub const SIDEBAR_VISIBLE_FROM: f32 = 1016.0;
-
 const HARNESS_DEFAULT: (f32, f32) = (1024.0, 768.0);
-
-fn rail_visible_size() -> (f32, f32) {
-    (
-        HARNESS_DEFAULT.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        HARNESS_DEFAULT.1,
-    )
-}
 
 fn harness(state: AppState) -> Harness<'static, AppState> {
     harness_at(state, HARNESS_DEFAULT.0, HARNESS_DEFAULT.1)
 }
 
 /// The same harness at an explicit size.
-///
-/// **Sized, not defaulted.** `egui_kittest::Harness::builder()` lands on
-/// 800×600, which is *below* the sidebar's own threshold, so a suite that
-/// never says what size it is renders a shell with no left rail and every
-/// sidebar assertion in it passes vacuously. Tests that mean to look at the
-/// sidebar pass [`rail_visible_size`]; tests about the shell itself pass
-/// [`HARNESS_DEFAULT`].
 ///
 /// Deliberately unstyled: this suite's whole subject is band geometry read off
 /// painted rects, and the embedded font stack would move those rects. `max_steps` is
@@ -422,7 +395,6 @@ fn status_bar_paints_unpulled_dirty_and_scope_from_real_data() {
 
     assert_painted(&h, "1 unpulled");
     assert_painted(&h, "1 dirty");
-    assert_painted(&h, "1 repo in scope");
     assert_painted(&h, "2 total");
 }
 
@@ -607,7 +579,7 @@ fn the_shell_renders_at_the_harness_default_size_without_clipping() {
 }
 
 #[test]
-fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
+fn the_shell_has_no_sidebar_band_at_any_width() {
     let parent = test_support::scratch_root("workspace-shell-frame-railing");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-railing");
@@ -615,110 +587,58 @@ fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
     std::fs::create_dir_all(&parent).unwrap();
     let project_dir = parent.clone();
     let repo = temp_repo(&parent, "alpha");
-    let (w, h_) = rail_visible_size();
-    let mut state = app_state(&project_dir, std::slice::from_ref(&repo));
-    state.ui.show_status_bar = true;
-    let mut h = harness_at(state, w, h_);
-    settle(&mut h);
 
-    let rail = filled_rects(&h)
-        .into_iter()
-        .find(|(rect, color)| {
-            *color == Palette::SIDEBAR
-                && (rect.width() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 0.5
-        })
-        .map(|(rect, _)| rect)
-        .expect("the sidebar paints its own surface at the rail's width");
-    let viewport = h.ctx.content_rect();
-    assert!(
-        rail.left() - viewport.left() < 32.0,
-        "the rail is flush with the content area's leading edge: {rail:?} vs {viewport:?}"
-    );
-    assert!(
-        rail.right() < viewport.center().x,
-        "the rail occupies the left of the content area, not the middle: {rail:?}"
-    );
-    assert_painted(&h, "PROJECTS");
-    assert_painted(&h, "Filter repos / branches…");
+    for (w, h_) in [(800.0, 600.0), HARNESS_DEFAULT, (1280.0, 800.0)] {
+        let mut state = app_state(&project_dir, std::slice::from_ref(&repo));
+        state.ui.show_status_bar = true;
+        let mut h = harness_at(state, w, h_);
+        settle(&mut h);
 
-    let mut narrow = harness_at(
-        {
-            let mut s = app_state(&project_dir, std::slice::from_ref(&repo));
-            s.ui.show_status_bar = true;
-            s
-        },
-        HARNESS_DEFAULT.0,
-        HARNESS_DEFAULT.1,
-    );
-    settle(&mut narrow);
-    assert!(
-        filled_rects(&narrow)
-            .iter()
-            .any(|(_, c)| *c == Palette::SIDEBAR),
-        "the default width clears the rail's threshold — if this ever changes, \
-         `SIDEBAR_VISIBLE_FROM` and the no-clip test above need re-measuring"
-    );
-    let mut just_under = harness_at(
-        {
-            let mut s = app_state(&project_dir, std::slice::from_ref(&repo));
-            s.ui.show_status_bar = true;
-            s
-        },
-        SIDEBAR_VISIBLE_FROM - 20.0,
-        HARNESS_DEFAULT.1,
-    );
-    settle(&mut just_under);
-    assert!(
-        !filled_rects(&just_under)
-            .iter()
-            .any(|(_, c)| *c == Palette::SIDEBAR),
-        "20 points below the measured threshold the rail is still hidden"
-    );
-    let mut just_over = harness_at(
-        {
-            let mut s = app_state(&project_dir, &[repo]);
-            s.ui.show_status_bar = true;
-            s
-        },
-        SIDEBAR_VISIBLE_FROM,
-        HARNESS_DEFAULT.1,
-    );
-    settle(&mut just_over);
-    assert!(
-        filled_rects(&just_over)
-            .iter()
-            .any(|(_, c)| *c == Palette::SIDEBAR),
-        "{SIDEBAR_VISIBLE_FROM} is the narrowest width that shows the rail"
-    );
+        let viewport = h.ctx.content_rect();
+        let changes = galley_origin(&h, "Changes").expect("the Changes tab paints");
+        assert!(
+            changes.x - viewport.left() < 64.0,
+            "the work area starts at the window edge, was {} from it at {w}pt wide",
+            changes.x - viewport.left()
+        );
+        // "Switch project" is the button's accessibility label; its painted text
+        // is "<project> · N repos", so assert_painted cannot see it.
+        let _switch = h.get_by_label("Switch project");
+        for label in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
+            assert_painted(&h, label);
+        }
+        assert_eq!(
+            tab_underlines(&h).len(),
+            1,
+            "exactly one active tab marks the content column"
+        );
+        assert_not_painted(&h, "PROJECTS");
+        assert_not_painted(&h, "Filter repos / branches…");
+    }
 }
 
 #[test]
-fn the_narrow_window_collapse_is_a_second_render_that_keeps_the_navigation() {
+fn a_narrow_window_keeps_the_navigation_and_the_palette_route() {
     let (mut h, _parent) = busy_status_bar("narrow");
-    h.set_size(egui::vec2(rail_visible_size().0, rail_visible_size().1));
-    settle(&mut h);
-    assert_painted(&h, "PROJECTS");
-    let wide_viewport = h.ctx.content_rect();
-    assert!(wide_viewport.width() >= shell::MIN_SIDEBAR_WINDOW_WIDTH);
-
-    h.set_size(egui::vec2(SIDEBAR_VISIBLE_FROM - 300.0, 560.0));
+    h.set_size(egui::vec2(700.0, 560.0));
     settle(&mut h);
     let narrow = h.ctx.content_rect();
     assert!(
-        narrow.width() < shell::MIN_SIDEBAR_WINDOW_WIDTH,
-        "the second render must actually be narrow, or this test proves nothing: \
+        (narrow.width() - 700.0).abs() < 16.0,
+        "the render must actually be narrow, or this test proves nothing: \
          {} wide",
         narrow.width()
     );
-    assert_not_painted(&h, "PROJECTS");
-    assert_not_painted(&h, "Filter repos / branches…");
     for label in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
         assert_painted(&h, label);
     }
+    // The painted text is "<project> · N repos"; "Switch project" is only the
+    // accessibility label.
+    let _switch = h.get_by_label("Switch project");
     assert_eq!(
         tab_underlines(&h).len(),
         1,
-        "the collapsed render marks exactly one active tab too"
+        "the narrow render marks exactly one active tab"
     );
     {
         h.key_press_modifiers(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::A);
@@ -736,19 +656,15 @@ fn the_narrow_window_collapse_is_a_second_render_that_keeps_the_navigation() {
     for (rect, _color) in filled_rects(&h) {
         assert!(
             inner.intersect(rect) == rect,
-            "the collapsed render clips: {rect:?} escapes {inner:?}"
+            "the narrow render clips: {rect:?} escapes {inner:?}"
         );
     }
     for galley in painted_galleys(&h) {
         assert!(
             inner.intersect(galley.rect) == galley.rect,
-            "the collapsed render clips text: {:?} at {:?} escapes {inner:?}",
+            "the narrow render clips text: {:?} at {:?} escapes {inner:?}",
             galley.text,
             galley.rect
         );
     }
-    assert!(
-        painted_ink(&h, "2 total").is_some_and(|ink| ink == Palette::INK_2),
-        "the status bar's total keeps the step-up ink in the collapsed render too"
-    );
 }

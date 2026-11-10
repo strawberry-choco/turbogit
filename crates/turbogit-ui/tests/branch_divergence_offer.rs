@@ -59,7 +59,7 @@ fn offer_harness(
 ) {
     let (tmp, project, alpha, broken) = diverging_project(tag);
     let mut state = AppState::for_roots(&project, &[alpha.clone(), broken.clone()]);
-    state.ui.repo_selection = vec![rid(&alpha), rid(&broken)].into_iter().collect();
+    state.ui.bulk_scope = vec![rid(&alpha), rid(&broken)];
     state.ui.show_status_bar = true;
     state.ui.tab = Tab::Branches;
 

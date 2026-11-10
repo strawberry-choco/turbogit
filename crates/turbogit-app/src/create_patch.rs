@@ -17,16 +17,6 @@ pub(crate) struct Memos {
     limit_key: Option<(PatchOrigin, bool, String)>,
 }
 
-pub fn open(state: &mut AppState, origin: PatchOrigin) {
-    let Some(root) = state.selected_root.clone() else {
-        state.show_toast(Toast::info(
-            "Create patch needs a repository: open a workspace first.",
-        ));
-        return;
-    };
-    open_on(state, root, origin);
-}
-
 pub fn open_on(state: &mut AppState, root: RootId, origin: PatchOrigin) {
     let needs_comment = origin.needs_comment();
     reset(state, root.clone(), origin.clone());
@@ -42,13 +32,25 @@ pub fn open_on(state: &mut AppState, root: RootId, origin: PatchOrigin) {
 }
 
 pub fn open_from_selection(state: &mut AppState) {
-    let origin = local_changes_origin(state, state.selected_root.as_ref());
-    open(state, origin);
+    let Some(root) = state.action_root() else {
+        state.show_toast(Toast::info(
+            "Select changes in one repository, or preview a file, to create a patch.",
+        ));
+        return;
+    };
+    let origin = local_changes_origin(state, Some(&root));
+    open_on(state, root, origin);
 }
 
 pub fn copy_from_selection(state: &mut AppState) {
-    let origin = local_changes_origin(state, state.selected_root.as_ref());
-    copy_to_clipboard(state, origin);
+    let Some(root) = state.action_root() else {
+        state.show_toast(Toast::info(
+            "Select changes in one repository, or preview a file, to copy a patch.",
+        ));
+        return;
+    };
+    let origin = local_changes_origin(state, Some(&root));
+    copy_on(state, root, origin);
 }
 
 /// The Changes row menu's routes, aimed at the repository the row belongs to.
@@ -354,16 +356,6 @@ pub fn import_created_to_shelf(state: &mut AppState) {
 
 /// `Copy as Patch to Clipboard`: the same generation with **no dialog at all**,
 /// default location, default base, no removal, no reversal, UTF-8.
-pub fn copy_to_clipboard(state: &mut AppState, origin: PatchOrigin) {
-    let Some(root) = state.selected_root.clone() else {
-        state.show_toast(Toast::info(
-            "Copy as patch needs a repository: open a workspace first.",
-        ));
-        return;
-    };
-    copy_on(state, root, origin);
-}
-
 fn copy_on(state: &mut AppState, root: RootId, origin: PatchOrigin) {
     let payload = state
         .executor

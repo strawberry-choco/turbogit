@@ -102,7 +102,7 @@ fn open_popup(harness: &mut Harness<'_, AppState>) {
 
 fn set_favorite(harness: &mut Harness<'_, AppState>, name: &str) {
     let st = harness.state_mut();
-    let id = st.selected_root.clone().expect("selected root");
+    let id = st.multi.roots[0].id.clone();
     for r in st.multi.roots.iter_mut() {
         if r.id == id {
             for b in r.branches.iter_mut() {
@@ -162,9 +162,9 @@ fn checkout_via_click_switches_branch() {
 
     harness.get_by_label("feature-a").click();
     pump_until(&mut harness, "checkout via click", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("feature-a")
@@ -183,9 +183,9 @@ fn checkout_via_enter_checks_out_highlighted_row() {
 
     harness.key_press(Key::Enter);
     pump_until(&mut harness, "checkout via Enter", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("feature-a")
@@ -219,9 +219,9 @@ fn new_branch_flow_creates_and_checks_out() {
     settle_quiet(&mut harness);
     harness.get_by_label("Create").click();
     pump_until(&mut harness, "branch created and checked out", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .map(|r| {
                 r.current_branch.as_deref() == Some("issue14-x")
                     && r.branches.iter().any(|b| b.name == "issue14-x")
@@ -330,8 +330,15 @@ fn multi_root_sync_notice_states_n_repositories() {
         2,
         "fixture needs two roots"
     );
+    let root = harness.state().multi.roots[0].id.clone();
 
-    harness.state_mut().settings.synchronous_branches = true;
+    {
+        let st = harness.state_mut();
+        st.settings.synchronous_branches = true;
+        // Without a global focus the popup takes its repo from the file the
+        // user is looking at; a two-root fixture has no single default.
+        st.ui.preview_change = Some(turbogit_domain::model::ChangeRef::new(root, "README.md"));
+    }
     open_popup(&mut harness);
 
     assert_painted(

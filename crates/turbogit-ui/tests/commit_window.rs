@@ -3256,23 +3256,6 @@ fn changes_card_above(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect
     above.remove(0)
 }
 
-#[track_caller]
-fn commit_column_bottom(h: &Harness<'_, AppState>) -> f32 {
-    let bottoms: Vec<f32> = filled_rects(h)
-        .into_iter()
-        .filter(|(_, fill)| *fill == Palette::SIDEBAR)
-        .map(|(rect, _)| rect.bottom())
-        .collect();
-    assert_eq!(
-        bottoms.len(),
-        1,
-        "the shell's own sidebar surface is how this suite reads the work area's \
-         bottom edge (the commit column is clipped to it), expected exactly one, \
-         found {bottoms:?}"
-    );
-    bottoms[0]
-}
-
 const COMMIT_PANEL_WIDTH: f32 = turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
 
 #[test]
@@ -3441,7 +3424,6 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
     let card = commit_card(&h);
     let well = message_well(&h, card);
     let changes = changes_card_above(&h, card);
-    let column_bottom = commit_column_bottom(&h);
 
     assert!(
         (well.height() - turbogit_ui::ui::commit_window::MESSAGE_WELL_HEIGHT).abs() <= 4.0,
@@ -3452,13 +3434,13 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
         well.height()
     );
 
-    let remaining = column_bottom - changes.top();
+    let remaining = changes.height();
     assert!(
         remaining >= 3.0 * turbogit_ui::theme::FILE_ROW_HEIGHT,
         "the file list keeps at least three rows of the {:.0}pt the column has \
-         left after the well: {remaining:.1}pt of column, list card {changes:?}, \
-         column bottom {column_bottom:.1}. A well that grows until the list is \
-         one row solves the message at the list's expense.",
+         left after the well: {remaining:.1}pt of list card {changes:?}. A well \
+         that grows until the list is one row solves the message at the list's \
+         expense.",
         remaining
     );
 

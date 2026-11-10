@@ -40,10 +40,6 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 
 fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = selected
-        .iter()
-        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
-        .collect();
     state.ui.bulk_scope = selected
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))

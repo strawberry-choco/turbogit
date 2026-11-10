@@ -108,8 +108,6 @@ pub struct DialogState {
     pub push_new_remote_url: String,
     pub push_remote_add_error: Option<String>,
     pub force_push: bool,
-    pub push_scope: turbogit_services::sync_service::PushScope,
-    pub push_scope_excluded: HashSet<RootId>,
     pub push_outgoing: Option<Vec<OutgoingRoot>>,
     pub push_preview_root: Option<RootId>,
     pub push_selected_commits: Vec<String>,
@@ -452,10 +450,9 @@ pub enum PendingConfirm {
     DiscardAcross {
         rows: Vec<(RootId, Vec<Change>)>,
     },
-    /// The delete confirms carry their `root` because `AppState::selected_root` is
-    /// the workspace focus, not the row's repository: the branches tree never writes
-    /// it, so a name-only confirm deletes in whichever repo the user last selected,
-    /// including one that holds a same-named branch.
+    /// The delete confirms carry their `root` because a branch name is not
+    /// unique across repositories: a name-only confirm would delete in whichever
+    /// repo happened to hold a same-named branch.
     DeleteLocalBranch {
         root: RootId,
         name: String,
@@ -822,7 +819,6 @@ pub struct UiState {
     pub vcs_popup: bool,
     pub workspace_picker_open: bool,
     pub shortcuts_open: bool,
-    pub workspace_picker_anchor: Option<(f32, f32)>,
     pub settings_open: bool,
     pub settings_category: crate::state::SettingsCategory,
     pub git_version_badge: Option<Result<String, String>>,
@@ -881,12 +877,7 @@ pub struct UiState {
     pub recent_repos: Vec<PathBuf>,
     pub branches_cursor: usize,
     pub welcome_visible: bool,
-    pub sidebar_filter: String,
-    pub sidebar_collapsed: HashSet<String>,
     pub show_changelog: bool,
-    pub sidebar_smart_group: Option<String>,
-    pub smart_group_rules: Vec<crate::smart_rules::SmartGroupRule>,
-    pub repo_selection: HashSet<RootId>,
     pub bulk_op: Option<BulkOp>,
     /// The explicit root list the open preflight runs on. Empty means every
     /// root; `open_bulk_preflight` always seeds it.
@@ -899,13 +890,9 @@ pub struct UiState {
     pub recent_custom_commands: Vec<String>,
     pub bulk_run: Option<crate::bulk_run_view::BulkRunView>,
     pub cherry_run: Option<crate::cherry_run_view::CherryRunView>,
-    pub pinned_views: Vec<crate::pinned_views::PinnedView>,
     pub bulk_history: Vec<crate::bulk_history::BulkRunRecord>,
     pub bulk_history_open: Option<u64>,
     pub fleet_history_open: bool,
-    pub smart_rule_editor_open: bool,
-    pub smart_rule_editing: Option<usize>,
-    pub smart_rule_draft: Option<crate::smart_rules::SmartGroupRule>,
     pub recent_projects: Vec<crate::recents::RecentProject>,
     pub welcome_branch_cache: HashMap<PathBuf, (Option<String>, std::time::Instant)>,
     pub welcome_clone_url: String,
@@ -924,7 +911,6 @@ pub struct AppState {
     pub multi: MultiRootManager,
     pub tx: Sender<AppEvent>,
     pub rx: Receiver<AppEvent>,
-    pub selected_root: Option<RootId>,
     pub clone_url: String,
     pub last_error: Option<String>,
     pub ui: UiState,
@@ -981,7 +967,6 @@ impl AppState {
             multi: MultiRootManager::default(),
             tx,
             rx,
-            selected_root: None,
             clone_url: String::new(),
             last_error,
             git_version,
@@ -1056,7 +1041,6 @@ impl AppState {
                 panic!("for_roots: failed to snapshot root: {e}");
             }
         }
-        state.selected_root = state.multi.roots.first().map(|r| r.id.clone());
         state
     }
 
@@ -1130,9 +1114,6 @@ impl AppState {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());
             }
-        }
-        if self.selected_root.is_none() {
-            self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
         self.hide_project_metadata();
 
@@ -1536,14 +1517,12 @@ impl AppState {
             });
         }
 
-        if let Some(sel) = self.selected_root.clone() {
-            let in_scope = match &affected {
-                Affected::All => true,
-                Affected::Root(id) => *id == sel,
-            };
-            if in_scope {
-                self.fetch_log(sel);
-            }
+        let log_roots: Vec<RootId> = match &affected {
+            Affected::All => self.multi.roots.iter().map(|r| r.id.clone()).collect(),
+            Affected::Root(id) => vec![id.clone()],
+        };
+        for id in log_roots {
+            self.fetch_log(id);
         }
     }
 
@@ -2211,13 +2190,11 @@ impl AppState {
     pub fn open_cherry_across(&mut self, source: RootId) {
         let mut candidates = self.cherry_source_log(&source);
         candidates.reverse();
-        let selection = self.ui.repo_selection.clone();
         let targets: Vec<RootId> = self
             .multi
             .roots
             .iter()
             .filter(|r| r.id != source)
-            .filter(|r| selection.is_empty() || selection.contains(&r.id))
             .map(|r| r.id.clone())
             .collect();
         let dlg = &mut self.ui.dlg;
@@ -2238,9 +2215,10 @@ impl AppState {
     /// Open the New Branch dialog. The whole session is replaced, never patched,
     /// so an invocation cannot inherit a character or a start point from the last
     /// one. This is the only production path that sets `Dialog::NewBranch`.
-    /// `root` is the repository the invoking action was pointed at. A row action
-    /// passes its row's root, not `AppState::selected_root`, which is the sidebar's
-    /// workspace focus and may name a different repository.
+    /// `root` is the repository the invoking action was pointed at; a palette or
+    /// toolbar invocation passes `None`. With exactly one registered root that root
+    /// is resolved here, because the choice on screen is already unambiguous; with
+    /// several roots `None` stays `None` and the selector states the scope.
     pub fn open_new_branch(
         &mut self,
         root: Option<RootId>,
@@ -2248,6 +2226,10 @@ impl AppState {
         checkout: bool,
         name: Option<String>,
     ) {
+        let root = root.or_else(|| match self.multi.roots.as_slice() {
+            [only] => Some(only.id.clone()),
+            _ => None,
+        });
         let current = root
             .as_ref()
             .and_then(|id| self.multi.by_id(id))
@@ -2592,9 +2574,7 @@ impl AppState {
         self.spawn_cascade_pass(dispatch_roots, control, label, step, done_rows_only);
     }
 
-    pub fn cherry_resolve(&mut self, root: RootId) {
-        self.selected_root = Some(root);
-        self.ui.repo_selection.clear();
+    pub fn cherry_resolve(&mut self, _root: RootId) {
         self.ui.cherry_run = None;
     }
 
@@ -2627,7 +2607,6 @@ impl AppState {
     pub fn open_project(&mut self, dir: &Path) {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
-        self.selected_root = None;
         self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
@@ -2640,7 +2619,6 @@ impl AppState {
     pub fn attach_workspace(&mut self, dir: &Path) {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
-        self.selected_root = None;
         self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
@@ -2656,9 +2634,6 @@ impl AppState {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());
             }
-        }
-        if self.selected_root.is_none() {
-            self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
         self.hide_project_metadata();
         self.ui.welcome_visible = false;
@@ -2702,7 +2677,6 @@ impl AppState {
 
     pub fn close_all_projects(&mut self) {
         self.multi = MultiRootManager::default();
-        self.selected_root = None;
         self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
@@ -3033,49 +3007,38 @@ impl AppState {
         drained
     }
 
-    pub fn selected_path(&self) -> Option<PathBuf> {
-        self.selected_root.as_ref().map(|r| r.0.to_path_buf())
-    }
-
-    pub fn push_scope_roots(&self) -> Vec<Root> {
-        let excluded = &self.ui.dlg.push_scope_excluded;
-        turbogit_services::sync_service::roots_in_scope(
-            self.ui.dlg.push_scope,
-            &self.multi.roots,
-            &self.ui.repo_selection,
-            self.selected_root.as_ref(),
-            &self.project_dir,
-        )
-        .into_iter()
-        .filter(|r| !excluded.contains(&r.id))
-        .cloned()
-        .collect()
-    }
-
-    pub fn pin_selection(&mut self) {
-        if self.ui.repo_selection.is_empty() {
-            return;
-        }
-        let repos: Vec<PathBuf> = self
-            .ui
-            .repo_selection
-            .iter()
-            .map(|id| id.0.to_path_buf())
-            .collect();
-        self.ui.pinned_views.push(crate::pinned_views::PinnedView {
-            name: crate::pinned_views::next_name(&self.ui.pinned_views),
-            repos,
-        });
-        self.save_durable_ui();
-    }
-
-    fn bulk_selected_roots(&self) -> Vec<Root> {
+    /// The roots that own at least one selected change row. This is the
+    /// multi-selection D10 resolves after a context row and before every root.
+    pub fn selected_change_roots(&self) -> Vec<RootId> {
         self.multi
             .roots
             .iter()
-            .filter(|r| self.ui.repo_selection.contains(&r.id))
-            .cloned()
+            .filter(|root| {
+                root.status
+                    .changes
+                    .iter()
+                    .any(|c| self.ui.selected.contains(&root.canonical_key(c)))
+            })
+            .map(|root| root.id.clone())
             .collect()
+    }
+
+    /// The one root a palette action with no row can act on: the selection's
+    /// single owning root, the previewed file's root, or the only registered
+    /// root. Anything else is ambiguous, and the caller says so rather than
+    /// picking a repository.
+    pub fn action_root(&self) -> Option<RootId> {
+        let selected = self.selected_change_roots();
+        match selected.len() {
+            1 => selected.into_iter().next(),
+            0 => self
+                .ui
+                .preview_change
+                .as_ref()
+                .map(|c| c.root.clone())
+                .or_else(|| (self.multi.roots.len() == 1).then(|| self.multi.roots[0].id.clone())),
+            _ => None,
+        }
     }
 
     pub fn bulk_preflight(&self, op: BulkOp, roots: &[Root]) -> Preflight {
@@ -3121,11 +3084,6 @@ impl AppState {
     fn is_commit_target(&self, root: &Root) -> bool {
         !self.ui.commit_repo_unchecks.contains(&root.id)
             && root.status.changes.iter().any(|c| c.staged)
-    }
-
-    pub fn run_commit_across(&mut self, message: &str, amend: bool) {
-        let roots = self.bulk_selected_roots();
-        self.run_commit_across_roots(roots, message, amend, false);
     }
 
     pub fn run_commit_across_roots(
@@ -3231,7 +3189,6 @@ impl AppState {
         if siblings.is_empty() {
             return;
         }
-        self.ui.repo_selection = siblings.iter().cloned().collect();
         self.ui.bulk_scope = siblings;
         self.ui.bulk_op = Some(BulkOp::Merge);
     }
@@ -3247,15 +3204,6 @@ impl AppState {
 
     pub fn rebase_affected_siblings(&self, root: &RootId) -> Vec<RootId> {
         turbogit_services::integrate_service::rebase_affected(&self.multi.roots, root)
-    }
-
-    pub fn open_rebase_affected_list(&mut self, root: &RootId) {
-        let siblings = self.rebase_affected_siblings(root);
-        if siblings.is_empty() {
-            return;
-        }
-        self.ui.repo_selection = siblings.into_iter().collect();
-        self.ui.dialog = None;
     }
 
     pub fn rebase_branch_is_protected(&self, id: &RootId) -> bool {
@@ -3774,9 +3722,7 @@ impl AppState {
         self.dispatch_bulk_pass(plan, merge_opts, roots, control);
     }
 
-    pub fn bulk_resolve(&mut self, root: RootId) {
-        self.selected_root = Some(root);
-        self.ui.repo_selection.clear();
+    pub fn bulk_resolve(&mut self, _root: RootId) {
         self.ui.bulk_run = None;
     }
 

@@ -40,7 +40,6 @@ fn loaded(project: &Path, commits: usize) -> (AppState, RootId) {
     let repo = seeded(project, commits);
     let mut state = AppState::for_roots(project, std::slice::from_ref(&repo));
     let root = state.multi.roots[0].id.clone();
-    state.selected_root = Some(root.clone());
     state.fetch_log(root.clone());
     state.drain_events();
     assert!(
@@ -222,7 +221,6 @@ fn an_unborn_repository_reads_as_nothing_committed_rather_than_as_an_error() {
     let repo = unborn(&project);
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
     let root = state.multi.roots[0].id.clone();
-    state.selected_root = Some(root.clone());
     state.fetch_log(root.clone());
     state.drain_events();
     let window = state

@@ -71,11 +71,6 @@ fn a_change_owned_by_another_root_previews_that_change() {
     let (alpha, beta) = workspace(project.path());
     let mut h = shell(project.path(), &[alpha.clone(), beta]);
     assert_eq!(h.state().multi.roots.len(), 2, "both roots register");
-    assert_eq!(
-        h.state().selected_path(),
-        Some(alpha),
-        "alpha is the focused root"
-    );
 
     expand_group(&mut h, "beta");
     click_row(&mut h, "nested-beta-file.txt", 0);

@@ -505,11 +505,6 @@ fn picking_discard_asks_about_the_repository_the_row_belongs_to() {
     let mut harness = changes_harness(&[focused.clone(), other.clone()]);
 
     let other_id = root_id(harness.state(), &other);
-    assert_eq!(
-        harness.state().selected_root,
-        Some(root_id(harness.state(), &focused)),
-        "the fixture's workspace focus is the first repository"
-    );
     harness
         .state_mut()
         .ui

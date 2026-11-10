@@ -64,7 +64,6 @@ fn open_editor(h: &mut Harness<'_, AppState>, root: &Path) {
     let log = git(root, &["log", "main..HEAD", "--format=%H"]);
     let oldest = log.lines().last().expect("a commit past main").trim();
     let root_id = RootId(root.to_path_buf().into());
-    h.state_mut().selected_root = Some(root_id.clone());
     h.state_mut().ui.selected_commit = Some((root_id.clone(), oldest.to_string()));
     h.state_mut().open_interactive_rebase(&root_id, oldest);
     h.run();
@@ -301,7 +300,6 @@ fn the_preview_tab_shows_the_result_sequence_counts_and_folds() {
         plan_entry(Pick, "f4e2a91eee", "refactor: split"),
     ]);
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.to_path_buf().into()));
     h.state_mut().ui.dialog = Some(Dialog::InteractiveRebase);
     h.run();
 
@@ -327,7 +325,6 @@ fn plan_rows_render_unicode_commit_references_without_splitting_them() {
         "unicode reference",
     )]);
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.to_path_buf().into()));
     h.state_mut().ui.dialog = Some(Dialog::InteractiveRebase);
 
     h.run();

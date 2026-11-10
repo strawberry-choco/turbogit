@@ -239,10 +239,7 @@ fn long_log_harness() -> Harness<'static, AppState> {
     let root = state.multi.roots[0].id.clone();
     state.fetch_log(root.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let mut harness = shell_harness_over(
-        state,
-        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
-    );
+    let mut harness = shell_harness_over(state, egui::vec2(1280.0, 800.0));
     settle(&mut harness);
     settle_until(&mut harness, "c149");
     for _ in 0..6 {

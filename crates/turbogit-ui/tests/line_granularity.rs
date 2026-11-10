@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use test_support::git_seed::{git, repo_with_one_commit};
-use test_support::harness::{painted_text, shell_harness_over_unstyled};
+use test_support::harness::shell_harness_over_unstyled;
 use test_support::{RecordedCall, RecordingExecutor, wait_until};
 
 use egui::FontFamily::Monospace;
@@ -191,24 +191,5 @@ fn drag_release_stages_the_character_range_and_nothing_else() {
         }),
         "the index must gain exactly the dragged bytes, not the whole line:\n{}",
         git(&repo.path, &["diff", "--cached"])
-    );
-}
-
-#[test]
-fn status_bar_shows_repos_in_scope() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "status-bar");
-    seed_single_line_edit(&repo);
-
-    let (mut state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    state.ui.show_status_bar = true;
-    let mut h = harness(state);
-    open_preview(&mut h);
-
-    let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("1 repo in scope"),
-        "the status bar must show the repos in scope, got:\n{text}"
     );
 }

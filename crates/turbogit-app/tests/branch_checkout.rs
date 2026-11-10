@@ -42,7 +42,7 @@ fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
 fn checking_out_a_remote_branch_tracks_it() {
     let (_tmp, work) = repo_with_remote_branch();
     let mut state = AppState::for_roots(work.parent().unwrap(), std::slice::from_ref(&work));
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     state.checkout_branch_op(&root, BranchKind::Remote, "feat");
     state.drain_events();

@@ -154,17 +154,23 @@ impl Action {
 }
 
 pub fn run_action(state: &mut AppState, action: Action) {
-    let root = state.selected_root.clone();
+    let root = state.action_root();
     match action {
         Action::Refresh => state.refresh(Affected::All),
         Action::Fetch => {
-            if let Some(r) = root {
-                state.dispatch(Operation::Fetch { roots: vec![r] });
+            let roots = match root {
+                Some(r) => vec![r],
+                None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
+            };
+            if !roots.is_empty() {
+                state.dispatch(Operation::Fetch { roots });
             }
         }
         Action::Pull => {
             if let Some(r) = root {
                 state.dispatch_pull("Pull", r, None);
+            } else {
+                run_fleet(state, turbogit_app::bulk_ops::BulkOp::PullAll);
             }
         }
         Action::PushSimple => {
@@ -190,7 +196,6 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::OpenWelcome => state.ui.welcome_visible = true,
         Action::SwitchWorkspace => {
             state.ui.workspace_picker_open = true;
-            state.ui.workspace_picker_anchor = None;
         }
         Action::StageHunk | Action::UnstageHunk => {
             let dir = if action == Action::StageHunk {
@@ -533,11 +538,8 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
         return;
     }
     // The palette route has no trigger rect to hang under, so it aims at the
-    // corner of the rail the header occupies.
-    let anchor = state
-        .ui
-        .workspace_picker_anchor
-        .map_or(Pos2::new(160.0, 4.0), |(x, y)| Pos2::new(x, y));
+    // corner of the shell the project button occupies.
+    let anchor = Pos2::new(160.0, 4.0);
     let menu = widgets::MenuId::new("workspace_picker", "");
     widgets::menu_host::note_anchor(ui, menu, anchor);
 

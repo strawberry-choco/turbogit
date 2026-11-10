@@ -137,8 +137,7 @@ fn warm_log_and_refs(state: &mut AppState) {
     state.drain_events();
 }
 
-const LOG_BOX: egui::Vec2 =
-    egui::Vec2::new(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0);
+const LOG_BOX: egui::Vec2 = egui::Vec2::new(1280.0, 800.0);
 
 fn harness_sized(state: AppState, size: egui::Vec2) -> Harness<'static, AppState> {
     let mut fonts_installed = false;
@@ -238,10 +237,11 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
     assert_painted(&harness, "Search commits");
 
     let branches = branches_region(&harness);
+    let body_left = harness.ctx.content_rect().left();
     assert!(
-        (branches.left() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 24.0,
-        "branches pane must hug the left edge of the log body (right of \
-         the workspace sidebar): left={:?}",
+        (branches.left() - body_left).abs() < 32.0,
+        "branches pane must hug the left edge of the log body: left={:?}, \
+         body left={body_left}",
         branches.left()
     );
 
@@ -524,7 +524,7 @@ fn selection_uses_translucent_highlight_not_solid_brand() {
         "translucent selection must cover the selected row"
     );
 
-    let win_w = 1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
+    let win_w = 1280.0;
     let solid_brand_rows: Vec<Rect> = filled_rects(&harness)
         .into_iter()
         .filter(|(r, c)| *c == Palette::BRAND && r.width() > 200.0 && r.height() >= 20.0)
@@ -2474,14 +2474,7 @@ fn no_row_in_the_log_window_indents_when_it_is_chosen() {
         let listed = harness
             .state()
             .caches
-            .files_for(
-                harness
-                    .state()
-                    .selected_root
-                    .as_ref()
-                    .expect("a root is selected"),
-                &seed.c2,
-            )
+            .files_for(&harness.state().multi.roots[0].id, &seed.c2)
             .map(|files| files.first().map(|c| c.path.display().to_string()))
             .unwrap_or_default();
         listed.unwrap_or_else(|| panic!("the chosen commit lists a changed file"))

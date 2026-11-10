@@ -2253,7 +2253,7 @@ fn a_tool_pane_paints_at_most_one_brand_fill_and_it_is_its_primary_action() {
     }
 }
 
-const STROKE_SITES: [(&str, usize, &str); 8] = [
+const STROKE_SITES: [(&str, usize, &str); 7] = [
     (
         "widgets/menu.rs",
         1,
@@ -2287,7 +2287,6 @@ const STROKE_SITES: [(&str, usize, &str); 8] = [
          checkbox border, the message editor's focus ring, and the commit/rollback \
          divider rule",
     ),
-    ("sidebar.rs", 1, "the tri-state checkbox's own border"),
     (
         "kit/conflict_pane.rs",
         1,
@@ -2381,20 +2380,12 @@ fn the_ref_chip_is_produced_by_one_function_in_one_file_and_no_screen_paints_one
         ),
     ];
 
-    const SCREEN_GEOMETRY_USE: [(&str, &str); 2] = [
-        (
-            "sidebar.rs",
-            "hand-places the **count** chip into caller-allocated rects (the \
-             shared `count_chip` allocates its own slot in a flow, which a \
-             measured-offset rail row cannot use)",
-        ),
-        (
-            "branch_tree_view.rs",
-            "reserves the chip's inset to line a row's columns up, and names no \
+    const SCREEN_GEOMETRY_USE: [(&str, &str); 1] = [(
+        "branch_tree_view.rs",
+        "reserves the chip's inset to line a row's columns up, and names no \
              chip colour at all — the pair it paints with comes from \
              `components::ref_chip_with_ink`",
-        ),
-    ];
+    )];
 
     let files: Vec<(String, String)> = srcscan::sources_under(ui_src_root())
         .into_iter()

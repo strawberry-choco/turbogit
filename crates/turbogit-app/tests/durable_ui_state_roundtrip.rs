@@ -1,11 +1,8 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 use turbogit_app::bulk_history::{BulkRunRecord, RepoOutcome, RepoRecord};
 use turbogit_app::persistence::BranchesViewOptions;
-use turbogit_app::pinned_views::PinnedView;
-use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{DiffHighlighting, DiffPolicies, DiffWhitespace};
 use turbogit_services::bulk_ops::BulkOp;
@@ -13,11 +10,8 @@ use turbogit_services::bulk_ops::BulkOp;
 const TAB: Tab = Tab::Worktrees;
 const RECENT_REPO: &str = "/w/durable-ui/frontend";
 const DRAFT: &str = "durable-ui: a draft no other row could have produced";
-const RULE_LABEL: &str = "durable-ui rules";
-const VIEW_NAME: &str = "durable-ui view";
 const BULK_RUN_ID: u64 = 4_242_424;
 const COMMAND: &str = "git log --durable-ui";
-const COLLAPSED_KEY: &str = "durable-ui/frontend/src";
 const BRANCHES_VIEW: BranchesViewOptions = BranchesViewOptions {
     group_by_directory: false,
     group_by_repository: true,
@@ -27,22 +21,6 @@ const POLICIES: DiffPolicies = DiffPolicies {
     whitespace: DiffWhitespace::TrimWhitespace,
     highlighting: DiffHighlighting::Characters,
 };
-
-fn rule() -> SmartGroupRule {
-    SmartGroupRule {
-        label: RULE_LABEL.to_string(),
-        branch_pattern: Some("durable-*".to_string()),
-        min_ahead: Some(3),
-        ..SmartGroupRule::default()
-    }
-}
-
-fn view() -> PinnedView {
-    PinnedView {
-        name: VIEW_NAME.to_string(),
-        repos: vec![PathBuf::from(RECENT_REPO)],
-    }
-}
 
 fn run_record() -> BulkRunRecord {
     BulkRunRecord {
@@ -66,18 +44,15 @@ fn state_holding_the_durable_set(project: &Path) -> AppState {
     state.ui.tab = TAB;
     state.ui.recent_repos = vec![PathBuf::from(RECENT_REPO)];
     state.ui.commit_message = DRAFT.to_string();
-    state.ui.smart_group_rules = vec![rule()];
-    state.ui.pinned_views = vec![view()];
     state.ui.bulk_history = vec![run_record()];
     state.ui.recent_custom_commands = vec![COMMAND.to_string()];
-    state.ui.sidebar_collapsed = HashSet::from([COLLAPSED_KEY.to_string()]);
     state.ui.branches_view = BRANCHES_VIEW;
     state.ui.diff_policies = POLICIES;
     state
 }
 
 #[test]
-fn nine_of_the_ten_durable_fields_come_back_through_the_launch_path() {
+fn every_remaining_durable_field_comes_back_through_the_launch_path() {
     let project = TempDir::new().unwrap();
     let recents_cfg = TempDir::new().unwrap();
 
@@ -99,16 +74,6 @@ fn nine_of_the_ten_durable_fields_come_back_through_the_launch_path() {
         "recent_repos: the recently opened roots survive"
     );
     assert_eq!(
-        reloaded.ui.smart_group_rules,
-        vec![rule()],
-        "smart_group_rules: a user-defined group is still a group"
-    );
-    assert_eq!(
-        reloaded.ui.pinned_views,
-        vec![view()],
-        "pinned_views: a pinned selection is still selectable"
-    );
-    assert_eq!(
         reloaded.ui.bulk_history,
         vec![run_record()],
         "bulk_history: a recorded run is still listed"
@@ -117,11 +82,6 @@ fn nine_of_the_ten_durable_fields_come_back_through_the_launch_path() {
         reloaded.ui.recent_custom_commands,
         vec![COMMAND.to_string()],
         "recent_custom_commands: a recent command is still re-selectable"
-    );
-    assert_eq!(
-        reloaded.ui.sidebar_collapsed,
-        HashSet::from([COLLAPSED_KEY.to_string()]),
-        "sidebar_collapsed: a collapsed folder is still collapsed"
     );
     assert_eq!(
         reloaded.ui.branches_view, BRANCHES_VIEW,

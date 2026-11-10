@@ -40,7 +40,6 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 
 fn app_over(project: &Path, roots: &[PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = roots.iter().map(|p| RootId(p.clone().into())).collect();
     state.ui.bulk_scope = roots.iter().map(|p| RootId(p.clone().into())).collect();
     state
 }

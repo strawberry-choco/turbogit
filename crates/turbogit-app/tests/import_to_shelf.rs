@@ -105,11 +105,9 @@ fn an_imported_row_lists_only_under_the_root_it_was_parked_in() {
     let mut state = AppState::for_roots(project.path(), &[lib.clone(), docs.clone()]);
     let lib_id = state.multi.roots[0].id.clone();
     let docs_id = state.multi.roots[1].id.clone();
-    state.selected_root = Some(lib_id.clone());
     state
         .import_patch_file_to_shelf(&lib_id, &patch_file(project.path()), "in the lib")
         .unwrap();
-    state.selected_root = Some(docs_id.clone());
     state
         .import_patch_file_to_shelf(&docs_id, &patch_file(project.path()), "in the docs")
         .unwrap();
@@ -268,7 +266,6 @@ fn the_apply_window_can_park_the_patch_it_holds_instead_of_applying_it() {
     let (lib, _docs) = two_roots(project.path());
     let mut state = AppState::for_roots(project.path(), std::slice::from_ref(&lib))
         .with_settings(VcsSettings::default());
-    state.selected_root = Some(state.multi.roots[0].id.clone());
     turbogit_app::apply_patch::open(&mut state, PatchSource::File);
     let path = patch_file(project.path());
     state.ui.dlg.apply_patch_path = path.to_string_lossy().into_owned();

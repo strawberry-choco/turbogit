@@ -124,7 +124,7 @@ fn worktrees_pane_harness(
     pane_harness(
         tag,
         |state, parent| {
-            let root = state.selected_root.clone().expect("one discovered root");
+            let root = state.multi.roots[0].id.clone();
             state.caches.store_worktrees(
                 root.clone(),
                 worktrees
@@ -160,7 +160,7 @@ fn submodules_pane_harness(
     pane_harness(
         tag,
         |state, _parent| {
-            let root = state.selected_root.clone().expect("one discovered root");
+            let root = state.multi.roots[0].id.clone();
             let subs = seed(&root);
             state.caches.store_submodules(root.clone(), subs);
         },
@@ -940,7 +940,7 @@ fn worktrees_badge_counts_without_any_dirty_probe() {
     let mut h = harness(state);
 
     step_until(&mut h, |h| painted_contains(h, "Worktrees 1"));
-    let id = h.state_mut().selected_root.clone().unwrap();
+    let id = h.state_mut().multi.roots[0].id.clone();
     assert!(
         h.state_mut()
             .caches
@@ -1054,7 +1054,7 @@ fn submodules_tab_renders_unicode_commit_references_without_splitting_them() {
     let repo = temp_repo(&parent, "alpha");
     let mut state = AppState::for_roots(&parent, std::slice::from_ref(&repo));
     state.ui.tab = Tab::Submodules;
-    let root = state.selected_root.clone().expect("selected root");
+    let root = state.multi.roots[0].id.clone();
     state.caches.store_submodules(
         root.clone(),
         vec![Submodule {
@@ -1447,7 +1447,7 @@ fn an_uninitialised_submodule_offers_init_and_still_runs_an_init() {
     let repo = super_with_submodule(&parent, "alpha");
     let mut state = AppState::for_roots(&parent, std::slice::from_ref(&repo));
     state.ui.tab = Tab::Submodules;
-    let root = state.selected_root.clone().expect("selected root");
+    let root = state.multi.roots[0].id.clone();
     let mut h = harness(state);
     settle(&mut h);
     step_until(&mut h, |h| painted_contains(h, "Deinit child"));
@@ -1668,7 +1668,7 @@ fn a_submodule_deinitialised_through_the_real_action_paints_the_muted_ink_on_a_l
     h.get_by_label("OK").click();
     step_until(&mut h, |h| painted_contains(h, "Uninitialized"));
 
-    let root = h.state().selected_root.clone().expect("selected root");
+    let root = h.state().multi.roots[0].id.clone();
     let subs = h
         .state()
         .caches

@@ -40,10 +40,6 @@ fn attach_workspace_deep_scans_registers_all_roots_and_records_workspace_recent(
             .iter()
             .any(|r| r.id.as_path() == shallow_repo)
     );
-    assert!(
-        state.selected_root.is_some(),
-        "a focused root is selected after attaching"
-    );
 
     let recents = load(config.path());
     let ws = recents

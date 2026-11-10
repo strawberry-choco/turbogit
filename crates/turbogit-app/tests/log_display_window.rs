@@ -206,7 +206,6 @@ fn selecting_a_row_does_not_rebuild_the_window() {
     state
         .caches
         .store_log(alpha.clone(), vec![commit(&alpha, "a1", 100)]);
-    state.selected_root = Some(alpha.clone());
     let before = state.sync_log_display();
 
     state.ui.selected_commit = Some((alpha.clone(), "a1".to_owned()));

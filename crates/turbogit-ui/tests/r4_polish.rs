@@ -829,6 +829,10 @@ fn the_commit_and_branch_context_menus_keep_the_float_stroke() {
             assert!(out.status.success());
         }
         let mut state = AppState::for_roots(tmp.path(), &[repo]);
+        // `for_roots` registers the root without reading history; the plain Log
+        // window is only requested by a refresh, so load it before the row lookup.
+        state.refresh(turbogit_app::root_caches::Affected::All);
+        state.drain_events();
         state.ui.tab = Tab::Log;
         let mut h = project_harness(state);
         settle(&mut h);
@@ -964,7 +968,7 @@ fn every_dialog_separates_its_body_from_its_actions_with_the_footer_rule() {
             .filter(|(rect, color, width)| {
                 *color == Palette::LINE
                     && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
-                    && rect.contains(rule.center())
+                    && rect.contains_rect(rule)
             })
             .map(|(rect, _, _)| rect)
             .min_by(|a, b| {
@@ -1072,7 +1076,7 @@ fn no_dialog_frame_holds_a_dead_band_of_empty_window_below_its_actions() {
             .filter(|(rect, color, width)| {
                 *color == Palette::LINE
                     && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
-                    && rect.contains(rule.center())
+                    && rect.contains_rect(rule)
             })
             .map(|(rect, _, _)| rect)
             .min_by(|a, b| {

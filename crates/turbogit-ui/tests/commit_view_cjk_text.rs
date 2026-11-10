@@ -1,9 +1,9 @@
 use egui::{FontFamily, FontId};
+use egui_kittest::kittest::Queryable as _;
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{painted_galleys, settle, shell_harness_over};
 use turbogit_app::state::{AppState, Tab};
-use turbogit_domain::model::RootId;
 use turbogit_ui::theme::font_definitions;
 
 const SUBJECT: &str = "修复提交视图无法显示中文";
@@ -55,13 +55,18 @@ fn every_font_chain_can_display_chinese() {
 fn the_commit_view_paints_chinese_in_real_glyphs() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo_with_chinese(tmp.path());
-    let state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    // `for_roots` registers the roots but reads no history; the Log page only
+    // asks for the plain window through a refresh. Load it the way the shell's
+    // refresh does so the commit row exists to select.
+    state.refresh(turbogit_app::root_caches::Affected::All);
+    state.drain_events();
+    state.ui.tab = Tab::Log;
     let mut h = shell_harness_over(state, egui::vec2(1280.0, 800.0));
     settle(&mut h);
-    h.state_mut().ui.tab = Tab::Log;
-    settle(&mut h);
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
-    h.state_mut().ui.selected_commit = Some((RootId(repo.clone().into()), head));
+    let row = format!("{} {SUBJECT}", &head[..7]);
+    h.get_by_label(&row).click();
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();

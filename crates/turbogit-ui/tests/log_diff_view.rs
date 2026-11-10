@@ -86,10 +86,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
+    harness.set_size(egui::vec2(1280.0, 800.0));
     settle_reads(&mut harness);
     harness
 }

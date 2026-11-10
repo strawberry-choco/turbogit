@@ -155,19 +155,10 @@ durable_ui_state! {
     draft_message: String => commit_message;
 
     #[serde(default)]
-    smart_group_rules: Vec<crate::smart_rules::SmartGroupRule> => | smart_group_rules;
-
-    #[serde(default)]
-    pinned_views: Vec<crate::pinned_views::PinnedView> => | pinned_views;
-
-    #[serde(default)]
     bulk_history: Vec<crate::bulk_history::BulkRunRecord> => | bulk_history;
 
     #[serde(default)]
     recent_custom_commands: Vec<String> => | recent_custom_commands;
-
-    #[serde(default)]
-    sidebar_collapsed: std::collections::HashSet<String> => | sidebar_collapsed;
 
     #[serde(default)]
     branches_view: BranchesViewOptions => | branches_view;

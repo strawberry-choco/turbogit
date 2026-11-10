@@ -29,9 +29,9 @@ impl ApplyRecovery {
 }
 
 pub fn open(state: &mut AppState, source: PatchSource) {
-    let Some(root) = state.selected_root.clone() else {
+    let Some(root) = state.action_root() else {
         state.show_toast(Toast::info(
-            "Apply patch needs a repository: open a workspace first.",
+            "Select changes in one repository, or preview a file, to apply a patch.",
         ));
         return;
     };

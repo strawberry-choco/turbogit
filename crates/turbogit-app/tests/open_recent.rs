@@ -69,10 +69,6 @@ fn open_recent_deep_scans_a_workspace_row() {
         state.multi.roots.iter().any(|r| r.id.as_path() == deep),
         "the deep-nested repo must be registered by the deep scan"
     );
-    assert!(
-        state.selected_root.is_some(),
-        "a focused root is selected after restoring"
-    );
 }
 
 #[test]
@@ -119,7 +115,6 @@ fn open_recent_on_a_missing_path_toasts_and_dispatches_nothing() {
     std::fs::remove_dir_all(&gone).expect("delete the recent's directory");
 
     let before_roots = state.multi.roots.len();
-    let before_selected = state.selected_root.clone();
     state.ui.toast = None;
 
     state.open_recent(&recent(&gone, RecentKind::Project, None));
@@ -132,10 +127,6 @@ fn open_recent_on_a_missing_path_toasts_and_dispatches_nothing() {
         state.multi.roots.len(),
         before_roots,
         "a missing path must not re-register roots"
-    );
-    assert_eq!(
-        state.selected_root, before_selected,
-        "a missing path must not disturb the focused root"
     );
     assert!(
         !state.show_welcome(),
@@ -255,8 +246,4 @@ fn workspace_picker_state_defaults_closed_and_unanchored() {
     let config = tempfile::tempdir().unwrap();
     let state = AppState::launch_in(None, Some(config.path().to_path_buf()));
     assert!(!state.ui.workspace_picker_open, "the picker starts closed");
-    assert!(
-        state.ui.workspace_picker_anchor.is_none(),
-        "no anchor until the selector or the palette opens it"
-    );
 }

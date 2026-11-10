@@ -37,10 +37,6 @@ fn unprotected() -> turbogit_domain::model::VcsSettings {
 
 fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots).with_settings(unprotected());
-    state.ui.repo_selection = selected
-        .iter()
-        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
-        .collect();
     state.ui.bulk_scope = selected
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
@@ -251,7 +247,6 @@ fn the_recent_list_is_capped_and_stays_newest_first() {
 fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     let (_tmp, project, alpha, ui) = project("cc-protected");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
-    state.ui.repo_selection = [rid(&alpha), rid(&ui)].into_iter().collect();
     state.ui.bulk_scope = vec![rid(&alpha), rid(&ui)];
 
     open(&mut state, BulkOp::Custom);
@@ -323,7 +318,6 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
 fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
     let (_tmp, project, alpha, _ui) = project("cc-retry-protected");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
-    state.ui.repo_selection = [rid(&alpha)].into_iter().collect();
     state.ui.bulk_scope = vec![rid(&alpha)];
 
     let plan = BulkPlan {

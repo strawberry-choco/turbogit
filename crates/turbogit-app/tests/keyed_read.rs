@@ -314,7 +314,7 @@ fn a_blame_answer_is_not_another_revisions_answer() {
 
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let blame_at = |rev: &str| BlameTarget {
         root: root.clone(),
         path: PathBuf::from("README.md"),

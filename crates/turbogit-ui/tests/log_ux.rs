@@ -163,10 +163,7 @@ fn short(id: &str) -> String {
 }
 
 fn harness_over(state: AppState) -> Harness<'static, AppState> {
-    let mut harness = shell_harness_over(
-        state,
-        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
-    );
+    let mut harness = shell_harness_over(state, egui::vec2(1280.0, 800.0));
     settle(&mut harness);
     harness
 }
@@ -796,7 +793,6 @@ fn changing_the_selection_keeps_the_ref_scope() {
         .to_string();
 
     let mut state = AppState::for_roots(&project, &[alpha, beta]);
-    let alpha_root = state.multi.roots[0].id.clone();
     let beta_root = state.multi.roots[1].id.clone();
     for r in &state.multi.roots.clone() {
         state.fetch_log(r.id.clone());
@@ -819,13 +815,10 @@ fn changing_the_selection_keeps_the_ref_scope() {
          to beta, which is where the read stays"
     );
 
-    harness.state_mut().selected_root = Some(alpha_root);
-    settle(&mut harness);
     assert_eq!(
         harness.state().ui.log_ref_scope,
         Some("topic".to_string()),
-        "an external `selected_root` write no longer evicts the scope — the read set, \
-         not the selection, owns which repositories are asked"
+        "the read set, not a selection, owns which repositories are asked"
     );
     assert_painted(&harness, "topic commit");
     assert_not_painted(&harness, "alpha commit");

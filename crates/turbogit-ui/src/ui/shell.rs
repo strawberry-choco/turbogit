@@ -7,12 +7,10 @@ use super::components;
 use super::icons::Icon;
 use super::widgets;
 use crate::theme::Palette;
-use turbogit_app::root_caches::{Affected, LogRead};
+use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::model::DisplayName;
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
-/// Minimum work-area width at which the workspace sidebar renders
-/// (issue #05): below it the log's minimum pane sizes cannot hold.
-pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     handle_shortcuts(ui, state);
@@ -46,33 +44,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     Rect::from_min_max(Pos2::new(body.min.x, body.max.y - activity_h), body.max);
                 let work_rect =
                     Rect::from_min_max(body.min, Pos2::new(body.max.x, activity_rect.min.y));
-                let sidebar_visible = work_rect.width() >= MIN_SIDEBAR_WINDOW_WIDTH;
-                let sidebar_w = if sidebar_visible {
-                    super::sidebar::SIDEBAR_WIDTH
-                } else {
-                    0.0
-                };
-                let sidebar_rect = Rect::from_min_max(
-                    work_rect.min,
-                    Pos2::new(work_rect.min.x + sidebar_w, work_rect.max.y),
-                );
-                let right_rect = Rect::from_min_max(
-                    Pos2::new(sidebar_rect.max.x, work_rect.min.y),
-                    work_rect.max,
-                );
-
-                let mut sidebar_ui = ui.new_child(
-                    UiBuilder::new()
-                        .max_rect(sidebar_rect)
-                        .layout(Layout::top_down(Align::Min)),
-                );
-                if sidebar_visible {
-                    super::sidebar::show(&mut sidebar_ui, state);
-                }
-                ui.advance_cursor_after_rect(sidebar_rect);
                 let mut column_ui = ui.new_child(
                     UiBuilder::new()
-                        .max_rect(right_rect)
+                        .max_rect(work_rect)
                         .layout(Layout::top_down(Align::Min)),
                 );
                 let tabs = shell_tabs(state);
@@ -98,10 +72,25 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         if shortcuts.clicked() {
                             state.ui.shortcuts_open = true;
                         }
+                        // D13: the sidebar header's project trigger becomes a
+                        // visible shell button. It is added last, so the
+                        // right-to-left strip puts it left of the two icons.
+                        let project = state.project_dir.display_name_or("<workspace>");
+                        let label = format!(
+                            "{project} · {}",
+                            components::counted(state.multi.roots.len(), "repo", "repos")
+                        );
+                        let switch = widgets::ghost_button(ui, Some(Icon::FOLDER_GIT), &label);
+                        switch.widget_info(|| {
+                            WidgetInfo::labeled(WidgetType::Button, true, "Switch project")
+                        });
+                        if switch.clicked() {
+                            state.ui.workspace_picker_open = true;
+                        }
                     },
                     show_tool_window,
                 );
-                ui.advance_cursor_after_rect(right_rect);
+                ui.advance_cursor_after_rect(work_rect);
                 let mut activity_ui = ui.new_child(
                     UiBuilder::new()
                         .max_rect(activity_rect)
@@ -460,7 +449,6 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
                     super::status_inflight::render(ui, state);
                     version_line(ui, state);
                     aggregated_status_chips(ui, &agg);
-                    granular_status_chips(ui, state);
                 });
             });
             ui.scope_builder(UiBuilder::new().max_rect(right_rect), |ui| {
@@ -506,7 +494,7 @@ fn status_hint(ui: &mut Ui, reason: &str) {
 /// **The ink is `INK_2`, not `INK_3`, and that is a legality answer rather than
 /// a preference.** The band this line paints on is `Palette::SURFACE`, a
 /// *raised* surface, and ticket 02 narrowed `INK_3`'s legal set to the app
-/// background, the content surface and the sidebar surface. On `SURFACE` it
+/// background and the content surface. On `SURFACE` it
 /// measures 4.20:1, under AA, and the token layer's own instruction for a
 /// caller in that position is to step *up*. `INK_2` measures 6.58:1 there. The
 /// step-up is why every status-bar line shares one ink: the bar is one raised
@@ -525,30 +513,6 @@ fn version_line(ui: &mut Ui, state: &AppState) {
 }
 
 const STATUS_BAR_INK: Color32 = Palette::INK_2;
-
-fn granular_status_chips(ui: &mut Ui, state: &AppState) {
-    if state.show_welcome() {
-        return;
-    }
-    let chip = |ui: &mut Ui, color: Color32, text: String| {
-        ui.label(
-            RichText::new("·")
-                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                .color(STATUS_BAR_INK),
-        );
-        ui.colored_label(color, text);
-    };
-    let scope = if state.ui.repo_selection.is_empty() {
-        1
-    } else {
-        state.ui.repo_selection.len()
-    };
-    chip(
-        ui,
-        STATUS_BAR_INK,
-        format!("{} in scope", components::counted(scope, "repo", "repos")),
-    );
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CounterChip {
@@ -667,18 +631,6 @@ fn status_total_text(agg: &AggregatedStatus) -> String {
 }
 
 fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
-    if !state.ui.repo_selection.is_empty() {
-        super::multi_selection::show_summary(ui, state);
-        return;
-    }
-    if state.ui.tab == Tab::Log && state.selected_root.is_some() {
-        let id = state.selected_root.clone().unwrap();
-        if state.caches.log(&id).is_none()
-            && !state.caches.has_log_failure(&LogRead::Commits(id.clone()))
-        {
-            state.fetch_log(id);
-        }
-    }
     match state.ui.tab {
         Tab::Commit => super::commit_window::show(ui, state),
         Tab::Log => super::log_window::show_log(ui, state),

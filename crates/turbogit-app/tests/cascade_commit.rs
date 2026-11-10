@@ -17,9 +17,7 @@ fn stage(repo: &Path, file: &str, content: &str) {
 }
 
 fn app_with_selection(project: &Path, roots: &[PathBuf]) -> AppState {
-    let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = roots.iter().map(|p| RootId((*p).clone().into())).collect();
-    state
+    AppState::for_roots(project, roots)
 }
 
 fn settle_bulk_run(state: &mut AppState) {
@@ -86,12 +84,15 @@ fn cascade_commit_fans_out_across_the_selection_and_reports_per_repo_outcomes() 
 
     stage(&alpha, "feature.txt", "alpha\n");
     stage(&lib, "feature.txt", "lib\n");
+    state.refresh(Affected::All);
+    state.drain_events();
 
     let alpha_before = head(&alpha);
     let lib_before = head(&lib);
     let ui_before = head(&ui);
 
-    state.run_commit_across("shared message", false);
+    let roots = state.commit_targets();
+    state.run_commit_across_roots(roots, "shared message", false, false);
     settle_bulk_run(&mut state);
 
     assert_ne!(head(&alpha), alpha_before, "alpha advanced");
@@ -120,12 +121,18 @@ fn cascade_commit_amend_amends_only_repos_that_have_a_committable_index() {
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()]);
 
     stage(&alpha, "amend.txt", "amend body\n");
+    state.refresh(Affected::All);
+    state.drain_events();
     let before = head(&alpha);
-    state.run_commit_across("first message", false);
+    let roots = state.commit_targets();
+    state.run_commit_across_roots(roots, "first message", false, false);
     settle_bulk_run(&mut state);
 
     stage(&alpha, "amend2.txt", "amend body 2\n");
-    state.run_commit_across("amended message", true);
+    state.refresh(Affected::All);
+    state.drain_events();
+    let roots = state.commit_targets();
+    state.run_commit_across_roots(roots, "amended message", true, false);
     settle_bulk_run(&mut state);
 
     let after = head(&alpha);

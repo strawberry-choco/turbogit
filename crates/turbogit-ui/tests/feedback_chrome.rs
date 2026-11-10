@@ -211,7 +211,7 @@ fn dismiss_clears_the_toast() {
 fn confirm_ok_executes_the_destructive_action() {
     let (_project, dir) = repo_project();
     let mut harness = feedback_harness(dir);
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
         root,
         name: "feature-a".into(),
@@ -229,9 +229,9 @@ fn confirm_ok_executes_the_destructive_action() {
     harness.get_by_label("OK").click();
     pump_until(&mut harness, "feature-a deleted via OK", |s| {
         s.ui.confirm.is_none()
-            && s.selected_root
-                .as_ref()
-                .and_then(|id| s.multi.by_id(id))
+            && s.multi
+                .roots
+                .first()
                 .is_some_and(|r| r.branches.iter().all(|b| b.name != "feature-a"))
     });
 }
@@ -240,7 +240,7 @@ fn confirm_ok_executes_the_destructive_action() {
 fn confirm_cancel_keeps_everything_intact() {
     let (_project, dir) = repo_project();
     let mut harness = feedback_harness(dir);
-    let root = harness.state().selected_root.clone().unwrap();
+    let root = harness.state().multi.roots[0].id.clone();
     harness.state_mut().ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
         root,
         name: "feature-b".into(),
@@ -252,11 +252,10 @@ fn confirm_cancel_keeps_everything_intact() {
 
     let s = harness.state();
     assert!(s.ui.confirm.is_none(), "Cancel must clear the prompt");
-    let kept = s
-        .selected_root
-        .as_ref()
-        .and_then(|id| s.multi.by_id(id))
-        .is_some_and(|r| r.branches.iter().any(|b| b.name == "feature-b"));
+    let kept = s.multi.roots[0]
+        .branches
+        .iter()
+        .any(|b| b.name == "feature-b");
     assert!(kept, "Cancel must leave the branch untouched");
 }
 

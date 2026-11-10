@@ -28,7 +28,7 @@ fn checkout_entry_checks_the_branch_out_under_its_own_label() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = branch::checkout(&root, "feat", Affected::Root(root.clone()));
     assert_eq!(op.label(), "Checkout feat");
@@ -47,7 +47,7 @@ fn checkout_new_local_entry_creates_the_branch_at_origin() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = branch::checkout_new_local(&root, "feat", Affected::Root(root.clone()));
     assert_eq!(op.label(), "Checkout feat (new local)");
@@ -71,7 +71,7 @@ fn checkout_detached_entry_leaves_head_on_the_tag() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = branch::checkout_detached(&root, "v1", Affected::Root(root.clone()));
     assert_eq!(op.label(), "Checkout v1");
@@ -101,7 +101,7 @@ fn restore_entry_brings_the_branch_back_at_its_tip() {
     git(&work, &["branch", "-D", "doomed"]);
 
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = branch::restore(&root, "doomed", &tip);
     assert_eq!(op.label(), "Restore branch doomed");

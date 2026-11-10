@@ -73,7 +73,6 @@ fn wait_for_run_end(state: &mut AppState) {
 fn the_dialog_defaults_to_the_current_multi_repo_selection_as_targets() {
     let (_tmp, project, alpha, beta, gamma, _commits) = project("cpa-default");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone(), gamma.clone()]);
-    state.ui.repo_selection = [rid(&beta), rid(&gamma)].into_iter().collect();
 
     state.open_cherry_across(rid(&alpha));
 
@@ -87,7 +86,6 @@ fn the_dialog_defaults_to_the_current_multi_repo_selection_as_targets() {
 fn running_applies_the_commits_in_order_to_every_target_and_reports_through_the_monitor() {
     let (_tmp, project, alpha, beta, _gamma, commits) = project("cpa-run");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone()]);
-    state.ui.repo_selection = [rid(&beta)].into_iter().collect();
     state.open_cherry_across(rid(&alpha));
     state.cherry_toggle_commit(commits[1].clone());
     state.cherry_toggle_commit(commits[2].clone());
@@ -116,7 +114,6 @@ fn running_applies_the_commits_in_order_to_every_target_and_reports_through_the_
 fn a_conflicted_target_is_marked_failed_and_left_held_for_manual_resolution() {
     let (_tmp, project, alpha, beta, gamma, commits) = project("cpa-conflict");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone(), gamma.clone()]);
-    state.ui.repo_selection = [rid(&beta), rid(&gamma)].into_iter().collect();
     state.open_cherry_across(rid(&alpha));
     state.cherry_toggle_commit(commits[1].clone());
     state.cherry_toggle_commit(commits[2].clone());

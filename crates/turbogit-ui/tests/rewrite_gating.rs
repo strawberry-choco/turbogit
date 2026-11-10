@@ -18,7 +18,6 @@ use turbogit_services::integrate_service::OwnedOperation;
 use turbogit_ui::ui::commit_menu::{CommitFacts, CommitMenuAction, commit_menu_items};
 use turbogit_ui::ui::rewrite_gating::Scope;
 use turbogit_ui::ui::shell::STATUS_BAR_HEIGHT;
-use turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
 use turbogit_ui::ui::widgets::MenuItemState;
 
 const DURING_CHERRY_PICK: &str = "Cannot rewrite history during a cherry-pick";
@@ -184,7 +183,7 @@ fn project_with_merge() -> Project {
 }
 
 fn window_size() -> Vec2 {
-    egui::vec2(1280.0 + SIDEBAR_WIDTH, 800.0)
+    egui::vec2(1280.0, 800.0)
 }
 
 fn log_harness(p: &Project) -> Harness<'static, AppState> {

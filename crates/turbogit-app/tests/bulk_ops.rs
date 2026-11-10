@@ -40,10 +40,6 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 
 fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = selected
-        .iter()
-        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
-        .collect();
     state.ui.bulk_scope = selected
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
@@ -129,10 +125,10 @@ fn a_preflight_can_be_opened_on_an_explicit_root_list() {
 }
 
 #[test]
-fn run_bulk_confirmed_dispatches_the_plan_without_a_repo_selection() {
+fn run_bulk_confirmed_dispatches_the_plan_without_a_preflight_scope() {
     let (_tmp, project, alpha, ui) = project("pf-plan-roots");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
-    assert!(state.ui.repo_selection.is_empty());
+    assert!(state.ui.bulk_scope.is_empty());
     std::fs::write(ui.join("base.txt"), "work\n").unwrap();
 
     let plan = BulkPlan {

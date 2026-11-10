@@ -1,5 +1,5 @@
 //! `New branch from` is a row action. The repository it writes to is the row's,
-//! not the workspace focus the left sidebar happens to hold.
+//! not any other repository the workspace holds.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_painted, painted_text, settle_quiet, shell_harness_over,
 };
 use turbogit_app::state::{AppState, Dialog, Tab};
-use turbogit_domain::model::{BranchKind, RootId};
+use turbogit_domain::model::BranchKind;
 
 fn repo(project: &Path, name: &str, branches: &[&str]) -> PathBuf {
     let dir = project.join(name);
@@ -44,15 +44,13 @@ fn listed(dir: &Path, branch: &str) -> bool {
 fn loaded() -> (TempDir, PathBuf, Harness<'static, AppState>) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    let alpha = repo(&project, "alpha", &["shared", "alpha-only"]);
+    repo(&project, "alpha", &["shared", "alpha-only"]);
     let beta = repo(&project, "beta", &["shared", "beta-only"]);
     // alpha sits on `main`, beta on `beta-only`, so the dialog's `current` badge
-    // can only be right when it reads the row's repo rather than the sidebar's.
+    // can only be right when it reads the row's repo rather than any other.
     git(beta.as_path(), &["checkout", "beta-only"]);
 
-    let mut state = AppState::new(project.clone());
-    // The left sidebar points at alpha. Every row the tests aim at belongs to beta.
-    state.selected_root = Some(RootId(alpha.as_path().into()));
+    let state = AppState::new(project.clone());
     let mut harness = shell_harness_over(state, KITTEST_DEFAULT_BOX);
     harness.set_size(egui::vec2(1200.0, 900.0));
     harness.state_mut().ui.tab = Tab::Branches;
@@ -148,13 +146,12 @@ fn a_new_branch_from_a_row_lands_in_that_rows_repo() {
 
     assert!(
         listed(&beta, "cut-from-beta"),
-        "the row's repo has no new branch; selected_root={:?}, painted={:?}",
-        harness.state().selected_root,
+        "the row's repo has no new branch; painted={:?}",
         painted_text(&harness)
     );
     assert!(
         !listed(&alpha, "cut-from-beta"),
-        "the sidebar's repo gained a branch aimed at a row in the other repo"
+        "the other repo gained a branch aimed at a row in beta"
     );
 }
 
@@ -175,7 +172,7 @@ fn a_new_branch_from_a_shared_name_still_lands_in_that_rows_repo() {
     );
     assert!(
         !listed(&alpha, "cut-from-shared"),
-        "the sidebar's repo gained a branch aimed at a row in the other repo"
+        "the other repo gained a branch aimed at this row"
     );
 }
 

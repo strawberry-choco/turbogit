@@ -8,7 +8,7 @@
 //! Every ScrollArea in the app carries an explicit `id_salt` naming what it
 //! shows; this suite walks every tool-window page and sub-tab of the real
 //! shell plus the Welcome surfaces, the frames where the always-on shell
-//! chrome (sidebar, activity rail) coexists with page scrolls, which is where
+//! chrome (tab strip, activity rail) coexists with page scrolls, which is where
 //! this class bites, and asserts the debug painter stays quiet (🔥 is egui's
 //! own error marker, never app copy), so a future unsalted scroll that lands
 //! on an occupied id fails here rather than painting over the user's pane.
@@ -45,7 +45,9 @@ fn no_tool_page_paints_an_id_clash_error() {
 
     for tab in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
         h.get_by_label(tab).click();
-        h.run();
+        // A page that keeps repainting (a spinner while its read settles) never
+        // satisfies `Harness::run`'s bounded 4 steps; step until the paint is stable.
+        settle(&mut h);
         assert_no_clash(&h, tab);
 
         for sub in ["Local Changes", "Shelf", "Stash"] {
@@ -53,7 +55,7 @@ fn no_tool_page_paints_an_id_clash_error() {
                 continue;
             }
             h.get_by_label(sub).click();
-            h.run();
+            settle(&mut h);
             assert_no_clash(&h, &format!("{tab} > {sub}"));
         }
     }

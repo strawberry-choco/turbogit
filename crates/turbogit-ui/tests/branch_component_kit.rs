@@ -1,18 +1,16 @@
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect};
 use egui_kittest::{Harness, kittest::Queryable as _};
-use test_support::git_seed::{commit, git};
 use test_support::harness::{
-    filled_circles, filled_rects, painted_galleys, settle, shell_harness_over_unstyled,
-    widget_harness,
+    filled_circles, filled_rects, painted_galleys, settle, widget_harness,
 };
 use test_support::srcscan;
-use turbogit_app::state::{AppState, TreeState};
+use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, Remote, Root, RootId, RootStatus, Upstream};
 use turbogit_ui::theme::{Palette, RAIL_WIDTH};
 use turbogit_ui::ui::branch_tree_view::{TreeProps, branch_tree, branch_view_fingerprint};
@@ -128,7 +126,7 @@ fn the_three_surviving_selection_roles_are_three_distinct_fills() {
     assert_eq!(
         focus_band,
         Palette::selection_bg(),
-        "the log/sidebar focus band keeps the translucent composite"
+        "the log focus band keeps the translucent composite"
     );
 
     assert_ne!(
@@ -463,7 +461,7 @@ fn a_selected_list_row_paints_the_selected_row_fill_and_not_the_current_ref_band
     assert!(
         !painted.contains(&Palette::selection_bg()),
         "the branch list is not a focus band surface: the translucent composite \
-         belongs to the log table, the sidebar tree and blame"
+         belongs to the log table, the branch tree and blame"
     );
     let painted_rails = rails(&harness);
     let brand_fills: Vec<Rect> = filled_rects(&harness)
@@ -1158,18 +1156,23 @@ fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
     let src_root = Path::new(CRATE_SRC);
     let mut sites: Vec<(String, String, usize)> = Vec::new();
     for (rel, line) in srcscan::call_sites(src_root, name) {
-        let screen = rel
-            .strip_prefix("ui/")
-            .unwrap_or(&rel)
-            .split('/')
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches(".rs")
-            .to_owned();
+        let path = rel.strip_prefix("ui/").unwrap_or(&rel);
+        // A `kit/` file is shared vocabulary by directory, but a file under it
+        // is still one screen calling the primitive; name it by its stem so the
+        // usage rule sees the conflict pane, not the kit.
+        let screen = if let Some(kit) = path.strip_prefix("kit/") {
+            kit.trim_end_matches(".rs").to_owned()
+        } else {
+            path.split('/')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches(".rs")
+                .to_owned()
+        };
         if NOT_A_SCREEN.contains(&screen.as_str()) {
             continue;
         }
-        sites.push((screen, rel, line));
+        sites.push((screen, path.to_owned(), line));
     }
     let mut screens: Vec<String> = sites.iter().map(|(screen, _, _)| screen.clone()).collect();
     screens.sort();
@@ -1221,7 +1224,6 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
             "commit_window",
             "diff",
             "interactive_rebase",
-            "multi_selection",
             "settings_modal",
             "welcome",
         ],
@@ -1229,7 +1231,7 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
     (
         "paint_rail",
         "ui/components.rs",
-        &["branch_tree_view", "sidebar"],
+        &["branch_tree_view", "conflict_pane"],
     ),
 ];
 
@@ -1564,50 +1566,11 @@ fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
     );
 }
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).expect("repo dir");
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    commit(&path, "base.txt", "base\n", "init");
-    path
-}
-
-/// A two-repository workspace in a fresh temp dir: `alpha` and `beta`, each a
-/// git repository, side by side under the project root.
-///
-/// A `TempDir` rather than a fixed shared scratch path on purpose: a shared
-/// path is a `config.lock` race rather than a test.
-fn two_repo_workspace() -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let dir = tempfile::tempdir().expect("temp workspace");
-    let alpha = temp_repo(dir.path(), "alpha");
-    let beta = temp_repo(dir.path(), "beta");
-    (dir, alpha, beta)
-}
-
-fn focused_sidebar() -> (Harness<'static, AppState>, tempfile::TempDir) {
-    let (dir, alpha, beta) = two_repo_workspace();
-    let state = AppState::for_roots(dir.path(), &[alpha, beta]);
-    let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    settle(&mut harness);
-    harness.get_by_label("beta").click();
-    settle(&mut harness);
-    (harness, dir)
-}
-
 fn filled_with<S>(harness: &Harness<'_, S>, color: Color32) -> Vec<Rect> {
     filled_rects(harness)
         .into_iter()
         .filter(|(_, painted)| *painted == color)
         .map(|(rect, _)| rect)
-        .collect()
-}
-
-fn focus_bands(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Rect> {
-    filled_with(harness, row_fill(RowState::FocusSelected))
-        .into_iter()
-        .filter(|band| band.intersect(row) == *band)
         .collect()
 }
 
@@ -1618,195 +1581,8 @@ fn rails<S>(harness: &Harness<'_, S>) -> Vec<Rect> {
         .collect()
 }
 
-fn label_in_row(
-    harness: &Harness<'_, AppState>,
-    row: Rect,
-    text: &str,
-) -> test_support::harness::PaintedGalley {
-    let hits: Vec<_> = painted_galleys(harness)
-        .into_iter()
-        .filter(|g| g.text == text && row.contains(g.pos))
-        .collect();
-    assert_eq!(
-        hits.len(),
-        1,
-        "expected exactly one `{text}` inside {row:?}, found {hits:#?}"
-    );
-    hits.into_iter().next().expect("one hit")
-}
-
-fn fills_in_row(harness: &Harness<'_, AppState>, row: Rect) -> Vec<Color32> {
-    filled_rects(harness)
-        .into_iter()
-        .filter(|(rect, _)| row.contains_rect(*rect))
-        .map(|(_, color)| color)
-        .collect()
-}
-
-#[test]
-fn a_selected_row_paints_exactly_one_rail_of_the_token_width_at_its_leading_edge() {
-    let (harness, _workspace) = focused_sidebar();
-
-    let row = harness.get_by_label("beta").rect();
-    let bands = focus_bands(&harness, row);
-    assert_eq!(
-        bands.len(),
-        1,
-        "one focused row paints one band; found {bands:?}"
-    );
-    let band = bands[0];
-    assert!(
-        row.intersect(band) == band,
-        "the focus band must sit inside the focused row: row {row:?}, band {band:?}"
-    );
-
-    let painted_rails = rails(&harness);
-    assert_eq!(
-        painted_rails.len(),
-        1,
-        "the one selected row carries exactly one rail: {painted_rails:?}"
-    );
-    let rail = painted_rails[0];
-    println!("focus band {band:?}, rail {rail:?}");
-    assert_eq!(
-        rail.width(),
-        RAIL_WIDTH,
-        "the rail is the token's width, not a literal at the call site"
-    );
-    assert_eq!(
-        rail.height(),
-        band.height(),
-        "the rail spans the row's full height"
-    );
-    assert_eq!(
-        rail.left(),
-        band.left(),
-        "the rail sits at the row's leading edge"
-    );
-    assert_eq!(rail.top(), band.top(), "the rail starts at the row's top");
-    assert_eq!(
-        rail.right(),
-        band.left() + RAIL_WIDTH,
-        "the rail is RAIL_WIDTH wide and no more"
-    );
-
-    let plain = harness.get_by_label("alpha").rect();
-    for other in rails(&harness) {
-        assert!(
-            !plain.contains_rect(other),
-            "an unselected row must not carry a rail: {other:?}"
-        );
-    }
-}
-
-#[test]
-fn a_selected_row_indents_neither_its_text_nor_its_band() {
-    let (harness, _workspace) = focused_sidebar();
-    let selected = harness.get_by_label("beta").rect();
-    let plain = harness.get_by_label("alpha").rect();
-    let band = focus_bands(&harness, selected)
-        .into_iter()
-        .next()
-        .expect("the focused row paints its band");
-    let selected_name = label_in_row(&harness, selected, "beta");
-    let plain_name = label_in_row(&harness, plain, "alpha");
-    println!(
-        "selected name at {:?} (row {selected:?}), unselected name at {:?} (row {plain:?}), band {band:?}",
-        selected_name.pos, plain_name.pos,
-    );
-
-    assert_eq!(
-        selected_name.pos.x - selected.left(),
-        plain_name.pos.x - plain.left(),
-        "selecting a row must not indent its content: the rail is paint, not padding"
-    );
-    assert_eq!(
-        selected_name.pos.x, plain_name.pos.x,
-        "both rows share one name column, selected or not"
-    );
-    assert_eq!(
-        band.left(),
-        plain.left(),
-        "the selected row's band starts at the row's leading edge: a rail taken out \
-         of the content region would indent the selected row and not the \
-         unselected one"
-    );
-    assert_eq!(
-        selected.size(),
-        plain.size(),
-        "selecting a row must not resize it"
-    );
-}
-
-#[test]
-fn every_list_row_fill_comes_from_the_one_row_fill_decision() {
-    let (mut harness, _workspace) = focused_sidebar();
-    let selected = harness.get_by_label("beta").rect();
-    let plain = harness.get_by_label("alpha").rect();
-
-    assert_eq!(
-        row_fill(RowState::Default),
-        Color32::TRANSPARENT,
-        "a resting row's decision is to paint nothing"
-    );
-    let resting = fills_in_row(&harness, plain);
-    for (name, state) in [
-        ("hover", RowState::Hover),
-        ("row-selected", RowState::RowSelected),
-        ("focus-selected", RowState::FocusSelected),
-    ] {
-        assert!(
-            !resting.contains(&row_fill(state)),
-            "an unselected, unhovered row paints no {name} band: {resting:?}"
-        );
-    }
-
-    let selected_painted = fills_in_row(&harness, selected);
-    assert!(
-        selected_painted.contains(&row_fill(RowState::FocusSelected)),
-        "the selected row's band is the one row-fill decision's focus fill ({:?}); \
-         the row painted {selected_painted:?}",
-        row_fill(RowState::FocusSelected)
-    );
-
-    harness.get_by_label("alpha").hover();
-    settle(&mut harness);
-    let hovered = fills_in_row(&harness, plain);
-    assert!(
-        hovered.contains(&row_fill(RowState::Hover)),
-        "a hovered row's fill is the one decision's hover fill ({:?}), the \
-         raised-on-card role; the row painted {hovered:?}",
-        row_fill(RowState::Hover)
-    );
-    assert_eq!(
-        row_fill(RowState::Hover),
-        Palette::RAISED_ON_CARD,
-        "hover steps up from the surface the list sits on"
-    );
-    let still_selected = fills_in_row(&harness, selected);
-    assert!(
-        still_selected.contains(&row_fill(RowState::FocusSelected)),
-        "hovering a row's neighbour must not change the selected row's fill: \
-         {still_selected:?}"
-    );
-}
-
 #[test]
 fn a_standard_list_row_takes_its_named_row_height() {
-    {
-        let (harness, _workspace) = focused_sidebar();
-        for label in ["alpha", "beta"] {
-            let rect = harness.get_by_label(label).rect();
-            assert_eq!(
-                rect.height(),
-                turbogit_ui::theme::GROUP_ROW_HEIGHT,
-                "the `{label}` row is a repository row, so it is GROUP_ROW_HEIGHT \
-                 tall — a standard row takes the named height for its kind, and \
-                 selection does not resize it"
-            );
-        }
-    }
-
     let mut harness = selected_row_harness();
     settle(&mut harness);
     let selected = selected_row_rect(&harness);
@@ -1878,89 +1654,6 @@ fn a_section_label_is_ink_3_and_never_the_dim_ink() {
 
 fn is_a_label_bearing_step(ink: Color32) -> bool {
     [Palette::INK, Palette::INK_2, Palette::INK_3].contains(&ink)
-}
-
-#[test]
-fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apart() {
-    use turbogit_ui::theme::Palette;
-    use turbogit_ui::ui::components::{RowState, row_fill};
-
-    let (harness, _workspace) = focused_sidebar();
-    let row = harness.get_by_label("beta").rect();
-    let bands = focus_bands(&harness, row);
-    assert_eq!(
-        bands.len(),
-        1,
-        "one focused row paints one band; found {bands:?}"
-    );
-    let fills = fills_in_row(&harness, row);
-    assert!(
-        fills.contains(&row_fill(RowState::FocusSelected)),
-        "the sidebar's active band is the one row-fill decision's **focus** fill \
-         ({:?}); the row painted {fills:?}",
-        row_fill(RowState::FocusSelected)
-    );
-    assert!(
-        !fills.contains(&Palette::ROW_SELECTED),
-        "…and it is not the list row's opaque `ROW_SELECTED` ({:?}): a full-bleed \
-         tree selection spanning a workspace tree is not a row in a list, and R4's \
-         composite-plus-rail belongs to rows in lists. Changing this is a decision \
-         with a reason, and the reason is written down in `ui/sidebar.rs` and in \
-         `docs/design-system-roles.md`. The row painted {fills:?}",
-        Palette::ROW_SELECTED
-    );
-
-    let focus = row_fill(RowState::FocusSelected);
-    assert!(
-        !focus.is_opaque(),
-        "the focus band is a composite; a call that handed this an opaque fill \
-         would silently make the measurement below vacuous"
-    );
-    let alpha = 1.0 - f64::from(focus.a()) / 255.0;
-    for (host_name, host, tolerance) in [
-        (
-            "the app background (the log table's host)",
-            Palette::BG,
-            1.0_f64,
-        ),
-        ("the left rail's own surface", Palette::SIDEBAR, 4.0_f64),
-    ] {
-        let deltas: Vec<f64> = vec![
-            (f64::from(focus.r()) + f64::from(host.r()) * alpha
-                - f64::from(Palette::ROW_SELECTED.r()))
-            .abs(),
-            (f64::from(focus.g()) + f64::from(host.g()) * alpha
-                - f64::from(Palette::ROW_SELECTED.g()))
-            .abs(),
-            (f64::from(focus.b()) + f64::from(host.b()) * alpha
-                - f64::from(Palette::ROW_SELECTED.b()))
-            .abs(),
-        ];
-        println!(
-            "focus band {focus:?} over {host_name}: composite \
-             #{:02X?} against the list row's #{:02X?} (deltas {deltas:?})",
-            (
-                (f64::from(focus.r()) + f64::from(host.r()) * alpha) as u8,
-                (f64::from(focus.g()) + f64::from(host.g()) * alpha) as u8,
-                (f64::from(focus.b()) + f64::from(host.b()) * alpha) as u8,
-            ),
-            (
-                Palette::ROW_SELECTED.r(),
-                Palette::ROW_SELECTED.g(),
-                Palette::ROW_SELECTED.b(),
-            ),
-        );
-        assert!(
-            deltas.iter().all(|d| *d <= tolerance),
-            "the focus band and the list-row fill are within a rounding step of \
-             each other on {host_name} (deltas {deltas:?} per channel, tolerance \
-             {tolerance}). That is the measurement behind keeping the focus band \
-             on a tree selection: the swap would change which role the band claims \
-             and nothing the user can see. If a future change makes the two \
-             visibly different, this is the assertion that has to be re-decided — \
-             and the re-decision has to be about the band, not about the number."
-        );
-    }
 }
 
 #[test]

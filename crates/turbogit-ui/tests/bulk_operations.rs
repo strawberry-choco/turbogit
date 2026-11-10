@@ -104,22 +104,28 @@ fn line_with(h: &Harness<'_, AppState>, needle: &str) -> Vec<String> {
 }
 
 #[test]
-fn selecting_repos_offers_the_bulk_operations_grid() {
+fn the_fleet_strip_offers_the_operations_for_every_root() {
     let (project, alpha, ui) = two_repo_project("grid");
     let state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
     let mut h = harness(state);
     settle(&mut h);
 
     assert!(
-        !test_support::harness::painted_text(&h)
-            .iter()
-            .any(|t| t == "OPERATIONS")
+        h.state().ui.bulk_op.is_none(),
+        "the strip is on screen without a preflight open"
     );
+    for label in [
+        "Fetch all",
+        "Pull all",
+        "Push all",
+        "Create branch",
+        "Stash all",
+        "Custom command",
+        "Fleet history",
+    ] {
+        assert_painted(&h, label);
+    }
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
-
-    assert_painted(&h, "OPERATIONS");
     h.get_by_label("Fetch all").click();
     settle(&mut h);
 
@@ -139,8 +145,6 @@ fn the_preflight_matrix_shows_per_repo_status_and_skip_reasons() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
     h.get_by_label("Pull all").click();
     settle(&mut h);
 
@@ -181,8 +185,6 @@ fn a_rebasing_pull_refuses_every_protected_root_in_the_matrix() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
     h.get_by_label("Pull all").click();
     settle(&mut h);
 
@@ -236,8 +238,6 @@ fn confirming_the_preflight_runs_the_fleet_and_reports_outcomes() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
     h.get_by_label("Stash all").click();
     settle(&mut h);
     assert_painted(&h, "Run on 1 of 2");

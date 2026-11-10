@@ -66,9 +66,7 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
-    h.get_by_label("Create & checkout branch").click();
+    h.get_by_label("Create branch").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::CreateBranch));
 
@@ -136,9 +134,7 @@ fn esc_cancels_the_cascade_before_anything_runs() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
-    h.get_by_label("Create & checkout branch").click();
+    h.get_by_label("Create branch").click();
     settle(&mut h);
     h.get_by_label("Branch name input").focus();
     h.get_by_label("Branch name input").type_text("feature/x");

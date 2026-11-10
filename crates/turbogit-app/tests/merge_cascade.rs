@@ -48,14 +48,13 @@ fn wait_for_run_end(state: &mut AppState) {
 fn view_plan_scopes_the_cascade_preflight_to_the_sibling_repos() {
     let (_tmp, project, focused, sibling) = sibling_project("mc-plan");
     let mut state = AppState::for_roots(&project, &[focused.clone(), sibling.clone()]);
-    state.selected_root = Some(rid(&focused));
     state.ui.dlg.merge_target = "feature".to_string();
 
     state.open_merge_cascade_plan(&rid(&focused));
 
     assert_eq!(state.ui.bulk_op, Some(BulkOp::Merge));
     assert_eq!(
-        state.ui.repo_selection.iter().cloned().collect::<Vec<_>>(),
+        state.ui.bulk_scope.clone(),
         vec![rid(&sibling)],
         "the plan covers the sibling repos, not the focused one"
     );
@@ -65,14 +64,13 @@ fn view_plan_scopes_the_cascade_preflight_to_the_sibling_repos() {
 fn confirmed_merge_cascade_merges_the_source_branch_into_the_siblings() {
     let (_tmp, project, focused, sibling) = sibling_project("mc-run");
     let mut state = AppState::for_roots(&project, &[focused.clone(), sibling.clone()]);
-    state.selected_root = Some(rid(&focused));
     state.ui.dlg.merge_target = "feature".to_string();
     state.ui.dlg.merge_strategy = MergeStrategy::Commit;
 
     state.open_merge_cascade_plan(&rid(&focused));
     let plan = BulkPlan {
         op: BulkOp::Merge,
-        roots: state.ui.repo_selection.iter().cloned().collect(),
+        roots: state.ui.bulk_scope.clone(),
         rebase: false,
         branch: state.ui.dlg.merge_target.clone(),
         command: String::new(),

@@ -753,8 +753,6 @@ fn protected_force_refusal_survives_the_other_push_options() {
     );
 }
 
-use turbogit_services::sync_service::PushScope;
-
 /// `repo_ahead_of_origin` plus divergence, WITHOUT the follow-up fetch: the
 /// remote moved while the repo's remote-tracking ref still names the old tip.
 /// That is exactly a stale force-with-lease, the push (not the lease) would
@@ -901,11 +899,6 @@ fn push_verb<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Option<Node<'h
     h.query_all_by_label(label)
         .into_iter()
         .find(|n| (n.rect().center().y - y).abs() < 6.0)
-}
-
-fn use_this_repo_scope(h: &mut Harness<'_, AppState>) {
-    h.state_mut().ui.dlg.push_scope = PushScope::ThisRepo;
-    h.run();
 }
 
 fn wait_for_state(h: &mut Harness<'_, AppState>, ms: u64, f: impl Fn(&AppState) -> bool) -> bool {

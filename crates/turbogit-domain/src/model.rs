@@ -381,7 +381,7 @@ impl Commit {
 /// This is the **plain** rewrite, separators become `/` and nothing else moves:
 /// `a//b` stays `a//b`, and a filename that genuinely contains a `\` is rewritten too.
 /// The two places wanting the *other* answer keep their own spelling: `diff_engine`'s
-/// patch headers normalise through `Path::components`, and the sidebar's collapse keys
+/// patch headers normalise through `Path::components`, and the tree's collapse keys
 /// add a project-prefix strip on top.
 pub fn forward_slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")

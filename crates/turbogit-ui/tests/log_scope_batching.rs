@@ -304,7 +304,7 @@ fn log_harness_sized(
     (harness, recorder)
 }
 
-const TALL: egui::Vec2 = egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 2400.0);
+const TALL: egui::Vec2 = egui::vec2(1280.0, 2400.0);
 
 fn seeded_harness_sized(
     project: &Path,
@@ -326,11 +326,7 @@ fn seeded_harness(
     project: &Path,
     repos: &[PathBuf],
 ) -> (Harness<'static, AppState>, Arc<RecordingExecutor>) {
-    seeded_harness_sized(
-        project,
-        repos,
-        vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
-    )
+    seeded_harness_sized(project, repos, vec2(1280.0, 800.0))
 }
 
 fn scoped_len(state: &AppState, root: &RootId, scope: &LogScope) -> usize {
@@ -478,11 +474,6 @@ fn a_scopes_batches_survive_the_roots_filter_and_re_entering_it() {
     let alpha = harness.state().multi.roots[0].id.clone();
     let beta = harness.state().multi.roots[1].id.clone();
     let repo = repos[0].clone();
-    assert_eq!(
-        harness.state().selected_root.as_ref(),
-        Some(&alpha),
-        "the scope reads the selected root, which is alpha — the premise here"
-    );
     let scope = path_scope("f.txt");
     let reads = |recorder: &RecordingExecutor| {
         recorder

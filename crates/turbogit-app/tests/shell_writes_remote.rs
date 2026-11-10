@@ -18,7 +18,7 @@ fn add_entry_writes_the_remote_with_its_fetch_url() {
     let tmp = tempfile::tempdir().unwrap();
     let work: PathBuf = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let second = tmp.path().join("second.git");
     git(
         tmp.path(),
@@ -48,7 +48,7 @@ fn add_entry_prefers_the_push_url_when_it_is_given() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let fetch = tmp.path().join("fetch.git");
     let push = tmp.path().join("push.git");
     git(
@@ -83,7 +83,7 @@ fn rename_entry_carries_the_new_name() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::rename(&root, work.as_path(), "origin", "upstream");
     assert_eq!(op.label(), "Rename remote origin");
@@ -102,7 +102,7 @@ fn update_entry_splits_fetch_and_push_and_keeps_a_blank_side_off() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let fresh = tmp.path().join("fresh.git");
     git(
         tmp.path(),
@@ -134,7 +134,7 @@ fn set_upstream_entry_records_the_tracking_ref() {
     git(&work, &["branch", "side", "main"]);
     git(&work, &["push", "-q", "origin", "side"]);
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::set_upstream(&root, work.as_path(), "side", "origin/side");
     assert_eq!(op.label(), "Set upstream side → origin/side");
@@ -153,7 +153,7 @@ fn remove_entry_drops_the_remote() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::remove(&root, work.as_path(), "origin");
     assert_eq!(op.label(), "Remove remote origin");

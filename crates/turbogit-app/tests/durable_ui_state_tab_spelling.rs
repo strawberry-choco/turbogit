@@ -102,7 +102,7 @@ fn an_unrecognised_tab_string_lands_on_the_commit_tab() {
         "and the launch is not the error path"
     );
     assert!(
-        reloaded.ui.recent_repos.is_empty() && reloaded.ui.smart_group_rules.is_empty(),
+        reloaded.ui.recent_repos.is_empty(),
         "with the rest of the state restored around it"
     );
 }

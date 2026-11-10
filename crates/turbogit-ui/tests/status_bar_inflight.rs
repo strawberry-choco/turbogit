@@ -8,12 +8,11 @@ use test_support::git_seed::{GitEnv, git_with_env, pin_eol_lf};
 use test_support::harness::{filled_rects, painted_galleys, settle, shell_harness_over_animated};
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::state::{AppState, Tab};
-use turbogit_domain::model::{RootId, VcsSettings};
+use turbogit_domain::model::{Change, ChangeStatus, RootId, VcsSettings};
 use turbogit_services::integrate_service::{OwnedOperation, owning_operation};
 use turbogit_ui::theme::{self, Palette};
 use turbogit_ui::ui::popups::Action;
 use turbogit_ui::ui::shell::STATUS_BAR_HEIGHT;
-use turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
 use turbogit_ui::ui::status_inflight::{InFlight, items_via, target_for};
 
 #[track_caller]
@@ -125,7 +124,26 @@ fn merge_conflict_in_flight(repo: &Path) {
 }
 
 fn window_size() -> Vec2 {
-    egui::vec2(1280.0 + SIDEBAR_WIDTH, 800.0)
+    egui::vec2(1280.0, 800.0)
+}
+
+/// D10: a selection is the change rows the user checked, so this is how a test
+/// says "the user is looking at this repository" without a global focus. It
+/// checks exactly the one row asked for, replacing whatever was checked before.
+fn select_a_change_in(state: &mut AppState, index: usize) {
+    let root = &mut state.multi.roots[index];
+    let change = Change {
+        path: std::path::PathBuf::from("selected.txt"),
+        status: ChangeStatus::Modified,
+        chunks: vec![],
+        staged: false,
+        unstaged: true,
+        orig_path: None,
+    };
+    let key = root.canonical_key(&change);
+    root.status.changes.push(change);
+    state.ui.selected.clear();
+    state.ui.selected.insert(key);
 }
 
 fn status_band() -> Rect {
@@ -328,7 +346,7 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     let mut state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
         .with_settings(VcsSettings::default());
 
-    state.ui.repo_selection = [RootId(p.alpha.clone().into())].into_iter().collect();
+    select_a_change_in(&mut state, 0);
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
         Some((RootId(p.alpha.clone().into()), OwnedOperation::Rebase)),
@@ -340,7 +358,7 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
         "the selected root answers first"
     );
 
-    state.ui.repo_selection = [RootId(p.beta.clone().into())].into_iter().collect();
+    select_a_change_in(&mut state, 1);
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
         Some((RootId(p.alpha.clone().into()), OwnedOperation::Rebase)),

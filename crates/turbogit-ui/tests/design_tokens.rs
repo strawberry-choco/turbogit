@@ -54,10 +54,9 @@ fn p0_shell_defaults_use_the_branch_type_ramp() {
     }
 }
 
-const AUDITED_SURFACES: [(&str, Color32); 8] = [
+const AUDITED_SURFACES: [(&str, Color32); 7] = [
     ("app background (BG)", Palette::BG),
     ("content surface (CONTENT_BG)", Palette::CONTENT_BG),
-    ("sidebar (SIDEBAR)", Palette::SIDEBAR),
     ("raised surface (SURFACE)", Palette::SURFACE),
     ("hover / raised-on-card (SURFACE_2)", Palette::SURFACE_2),
     ("highest raised surface (SURFACE_3)", Palette::SURFACE_3),
@@ -75,7 +74,6 @@ struct InkStep {
 const ALL_AUDITED: &[&str] = &[
     "app background (BG)",
     "content surface (CONTENT_BG)",
-    "sidebar (SIDEBAR)",
     "raised surface (SURFACE)",
     "hover / raised-on-card (SURFACE_2)",
     "highest raised surface (SURFACE_3)",
@@ -83,17 +81,9 @@ const ALL_AUDITED: &[&str] = &[
     "selected list row (ROW_SELECTED)",
 ];
 
-const MUTED_LEGAL: &[&str] = &[
-    "app background (BG)",
-    "content surface (CONTENT_BG)",
-    "sidebar (SIDEBAR)",
-];
+const MUTED_LEGAL: &[&str] = &["app background (BG)", "content surface (CONTENT_BG)"];
 
-const MUTED_LEGAL_NAMED: [&str; 3] = [
-    "app background (BG)",
-    "content surface (CONTENT_BG)",
-    "sidebar (SIDEBAR)",
-];
+const MUTED_LEGAL_NAMED: [&str; 2] = ["app background (BG)", "content surface (CONTENT_BG)"];
 
 const INK_RAMP: [InkStep; 4] = [
     InkStep {
@@ -175,11 +165,10 @@ fn the_ink_sweep_is_driven_by_each_steps_written_down_legality_set() {
 }
 
 #[test]
-fn ink_3_clears_aa_on_the_app_content_and_sidebar_surfaces() {
+fn ink_3_clears_aa_on_the_app_and_content_surfaces() {
     for (surface_name, surface) in [
         ("app background", Palette::BG),
         ("content surface", Palette::CONTENT_BG),
-        ("sidebar", Palette::SIDEBAR),
     ] {
         let ratio = contrast(Palette::INK_3, surface);
         println!("INK_3 on {surface_name}: {ratio:.3}:1");
@@ -530,9 +519,9 @@ fn the_raised_ladder_is_strictly_ordered_and_each_rung_steps_up_from_its_own_hos
 }
 
 const RAIL_PAINTERS: [(&str, &str, &str); 1] = [(
-    "ui/sidebar.rs",
-    include_str!("../src/ui/sidebar.rs"),
-    "paint_active_band",
+    "ui/branch_tree_view.rs",
+    include_str!("../src/ui/branch_tree_view.rs"),
+    "fn branch_row(",
 )];
 
 const RAIL_PAINTER_SRC: &str = include_str!("../src/ui/components.rs");
@@ -587,13 +576,10 @@ fn the_rail_width_is_a_named_dimension_defined_exactly_once_in_the_token_layer()
         "the rail painter must take its width from theme::RAIL_WIDTH — that is \
          what 'defined exactly once' means at the paint site"
     );
-    let brand_strokes: Vec<&str> = [
-        ("ui/sidebar.rs", include_str!("../src/ui/sidebar.rs")),
-        (
-            "ui/diff/actions.rs",
-            include_str!("../src/ui/diff/actions.rs"),
-        ),
-    ]
+    let brand_strokes: Vec<&str> = [(
+        "ui/diff/actions.rs",
+        include_str!("../src/ui/diff/actions.rs"),
+    )]
     .into_iter()
     .filter(|(_, src)| src.contains("Stroke::new(2.0, Palette::BRAND)"))
     .map(|(file, _)| file)
@@ -961,14 +947,6 @@ fn p0_repo_state_shared_mapping_is_app_wide() {
     for (state, color) in expected {
         assert_eq!(state.color(), color, "{state:?}");
     }
-    assert_eq!(
-        turbogit_ui::ui::sidebar::dot_color(RepoState::Dirty),
-        Palette::COUNTER
-    );
-    assert_eq!(
-        turbogit_ui::ui::sidebar::dot_color(RepoState::Diverged),
-        Palette::STATUS_DIVERGED
-    );
     assert_eq!(RepoState::Clean.words(), "");
     assert_eq!(RepoState::Dirty.words(), "dirty");
     assert_eq!(RepoState::Conflict.words(), "has conflicts");
@@ -1353,47 +1331,6 @@ fn the_diverged_status_names_the_error_red_and_the_other_statuses_do_not_borrow_
 }
 
 #[test]
-fn the_sidebar_surface_is_a_dedicated_painted_fill_and_not_an_alias() {
-    let sidebar = Palette::SIDEBAR;
-    let bg = Palette::BG;
-    println!(
-        "sidebar over the app background: {:.3}:1",
-        contrast(sidebar, bg)
-    );
-    assert!(
-        luminance(sidebar) < luminance(bg),
-        "the rail must be darker than the app background it sits beside"
-    );
-    assert!(
-        contrast(sidebar, bg) > 1.0,
-        "…by a visible step rather than a hair, or the rail is not a surface"
-    );
-    for shell_surface in [
-        Palette::BG,
-        Palette::SURFACE,
-        Palette::SURFACE_2,
-        Palette::SURFACE_3,
-    ] {
-        assert_ne!(
-            sidebar, shell_surface,
-            "sidebar must be a distinct surface token, not an alias of {shell_surface:?}"
-        );
-    }
-    for (role, fill) in [
-        ("SURFACE", Palette::SURFACE),
-        ("SURFACE_2", Palette::SURFACE_2),
-        ("SURFACE_3", Palette::SURFACE_3),
-    ] {
-        assert!(
-            luminance(fill) > luminance(sidebar),
-            "{role} is painted inside the rail and must read above it"
-        );
-    }
-    assert_eq!(Palette::BG, Color32::from_rgb(0x1e, 0x1f, 0x22));
-    assert_eq!(Palette::SURFACE, Color32::from_rgb(0x2b, 0x2d, 0x30));
-}
-
-#[test]
 fn the_selection_fill_is_solid_and_the_focus_composite_is_not_it() {
     assert!(
         Palette::SELECTION.is_opaque(),
@@ -1680,7 +1617,6 @@ const TOKEN_INVENTORY: &[&str] = &[
     "DIFF_ADD_UNSTAGED_TEXT",
     "DIFF_DEL_UNSTAGED_BG",
     "DIFF_DEL_UNSTAGED_TEXT",
-    "SIDEBAR",
     "SECTION_TINT",
     "MARKER_TINT",
     "FILE_ROW_HEIGHT",
@@ -1717,7 +1653,6 @@ const TOKEN_INVENTORY: &[&str] = &[
     "TYPE_WORDMARK",
     "TYPE_TAGLINE",
     "TYPE_STATISTIC",
-    "INDENT_STEPS_PER_LEVEL",
     "JETBRAINS_MONO_REGULAR",
     "JETBRAINS_MONO_BOLD",
     "NOTO_SANS_SC_REGULAR",

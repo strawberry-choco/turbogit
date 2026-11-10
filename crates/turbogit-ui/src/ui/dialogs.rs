@@ -414,7 +414,7 @@ fn new_branch_base_value(ui: &mut Ui, state: &AppState) {
 }
 
 fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
-    let root = state.selected_root.as_ref()?;
+    let root = state.ui.dlg.new_branch.root.as_ref()?;
     let commits = state
         .caches
         .log(root)
@@ -439,7 +439,12 @@ fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
 }
 
 fn current_branch_name(state: &AppState) -> Option<String> {
-    let id = state.selected_root.as_ref()?;
+    let id = state
+        .ui
+        .dlg
+        .merge_root
+        .as_ref()
+        .or_else(|| state.ui.dlg.repo_scope.first())?;
     state.multi.by_id(id)?.current_branch.clone()
 }
 
@@ -449,7 +454,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
         .dlg
         .merge_root
         .clone()
-        .or_else(|| state.selected_root.clone());
+        .or_else(|| state.ui.dlg.repo_scope.first().cloned());
     let branches: Vec<String> = root
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
@@ -641,7 +646,7 @@ fn cascade_banner(ui: &mut Ui, state: &mut AppState, root: Option<&RootId>, sibl
 }
 
 fn rebase(ui: &mut Ui, state: &mut AppState) {
-    let root = state.selected_root.clone();
+    let root = state.ui.dlg.repo_scope.first().cloned();
     let current = root
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
@@ -871,8 +876,10 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                         "A {} is already in progress in {}",
                         operation.label(),
                         state
-                            .selected_root
-                            .as_ref()
+                            .ui
+                            .dlg
+                            .repo_scope
+                            .first()
                             .map(|root| root.as_path().display_name_or(""))
                             .unwrap_or_else(|| "this repository".to_string())
                     )
@@ -1035,28 +1042,19 @@ fn onto_base_field(
 
 fn rebase_banner(
     ui: &mut Ui,
-    state: &mut AppState,
-    root: Option<&RootId>,
+    _state: &mut AppState,
+    _root: Option<&RootId>,
     commits: usize,
     repos: usize,
 ) {
     widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
-        ui.horizontal(|ui| {
-            ui.colored_label(
-                Palette::STATE_WARNING,
-                format!(
-                    "⚠ Rewrites {commits} commits across {}",
-                    counted(repos, "repo", "repos")
-                ),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("View affected →").clicked()
-                    && let Some(root) = root
-                {
-                    state.open_rebase_affected_list(root);
-                }
-            });
-        });
+        ui.colored_label(
+            Palette::STATE_WARNING,
+            format!(
+                "⚠ Rewrites {commits} commits across {}",
+                counted(repos, "repo", "repos")
+            ),
+        );
     });
 }
 
@@ -1066,7 +1064,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
         .dlg
         .tag_root
         .clone()
-        .or_else(|| state.selected_root.clone());
+        .or_else(|| state.ui.dlg.repo_scope.first().cloned());
     if state.ui.dlg.tag_existing.is_none() {
         state.ui.dlg.tag_existing = root.as_ref().and_then(|root| state.tag_names(root));
     }

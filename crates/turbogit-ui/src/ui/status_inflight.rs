@@ -106,10 +106,11 @@ fn held_by(state: &AppState) -> Vec<InFlight> {
 /// arbitrary root.
 pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, OwnedOperation)> {
     let found = held_by(state);
+    let selected = state.selected_change_roots();
     let offers = |item: &InFlight| LifecycleVerb::offered_for(item.owner).contains(&verb);
     found
         .iter()
-        .find(|item| state.ui.repo_selection.contains(&item.root) && offers(item))
+        .find(|item| selected.contains(&item.root) && offers(item))
         .or_else(|| found.iter().find(|item| offers(item)))
         .map(|item| (item.root.clone(), item.owner))
 }

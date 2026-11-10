@@ -12,7 +12,7 @@ use test_support::harness::{
 };
 use test_support::wait_until;
 use turbogit_app::state::{AppState, Dialog};
-use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
+use turbogit_domain::model::{RebaseMode, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
 fn commit(dir: &Path, name: &str, text: &str) {
@@ -245,7 +245,7 @@ fn autosquash_mode_forces_the_flag_in_the_dispatch() {
 }
 
 #[test]
-fn cross_repo_banner_names_the_rewrite_and_view_affect_scopes_the_selection() {
+fn cross_repo_banner_names_the_rewrite() {
     let tmp = tempfile::tempdir().unwrap();
     let focused = rebase_repo(tmp.path(), "focused");
     let sibling = rebase_repo(tmp.path(), "sibling");
@@ -260,13 +260,6 @@ fn cross_repo_banner_names_the_rewrite_and_view_affect_scopes_the_selection() {
     h.run();
 
     assert_painted(&h, "Rewrites 2 commits across 2 repos");
-    dialog_node(&h, "View affected →").click();
-    h.run();
-
-    let selection = h.state().ui.repo_selection.clone();
-    assert_eq!(selection.len(), 1);
-    assert!(selection.contains(&RootId(sibling.to_path_buf().into())));
-    assert_eq!(h.state().ui.dialog, None);
 }
 
 #[test]

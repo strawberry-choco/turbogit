@@ -74,10 +74,6 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
     panic!("condition was not met within 1000 frames");
 }
 
-fn alpha_id(alpha: &Path) -> turbogit_domain::model::RootId {
-    turbogit_domain::model::RootId(alpha.to_path_buf().into())
-}
-
 #[test]
 fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     let (project, alpha, _ui) = two_repo_project("render");
@@ -85,8 +81,6 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select repo alpha").click();
-    settle(&mut h);
     h.get_by_label("Pull all").click();
     settle(&mut h);
     h.get_by_label("Run on 1 of 1").click();
@@ -116,8 +110,6 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select repo alpha").click();
-    settle(&mut h);
     h.get_by_label("Fetch all").click();
     settle(&mut h);
     h.get_by_label("Run on 1 of 1").click();
@@ -141,7 +133,6 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     h.get_by_label("Resolve alpha").click();
     settle(&mut h);
 
-    assert_eq!(h.state().selected_root, Some(alpha_id(&alpha)));
     assert!(h.state().ui.bulk_run.is_none());
     assert_not_painted(&h, "Stop remaining");
 }
@@ -165,8 +156,6 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select repo alpha").click();
-    settle(&mut h);
     h.get_by_label("Fetch all").click();
     settle(&mut h);
     h.get_by_label("Run on 1 of 1").click();
@@ -176,7 +165,6 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     h.get_by_label("Resolve alpha").click();
     settle(&mut h);
 
-    assert_eq!(h.state().selected_root, Some(alpha_id(&alpha)));
     assert!(h.state().ui.conflict_open.is_some(), "resolver opened");
     assert_painted(&h, "Merge: base.txt");
 }
@@ -188,8 +176,6 @@ fn retry_skipped_redispatches_the_skipped_repo_from_the_monitor() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
-    settle(&mut h);
     h.get_by_label("Stash all").click();
     settle(&mut h);
     h.get_by_label("Run on 1 of 2").click();

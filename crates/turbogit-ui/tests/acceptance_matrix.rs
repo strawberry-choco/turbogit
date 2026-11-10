@@ -301,7 +301,7 @@ fn capture_recents() -> Vec<RecentProject> {
 }
 
 fn seed_worktree_and_submodule_panes(state: &mut AppState) {
-    let root = state.selected_root.clone().expect("a focused root");
+    let root = state.multi.roots[0].id.clone();
     let worktrees: Vec<Worktree> = [
         ("~/dev/wt-hotfix", "hotfix/4412", Some(true)),
         ("~/dev/wt-review", "review/qa", Some(false)),
@@ -347,10 +347,9 @@ fn seed_worktree_and_submodule_panes(state: &mut AppState) {
             root,
         },
     ];
-    state.caches.store_submodules(
-        state.selected_root.clone().expect("a focused root"),
-        submodules,
-    );
+    state
+        .caches
+        .store_submodules(state.multi.roots[0].id.clone(), submodules);
 }
 
 #[test]
@@ -464,7 +463,7 @@ fn acceptance_matrix_screenshots() {
     // filter, and a page painted after it would inherit that interaction state.
     h.state_mut().ui.settings_open = false;
     settle(&mut h);
-    let root = h.state().selected_root.clone();
+    let root = h.state().multi.roots.first().map(|r| r.id.clone());
     h.state_mut()
         .open_new_branch(root, NewBranchBase::Head, true, None);
     settle(&mut h);
@@ -496,7 +495,7 @@ fn acceptance_matrix_screenshots() {
     assert!(
         h.state()
             .caches
-            .worktrees(&h.state().selected_root.clone().expect("a focused root"))
+            .worktrees(&h.state().multi.roots[0].id)
             .is_some(),
         "the Worktrees pane's rows should be in the cache before it is captured"
     );
@@ -517,7 +516,6 @@ fn acceptance_matrix_screenshots() {
     let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
     state.ui.recent_projects = capture_recents();
     state.ui.workspace_picker_open = true;
-    state.ui.workspace_picker_anchor = Some((12.0, 34.0));
     let mut h = harness(state);
     settle(&mut h);
     assert!(

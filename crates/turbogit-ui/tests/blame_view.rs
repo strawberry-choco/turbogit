@@ -67,6 +67,14 @@ fn seeded_project() -> Seed {
 }
 
 fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
+    log_harness_with(seed, true)
+}
+
+/// A harness whose frames never drain the event channel, so a keyed read's
+/// answer is held: the surface stays on `Read::Waiting` for as many frames as
+/// the test cares to step. Used to assert a waiting presentation without
+/// racing a real worker.
+fn log_harness_with(seed: &Seed, drain: bool) -> Harness<'static, AppState> {
     let mut state = AppState::new(seed.project.clone());
     assert_eq!(state.multi.roots.len(), 1, "one root discovered");
     let engine = CliExecutor {
@@ -94,16 +102,17 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
                 install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            state.drain_events();
+            if drain {
+                state.drain_events();
+            }
             turbogit_ui::ui::render(ui, state);
         },
         state,
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
-    settle_reads(&mut harness);
+    harness.set_size(egui::vec2(1280.0, 800.0));
+    if drain {
+        settle_reads(&mut harness);
+    }
     harness
 }
 
@@ -195,22 +204,19 @@ fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
 #[test]
 fn blame_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
     let seed = seeded_project();
-    let mut harness = log_harness(&seed);
+    // No frame drains the event channel, so the blame answer is held and the
+    // read cannot settle however many frames pass.
+    let mut harness = log_harness_with(&seed, false);
     harness.state_mut().ui.blame = Some(turbogit_app::state::BlameTarget {
-        root: harness
-            .state()
-            .selected_root
-            .clone()
-            .expect("selected root"),
+        root: harness.state().multi.roots[0].id.clone(),
         path: seed.project.join("alpha/file.txt"),
         rev: seed.c2.clone(),
     });
-    // Two steps, not one: the window's first frame after opening is egui's
-    // fade-in at zero opacity, which paints nothing at all, so the body (and
-    // the keyed read that drives it) first runs on frame two. A third frame
-    // would race the real worker's BlameReady.
-    harness.step();
-    harness.step();
+    // The answer is never drained, so any number of frames (the window's fade
+    // included) still paints the waiting verdict.
+    for _ in 0..10 {
+        harness.step();
+    }
     assert_painted(&harness, "Computing blame…");
 }
 
@@ -219,11 +225,7 @@ fn blame_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     let target = turbogit_app::state::BlameTarget {
-        root: harness
-            .state()
-            .selected_root
-            .clone()
-            .expect("selected root"),
+        root: harness.state().multi.roots[0].id.clone(),
         path: seed.project.join("alpha/file.txt"),
         rev: seed.c2.clone(),
     };
@@ -245,11 +247,7 @@ fn blame_renders_a_page_owned_empty_message_for_an_empty_read() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     let target = turbogit_app::state::BlameTarget {
-        root: harness
-            .state()
-            .selected_root
-            .clone()
-            .expect("selected root"),
+        root: harness.state().multi.roots[0].id.clone(),
         path: seed.project.join("alpha/file.txt"),
         rev: seed.c2.clone(),
     };

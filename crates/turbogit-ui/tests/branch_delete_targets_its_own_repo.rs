@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use test_support::git_seed::git;
 use test_support::harness::{KITTEST_DEFAULT_BOX, painted_text, settle_quiet, shell_harness_over};
 use turbogit_app::state::{AppState, Tab};
-use turbogit_domain::model::{BranchKind, RootId};
+use turbogit_domain::model::BranchKind;
 
 fn repo(project: &Path, name: &str, branches: &[&str]) -> PathBuf {
     let dir = project.join(name);
@@ -39,11 +39,10 @@ fn listed(dir: &Path, branch: &str) -> bool {
 fn loaded() -> (TempDir, PathBuf, Harness<'static, AppState>) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    let alpha = repo(&project, "alpha", &["shared", "alpha-only"]);
+    repo(&project, "alpha", &["shared", "alpha-only"]);
     repo(&project, "beta", &["shared", "beta-only"]);
 
-    let mut state = AppState::new(project.clone());
-    state.selected_root = Some(RootId(alpha.as_path().into()));
+    let state = AppState::new(project.clone());
     let mut harness = shell_harness_over(state, KITTEST_DEFAULT_BOX);
     harness.set_size(egui::vec2(1200.0, 900.0));
     harness.state_mut().ui.tab = Tab::Branches;
@@ -124,9 +123,7 @@ fn a_delete_empties_the_repo_of_its_own_row() {
 
     assert!(
         !listed(&beta, "beta-only"),
-        "`beta-only` survived, so the delete went somewhere else. \
-         selected_root={:?}, painted={:?}",
-        harness.state().selected_root,
+        "`beta-only` survived, so the delete went somewhere else. painted={:?}",
         painted_text(&harness)
     );
     assert!(

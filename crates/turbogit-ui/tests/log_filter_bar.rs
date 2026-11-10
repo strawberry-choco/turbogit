@@ -11,10 +11,13 @@ use test_support::harness::{
     assert_painted, filled_circles, filled_rects, painted_galleys, painted_text,
     repo_shell_harness, settle_quiet, settle_reads, shell_harness_over,
 };
+use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::log_filters::{DateFilter, Fold, RefGroup, RootFilter};
 use turbogit_app::root_caches::{LogRead, LogScope};
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, Tab};
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine_api::GitExecutor;
 
 fn log_harness() -> Harness<'static, AppState> {
     let (mut harness, _tmp) = repo_shell_harness();
@@ -251,6 +254,24 @@ const ALL_REPOS: &str = "All repositories";
 /// the bare repository as a second root and paint a second set of rows.
 fn seeded_log_harness(project: &Path, roots: &[PathBuf]) -> Harness<'static, AppState> {
     let mut state = AppState::for_roots(project, roots);
+    // `for_roots` registers roots without reading history, and the Log page asks
+    // for the plain window only through a refresh. Seed it the way the other log
+    // suites do, so commit rows (and their root stripes) exist to assert on.
+    let engine = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    for root in state.multi.roots.clone() {
+        let commits = engine.log(&root.path, &LogOpts::default()).expect("log");
+        state
+            .tx
+            .send(AppEvent::LogLoaded {
+                root: root.id.clone(),
+                commits: Ok(commits),
+                mode: LogBatchMode::Replace,
+            })
+            .expect("send LogLoaded");
+    }
+    state.drain_events();
     state.ui.tab = Tab::Log;
     let mut harness = shell_harness_over(state, egui::vec2(1600.0, 1000.0));
     settle_quiet(&mut harness);
@@ -678,7 +699,6 @@ fn a_pick_switches_every_selected_repository_that_carries_the_rev() {
     let mut harness = seeded_log_harness(&project, &[alpha, beta]);
     let alpha_id = root_id(harness.state(), "alpha");
     let beta_id = root_id(harness.state(), "beta");
-    harness.state_mut().selected_root = Some(alpha_id.clone());
     settle_quiet(&mut harness);
 
     open_branch_dropdown(&mut harness);
@@ -688,11 +708,6 @@ fn a_pick_switches_every_selected_repository_that_carries_the_rev() {
         harness.state().ui.log_ref_scope,
         Some("topic".to_owned()),
         "the name is the scope"
-    );
-    assert_eq!(
-        harness.state().selected_root,
-        Some(alpha_id.clone()),
-        "the Branch dropdown never writes the selection"
     );
     assert_scope_read_settled(&harness, &alpha_id, "topic");
     assert_scope_read_settled(&harness, &beta_id, "topic");
@@ -988,7 +1003,6 @@ fn the_new_branch_base_preview_reads_the_selected_repository() {
     let alpha = repo_with_topic_work(&project, "alpha", "topic head work");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     let root = state.multi.roots[0].id.clone();
-    state.selected_root = Some(root.clone());
     state.ui.log_ref_scope = Some("topic".to_owned());
     state.ensure_log(&root, LogScope::Ref("topic".to_owned()));
     state.drain_events();

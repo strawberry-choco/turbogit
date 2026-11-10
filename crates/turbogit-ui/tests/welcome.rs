@@ -189,10 +189,6 @@ fn open_card_opens_a_real_repository_into_the_shell() {
     );
     assert_eq!(s.multi.roots.len(), 1, "the opened repo is registered");
     assert_eq!(s.multi.roots[0].id.as_path(), repo.as_path());
-    assert_eq!(
-        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
-        Some(repo)
-    );
     assert_not_painted(&fx.harness, "A fast, keyboard-friendly Git client");
     wait_painted(&mut fx.harness, "1 total", "opened repo status aggregate");
 }
@@ -845,10 +841,6 @@ fn clicking_a_recent_reopens_the_project() {
 
     let s = harness.state();
     assert!(!s.show_welcome(), "clicking a recent must enter the shell");
-    assert_eq!(
-        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
-        Some(repo)
-    );
     assert!(!s.ui.welcome_visible);
 }
 
@@ -1210,10 +1202,6 @@ fn clone_card_clones_full_history_from_a_local_path_into_the_picked_destination(
     assert!(!s.show_welcome(), "a successful clone enters the shell");
     assert_eq!(s.multi.roots.len(), 1);
     assert_eq!(s.multi.roots[0].id.as_path(), dest.as_path());
-    assert_eq!(
-        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
-        Some(dest.clone())
-    );
     assert!(
         s.ui.welcome_clone_url.is_empty(),
         "URL input resets on success"

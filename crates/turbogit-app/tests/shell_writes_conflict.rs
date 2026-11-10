@@ -78,7 +78,7 @@ fn unmerged(work: &Path) -> String {
 }
 
 fn status_of(state: &AppState) -> RootStatus {
-    let id = state.selected_root.clone().unwrap();
+    let id = state.multi.roots[0].id.clone();
     state.multi.by_id(&id).unwrap().status.clone()
 }
 
@@ -87,7 +87,7 @@ fn accept_ours_entry_stages_our_side() {
     let tmp = tempfile::tempdir().unwrap();
     let work = conflicted(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::accept_ours(&root, Path::new("conf.txt"));
     assert_eq!(op.label(), "Accept ours");
@@ -103,7 +103,7 @@ fn accept_theirs_entry_stages_their_side() {
     let tmp = tempfile::tempdir().unwrap();
     let work = conflicted(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::accept_theirs(&root, Path::new("conf.txt"));
     assert_eq!(op.label(), "Accept theirs");
@@ -118,7 +118,7 @@ fn apply_merge_resolution_entry_writes_and_stages_the_composed_content() {
     let tmp = tempfile::tempdir().unwrap();
     let work = conflicted(tmp.path());
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
 
     let op = writes::apply_merge_resolution(&root, Path::new("conf.txt"), "both\n");
     assert_eq!(op.label(), "Apply merge resolution");
@@ -140,7 +140,7 @@ fn resolve_simple_entry_stages_every_agreed_conflict() {
     let work = conflicted(tmp.path());
     with_a_simple_conflict(&work);
     let mut state = state_for(&work);
-    let root = state.selected_root.clone().unwrap();
+    let root = state.multi.roots[0].id.clone();
     let status = status_of(&state);
     assert!(
         status.conflicted.iter().any(|p| p.ends_with("simple.txt")),

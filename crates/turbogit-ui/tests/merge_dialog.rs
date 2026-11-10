@@ -251,12 +251,7 @@ fn cascade_banner_names_the_sibling_repos_and_view_plan_opens_the_preflight() {
 
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Merge));
     assert_eq!(
-        h.state()
-            .ui
-            .repo_selection
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>(),
+        h.state().ui.bulk_scope.clone(),
         vec![RootId(sibling.clone().into())],
     );
     assert_painted(&h, "sibling");

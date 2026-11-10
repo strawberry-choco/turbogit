@@ -11,6 +11,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let mut open = true;
     egui::Window::new("Manage remotes")
         .open(&mut open)
+        // A near-minimal seed makes the first frame measure the content; egui's
+        // default 420 outer height would otherwise clip the footer below the
+        // selector band and the per-root remote lists.
+        .resizable(false)
+        .default_height(32.0)
         .show(&ctx, |ui| {
             super::dialogs::repo_scope_band(ui, state);
             manage_remotes(ui, state);

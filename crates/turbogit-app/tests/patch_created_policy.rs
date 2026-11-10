@@ -47,7 +47,6 @@ fn fixture(policy: PatchCreatedPolicy) -> Fixture {
         },
     );
     let id = state.multi.roots[0].id.clone();
-    state.selected_root = Some(id.clone());
     let d = &mut state.ui.dlg;
     d.create_patch_root = Some(id);
     d.create_patch_origin = Some(PatchOrigin::LocalChanges { paths: Vec::new() });

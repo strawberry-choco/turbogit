@@ -10,7 +10,7 @@ fn state_for(project: &Path, first: &Path, second: &Path) -> AppState {
 }
 
 fn star_of(state: &AppState, name: &str) -> Option<bool> {
-    let id = state.selected_root.clone()?;
+    let id = state.multi.roots.first()?.id.clone();
     state
         .multi
         .by_id(&id)?

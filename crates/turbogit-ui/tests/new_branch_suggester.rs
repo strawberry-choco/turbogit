@@ -204,7 +204,14 @@ fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&Ap
 }
 
 fn local_branches(harness: &Harness<'_, AppState>) -> Vec<String> {
-    let root = harness.state().selected_root.clone().expect("a root");
+    let root = harness
+        .state()
+        .multi
+        .roots
+        .first()
+        .expect("a root")
+        .id
+        .clone();
     harness
         .state()
         .multi

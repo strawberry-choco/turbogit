@@ -54,10 +54,10 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 
 fn open_onto(h: &mut Harness<'_, AppState>, root: &Path) {
     let root_id = RootId(root.to_path_buf().into());
-    h.state_mut().selected_root = Some(root_id);
     h.state_mut().ui.dlg.rebase_mode = RebaseMode::Standard;
     h.state_mut().ui.dlg.rebase_onto_enabled = true;
-    h.state_mut().open_dialog(Dialog::Rebase, None);
+    h.state_mut()
+        .open_dialog(Dialog::Rebase, Some(std::slice::from_ref(&root_id)));
     h.run();
 }
 
@@ -136,7 +136,6 @@ fn the_two_bases_hide_until_onto_is_enabled() {
     let repo = rebase_repo(tmp.path(), "repo");
     let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(repo.to_path_buf().into()));
     h.state_mut().ui.dialog = Some(Dialog::Rebase);
     h.run();
 

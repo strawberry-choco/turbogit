@@ -1,14 +1,14 @@
 use egui::accesskit::Role;
-use egui::epaint::color::ColorMode;
-use egui::{Color32, Shape};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, Node};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
-use test_support::harness::{assert_not_painted, assert_painted, settle, shell_harness_over};
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, painted_galleys, settle, shell_harness_over,
+};
 use turbogit_app::recents::{RecentKind, RecentProject, Recents, recents_file, save};
 use turbogit_app::state::{AppState, ToastKind};
-use turbogit_ui::theme::{ITEM_SPACING, Palette};
+use turbogit_ui::theme::Palette;
 
 fn seed_repo(base: &Path, name: &str) -> PathBuf {
     let dir = base.join(name);
@@ -256,12 +256,7 @@ fn current_workspace_row_is_marked_and_inert() {
     fx.harness.state_mut().attach_workspace(&ws);
     settle(&mut fx.harness);
 
-    let root_id = fx
-        .harness
-        .state()
-        .selected_root
-        .clone()
-        .expect("a focused root after attaching");
+    let root_id = fx.harness.state().multi.roots[0].id.clone();
     fx.harness
         .state_mut()
         .caches
@@ -271,7 +266,6 @@ fn current_workspace_row_is_marked_and_inert() {
     settle(&mut fx.harness);
 
     let before_dir = fx.harness.state().project_dir.clone();
-    let before_selected = fx.harness.state().selected_root.clone();
     let before_cache = fx
         .harness
         .state()
@@ -286,10 +280,6 @@ fn current_workspace_row_is_marked_and_inert() {
     assert_eq!(
         s.project_dir, before_dir,
         "clicking the current row must not re-dispatch"
-    );
-    assert_eq!(
-        s.selected_root, before_selected,
-        "clicking the current row must not reset the focused root"
     );
     assert_eq!(
         s.caches.ahead_behind(&root_id),
@@ -457,10 +447,6 @@ fn palette_entry_opens_the_same_picker() {
         "the palette entry opens the picker"
     );
     assert!(
-        s.ui.workspace_picker_anchor.is_none(),
-        "the palette route has no trigger anchor"
-    );
-    assert!(
         !s.ui.command_palette,
         "picking a palette entry closes the palette"
     );
@@ -468,8 +454,8 @@ fn palette_entry_opens_the_same_picker() {
 }
 
 #[track_caller]
-fn header<'t>(harness: &'t Harness<'_, AppState>) -> Node<'t> {
-    button(harness, "Switch workspace")
+fn project_button<'t>(harness: &'t Harness<'_, AppState>) -> Node<'t> {
+    button(harness, "Switch project")
 }
 
 /// A real press-and-release at `pos`, the way egui sees a mouse click.
@@ -482,30 +468,8 @@ fn click_at(harness: &mut Harness<'_, AppState>, pos: egui::Pos2) {
     settle(harness);
 }
 
-/// The inks stroked by the row's glyphs inside `band`, the brand folder icon
-/// and the chevron. Text paints as galleys, so this is the icon vocabulary.
-fn glyph_inks(harness: &Harness<'_, AppState>, band: egui::Rect) -> Vec<Color32> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Path(path)
-                if !path.points.is_empty()
-                    && path.points.iter().all(|p| band.expand(2.0).contains(*p)) =>
-            {
-                match path.stroke.color {
-                    ColorMode::Solid(color) => Some(color),
-                    ColorMode::UV(_) => None,
-                }
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
-fn clicking_the_sidebar_header_opens_the_picker() {
+fn the_project_button_opens_the_picker() {
     let scratch = tempfile::tempdir().unwrap();
     let current = seed_repo(scratch.path(), "current");
     let (ws, _, _) = seed_workspace(scratch.path());
@@ -518,30 +482,12 @@ fn clicking_the_sidebar_header_opens_the_picker() {
     assert_not_painted(&fx.harness, "Open Project…");
     assert!(!fx.harness.state().ui.workspace_picker_open);
 
-    let band = header(&fx.harness).rect();
-    assert_eq!(
-        band.width(),
-        turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        "the header's hit target spans the full rail, insets included"
-    );
+    let band = project_button(&fx.harness).rect();
+    click_at(&mut fx.harness, band.center());
 
-    let aim = egui::Pos2::new(band.right() - 70.0, band.center().y);
-
-    click_at(&mut fx.harness, aim);
-
-    let s = fx.harness.state();
     assert!(
-        s.ui.workspace_picker_open,
-        "the header click opens the picker"
-    );
-    let (x, y) =
-        s.ui.workspace_picker_anchor
-            .expect("the header click anchors the dropdown to the row");
-    assert!(
-        (x - band.left()).abs() < 0.5 && (y - (band.bottom() + ITEM_SPACING.y)).abs() < 0.5,
-        "the anchor hangs the dropdown from the row's bottom-left; got ({x}, {y}), want ({}, {})",
-        band.left(),
-        band.bottom() + ITEM_SPACING.y
+        fx.harness.state().ui.workspace_picker_open,
+        "the project button opens the picker"
     );
 
     assert_painted(&fx.harness, "ws");
@@ -553,37 +499,50 @@ fn clicking_the_sidebar_header_opens_the_picker() {
 }
 
 #[test]
-fn hovering_the_sidebar_header_offers_the_switch() {
+fn hovering_the_project_button_paints_the_ghost_hover_state() {
     let scratch = tempfile::tempdir().unwrap();
     let repo = seed_repo(scratch.path(), "alpha");
     let mut fx = fixture_at_wide(repo, &[]);
     settle(&mut fx.harness);
 
-    let band = header(&fx.harness).rect();
-    let aim = egui::Pos2::new(band.right() - 70.0, band.center().y);
-    let resting = glyph_inks(&fx.harness, band);
+    let node = project_button(&fx.harness);
+    assert_eq!(
+        node.accesskit_node().role(),
+        Role::Button,
+        "the project trigger answers as a button, which is the semantics that \
+         makes it read as clickable"
+    );
+    let band = node.rect();
     assert!(
-        resting.contains(&Palette::INK_3) && resting.contains(&Palette::BRAND),
-        "the row paints the muted chevron and the brand folder; got {resting:?}"
+        !filled_rects(&fx.harness)
+            .iter()
+            .any(|(rect, fill)| *fill == Palette::SURFACE_2 && band.contains_rect(*rect)),
+        "the ghost button rests transparent, so its hover fill is the only \
+         pointer affordance it offers"
     );
 
-    fx.harness.hover_at(aim);
+    fx.harness.hover_at(band.center());
     // The tooltip waits for a still pointer, so hold the hover for a beat.
     for _ in 0..6 {
         fx.harness.step();
     }
 
-    let hovering = glyph_inks(&fx.harness, band);
     assert!(
-        hovering.contains(&Palette::INK_2) && !hovering.contains(&Palette::INK_3),
-        "the chevron steps one up the ink ramp on hover; got {hovering:?}"
+        filled_rects(&fx.harness)
+            .iter()
+            .any(|(rect, fill)| *fill == Palette::SURFACE_2 && band.contains_rect(*rect)),
+        "the ghost button takes its hover fill while the pointer is over it, which \
+         is the affordance it offers in place of a hand cursor"
     );
+    let label = painted_galleys(&fx.harness)
+        .into_iter()
+        .find(|g| band.contains_rect(g.rect))
+        .expect("the project button paints its project name");
     assert_eq!(
-        fx.harness.output().platform_output.cursor_icon,
-        egui::CursorIcon::PointingHand,
-        "the row asks for the hand, so it reads as clickable"
+        label.color,
+        Palette::INK,
+        "a hovered ghost button steps its ink up from INK_2 to INK"
     );
-    assert_painted(&fx.harness, "Switch workspace");
     assert!(
         !fx.harness.state().ui.workspace_picker_open,
         "a hover is not a click"
@@ -591,18 +550,17 @@ fn hovering_the_sidebar_header_offers_the_switch() {
 }
 
 #[test]
-fn clicking_the_header_again_closes_the_picker() {
+fn clicking_the_project_button_again_closes_the_picker() {
     let scratch = tempfile::tempdir().unwrap();
     let repo = seed_repo(scratch.path(), "alpha");
     let mut fx = fixture_at_wide(repo, &[]);
     settle(&mut fx.harness);
 
-    let band = header(&fx.harness).rect();
-    let aim = egui::Pos2::new(band.left() + 150.0, band.center().y);
+    let aim = project_button(&fx.harness).rect().center();
     click_at(&mut fx.harness, aim);
     assert!(
         fx.harness.state().ui.workspace_picker_open,
-        "the header opens the picker"
+        "the project button opens the picker"
     );
     assert_painted(&fx.harness, "Open Project…");
 
@@ -616,14 +574,13 @@ fn clicking_the_header_again_closes_the_picker() {
 }
 
 #[test]
-fn a_third_click_on_the_header_reopens_the_picker() {
+fn a_third_click_on_the_project_button_reopens_the_picker() {
     let scratch = tempfile::tempdir().unwrap();
     let repo = seed_repo(scratch.path(), "alpha");
     let mut fx = fixture_at_wide(repo, &[]);
     settle(&mut fx.harness);
 
-    let band = header(&fx.harness).rect();
-    let aim = egui::Pos2::new(band.left() + 150.0, band.center().y);
+    let aim = project_button(&fx.harness).rect().center();
 
     click_at(&mut fx.harness, aim);
     assert_painted(&fx.harness, "Open Project…");

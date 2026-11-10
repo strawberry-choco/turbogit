@@ -258,18 +258,6 @@ pub fn rename_gate(
     })
 }
 
-pub fn widget(ui: &mut Ui, state: &mut AppState) {
-    let branch = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .and_then(|r| r.current_branch.clone())
-        .unwrap_or_else(|| "<detached>".to_string());
-    if ui.button(format!("⎇ {branch}")).clicked() {
-        state.ui.branches_popup = true;
-    }
-}
-
 pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.branches_popup {
         return;
@@ -283,7 +271,9 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
 
-    let root_id = state.selected_root.clone();
+    // Without a global focus the popup needs a concrete repository; the
+    // selected change row (or the only root) names it.
+    let root_id = state.action_root();
     let root = root_id
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
@@ -304,12 +294,12 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             ui.separator();
 
             if widgets::compact_button(ui, "New Branch…").clicked() {
-                state.open_new_branch(state.selected_root.clone(), NewBranchBase::Head, true, None);
+                state.open_new_branch(root_id.clone(), NewBranchBase::Head, true, None);
                 state.ui.branches_popup = false;
             }
 
             let Some(root) = root else {
-                widgets::empty_state(ui, "No repository selected");
+                widgets::empty_state(ui, "Select a change to choose its repository.");
                 return;
             };
             let id = root.id.clone();
@@ -525,12 +515,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             ui.separator();
             ui.horizontal(|ui| {
                 if widgets::compact_button(ui, "+ New branch").clicked() {
-                    state.open_new_branch(
-                        state.selected_root.clone(),
-                        NewBranchBase::Head,
-                        true,
-                        None,
-                    );
+                    state.open_new_branch(root_id.clone(), NewBranchBase::Head, true, None);
                     state.ui.branches_popup = false;
                 }
                 ui.scope(|ui| {

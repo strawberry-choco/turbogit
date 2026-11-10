@@ -42,7 +42,7 @@ fn delete_branch_confirm_warns_when_ahead_and_unmerged() {
 
     {
         let st = harness.state_mut();
-        let root = st.selected_root.clone().unwrap();
+        let root = st.multi.roots[0].id.clone();
         st.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
             root,
             name: "feature".into(),
@@ -65,7 +65,7 @@ fn delete_branch_confirm_omits_warning_when_merged() {
 
     {
         let st = harness.state_mut();
-        let root = st.selected_root.clone().unwrap();
+        let root = st.multi.roots[0].id.clone();
         st.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
             root,
             name: "feature".into(),

@@ -4,7 +4,6 @@ use test_support::git_seed::{git, repo_with_one_commit};
 use test_support::harness::{assert_painted, settle, shell_harness_over_unstyled};
 use turbogit_app::bulk_history::{BulkRunRecord, RepoOutcome, RepoRecord};
 use turbogit_app::state::AppState;
-use turbogit_domain::model::RootId;
 use turbogit_services::bulk_ops::BulkOp;
 
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
@@ -48,7 +47,6 @@ fn record(id: u64, op: BulkOp, branch: &str, repos: Vec<RepoRecord>) -> BulkRunR
 
 fn state_with_history(project: &Path, roots: &[PathBuf], history: Vec<BulkRunRecord>) -> AppState {
     let mut state = AppState::for_roots(project, roots);
-    state.ui.repo_selection = roots.iter().map(|p| RootId(p.clone().into())).collect();
     state.ui.bulk_history = history;
     state
 }
@@ -79,7 +77,10 @@ fn the_history_list_renders_rows_and_details_drills_down_per_repo() {
     let mut h = harness(state);
     settle(&mut h);
 
-    assert_painted(&h, "RECENT BULK OPERATIONS");
+    h.get_by_label("Fleet history").click();
+    settle(&mut h);
+
+    assert_painted(&h, "RECENT FLEET OPERATIONS");
     assert_painted(&h, "Fetch all · 2 repos");
     assert_painted(&h, "1 ok · 1 skipped (offline remote)");
 
@@ -124,6 +125,9 @@ fn rollback_is_offered_only_for_reversible_runs_and_undoes_the_branches() {
         ],
     );
     let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("Fleet history").click();
     settle(&mut h);
 
     assert_painted(&h, "Create branch feature/x · 2 repos");

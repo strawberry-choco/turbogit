@@ -209,7 +209,7 @@ fn long_branch_names_truncate_in_the_middle_on_the_row() {
     let (_project, _dir, harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().expect("selected root");
+            let id = st.multi.roots[0].id.clone();
             if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
                 r.branches.push(turbogit_domain::model::Branch {
                     name: "feature/multi-root-executor-rewrite".into(),
@@ -408,12 +408,7 @@ fn click_selects_the_row_visibly_and_never_checks_out() {
         "the selected row is filled with the selected-row fill, rows: {row:?}"
     );
 
-    let cur = harness
-        .state()
-        .selected_root
-        .as_ref()
-        .and_then(|id| harness.state().multi.by_id(id))
-        .and_then(|r| r.current_branch.clone());
+    let cur = harness.state().multi.roots[0].current_branch.clone();
     assert_eq!(cur.as_deref(), Some("main"));
 }
 
@@ -506,9 +501,9 @@ fn every_checkout_gesture_switches_branches() {
             open_branches_over(single_repo_project(), branches_harness);
         gesture(&mut harness, branch);
         pump_until(&mut harness, what, |s| {
-            s.selected_root
-                .as_ref()
-                .and_then(|id| s.multi.by_id(id))
+            s.multi
+                .roots
+                .first()
                 .and_then(|r| r.current_branch.clone())
                 .as_deref()
                 == Some(branch)
@@ -540,7 +535,7 @@ fn fuzzy_query_matches_prefix_dots_and_multiword() {
     let (_project, _dir, mut harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().expect("selected root");
+            let id = st.multi.roots[0].id.clone();
             if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
                 r.branches.push(turbogit_domain::model::Branch {
                     name: "feature/multi-root-executor".into(),
@@ -572,7 +567,7 @@ fn query_matches_the_tip_commit_message() {
     let (_project, _dir, mut harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().expect("selected root");
+            let id = st.multi.roots[0].id.clone();
             if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
                 r.branches.push(turbogit_domain::model::Branch {
                     name: "fix/dirty-worktree".into(),
@@ -654,7 +649,7 @@ fn opening_the_tab_focuses_search_and_consumes_the_flag() {
 
 fn dirty_root(harness: &mut Harness<'_, AppState>) {
     let st = harness.state_mut();
-    let id = st.selected_root.clone().unwrap();
+    let id = st.multi.roots[0].id.clone();
     if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
         r.status.changes.push(turbogit_domain::model::Change {
             path: PathBuf::from("README.md"),
@@ -668,12 +663,7 @@ fn dirty_root(harness: &mut Harness<'_, AppState>) {
 }
 
 fn current_branch(harness: &Harness<'_, AppState>) -> Option<String> {
-    harness
-        .state()
-        .selected_root
-        .as_ref()
-        .and_then(|id| harness.state().multi.by_id(id))
-        .and_then(|r| r.current_branch.clone())
+    harness.state().multi.roots[0].current_branch.clone()
 }
 
 #[test]
@@ -711,7 +701,7 @@ fn set_aside_stashes_changes_and_returns_them_intact() {
     open_branches_tab(&mut harness);
     {
         let st = harness.state_mut();
-        let id = st.selected_root.clone().unwrap();
+        let id = st.multi.roots[0].id.clone();
         st.refresh(turbogit_app::root_caches::Affected::Root(id));
     }
     settle_quiet(&mut harness);
@@ -722,9 +712,9 @@ fn set_aside_stashes_changes_and_returns_them_intact() {
     settle_quiet(&mut harness);
     harness.get_by_label("Set aside").click();
     pump_until(&mut harness, "set-aside switches branch", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("feature-b")
@@ -758,9 +748,9 @@ fn clean_checkout_switches_and_notes_the_switch_quietly() {
     settle_quiet(&mut harness);
     harness.key_press(egui::Key::Enter);
     pump_until(&mut harness, "clean checkout switches", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("feature-a")
@@ -780,7 +770,7 @@ fn branch_checked_out_in_another_worktree_is_flagged_up_front() {
     let (_project, _dir, mut harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().unwrap();
+            let id = st.multi.roots[0].id.clone();
             st.caches.store_worktrees(
                 id.clone(),
                 vec![turbogit_domain::model::Worktree {
@@ -906,9 +896,9 @@ fn creating_a_branch_honours_the_switch_decision_it_was_given() {
         harness.get_by_label("Create").click();
 
         pump_until(&mut harness, case.what, |s| {
-            s.selected_root
-                .as_ref()
-                .and_then(|id| s.multi.by_id(id))
+            s.multi
+                .roots
+                .first()
                 .map(|r| {
                     r.current_branch.as_deref() == Some(case.expect_current)
                         && r.branches.iter().any(|b| b.name == case.name)
@@ -945,9 +935,9 @@ fn creating_a_branch_reveals_it_through_a_folded_repository() {
     harness.get_by_label("Create").click();
 
     pump_until(&mut harness, "the created branch lands", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .map(|r| r.branches.iter().any(|b| b.name == "past-the-fold"))
             .unwrap_or(false)
     });
@@ -989,9 +979,9 @@ fn rebase_from_detail_states_direction_and_runs() {
     harness.get_by_label("Rebase onto main").click();
 
     pump_until(&mut harness, "rebase onto current completes", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("feature-b")
@@ -1130,7 +1120,7 @@ fn rename_discloses_that_tracking_does_not_follow() {
     let (_project, _dir, mut harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().unwrap();
+            let id = st.multi.roots[0].id.clone();
             if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id)
                 && let Some(b) = r.branches.iter_mut().find(|b| b.name == "feature-a")
             {
@@ -1156,9 +1146,9 @@ fn rename_current_branch_keeps_the_marker_and_leaves_the_tree_untouched() {
     harness.get_by_label("Apply rename").click();
 
     pump_until(&mut harness, "current branch renamed", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .and_then(|r| r.current_branch.clone())
             .as_deref()
             == Some("main2")
@@ -1216,7 +1206,7 @@ fn delete_refuses_a_branch_checked_out_elsewhere() {
     let (_project, _dir, mut harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().unwrap();
+            let id = st.multi.roots[0].id.clone();
             st.caches.store_worktrees(
                 id.clone(),
                 vec![turbogit_domain::model::Worktree {
@@ -1332,14 +1322,11 @@ fn fetch_reports_nothing_changed_or_new_remote_branches() {
     );
     click_fetch(&mut harness);
     pump_until(&mut harness, "fetch reports new remote branch", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .is_some_and(|r| {
-                r.branches.iter().any(|b| {
-                    b.kind == turbogit_domain::model::BranchKind::Remote && b.name == "fresh-remote"
-                })
+        s.multi.roots.first().is_some_and(|r| {
+            r.branches.iter().any(|b| {
+                b.kind == turbogit_domain::model::BranchKind::Remote && b.name == "fresh-remote"
             })
+        })
     });
     let last = harness.state().ui.activity.entries.last().cloned().unwrap();
     assert!(
@@ -1361,9 +1348,9 @@ fn switching_to_a_remote_branch_creates_a_tracking_local_in_one_intent() {
         &mut harness,
         "remote checkout creates tracking local",
         |s| {
-            s.selected_root
-                .as_ref()
-                .and_then(|id| s.multi.by_id(id))
+            s.multi
+                .roots
+                .first()
                 .map(|r| {
                     r.current_branch.as_deref() == Some("remote-only")
                         && r.branches.iter().any(|b| {
@@ -1840,9 +1827,9 @@ fn keyboard_path_filter_arrow_enter_checks_out() {
 
     harness.key_press(egui::Key::Enter);
     pump_until(&mut harness, "keyboard Enter checks out zebra", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
+        s.multi
+            .roots
+            .first()
             .is_some_and(|r| r.current_branch.as_deref() == Some("zebra"))
     });
 }
@@ -2383,7 +2370,7 @@ fn an_unpulled_branch_states_its_state_beside_the_name_not_on_it() {
     let (_project, _dir, harness) =
         open_branches_over_with(single_repo_project(), branches_harness, |harness| {
             let st = harness.state_mut();
-            let id = st.selected_root.clone().expect("selected root");
+            let id = st.multi.roots[0].id.clone();
             if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
                 r.branches.push(turbogit_domain::model::Branch {
                     name: "unpulled".into(),

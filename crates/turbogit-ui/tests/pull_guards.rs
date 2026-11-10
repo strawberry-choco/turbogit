@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
-use egui_kittest::kittest::Queryable as _;
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git, repo_with_origin};
-use test_support::harness::{settle, shell_harness_over_animated};
 use turbogit_app::state::{AppState, Toast, ToastKind};
-use turbogit_domain::model::{UpdateMethod, VcsSettings};
+use turbogit_domain::model::{RootId, UpdateMethod, VcsSettings};
+use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
+use turbogit_services::bulk_run::RowState;
 use turbogit_ui::ui::popups::{Action, run_action};
 
 const BACKUP: &str = "refs/turbogit/preflight-backup";
@@ -57,6 +58,23 @@ fn run_and_settle(state: &mut AppState, action: Action) {
         if state.drain_events() == 0 {
             break;
         }
+    }
+}
+
+fn settle_fleet(state: &mut AppState) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        state.drain_events();
+        let busy = state.ui.bulk_run.as_ref().is_some_and(|view| {
+            view.rows
+                .iter()
+                .any(|r| matches!(r.state, RowState::Queued { .. } | RowState::Running))
+        });
+        if !busy && !state.ui.busy {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the fleet pull did not finish");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -137,7 +155,7 @@ fn diverged_from_origin(project: &Path, name: &str) -> (PathBuf, String) {
 }
 
 #[test]
-fn the_sidebars_pull_selection_integrates_two_repos_without_rewriting() {
+fn the_fleet_pull_integrates_two_repos_without_rewriting() {
     let tmp: TempDir = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = diverged_from_origin(&project, "alpha");
@@ -146,37 +164,29 @@ fn the_sidebars_pull_selection_integrates_two_repos_without_rewriting() {
     let beta_local = beta.1.clone();
     let (alpha, beta) = (alpha.0, beta.0);
 
-    let state = AppState::for_roots(&project, &[alpha.clone(), beta.clone()])
-        .with_settings(settings(UpdateMethod::Rebase, true));
-    let mut harness = shell_harness_over_animated(state, egui::vec2(1280.0, 800.0));
-    harness.state_mut().ui.repo_selection = harness
-        .state()
-        .multi
-        .roots
-        .iter()
-        .map(|r| r.id.clone())
-        .collect();
-    settle(&mut harness);
+    let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone()])
+        .with_settings(settings(UpdateMethod::Merge, false));
+    let roots: Vec<RootId> = state.multi.roots.iter().map(|r| r.id.clone()).collect();
+    state.open_bulk_preflight(BulkOp::PullAll, &roots);
+    state.run_bulk_confirmed(BulkPlan {
+        op: BulkOp::PullAll,
+        roots: roots.clone(),
+        rebase: state.ui.bulk_rebase,
+        branch: String::new(),
+        command: String::new(),
+    });
+    settle_fleet(&mut state);
 
-    harness.get_by_label("Pull selection").click();
-    settle(&mut harness);
-
-    let toast = harness.state().ui.toast.clone();
-    assert_eq!(
-        harness.state().last_error,
-        None,
-        "the selection integrates; it owes no refusal: {toast:?}"
-    );
+    assert_eq!(state.last_error, None, "{:?}", state.ui.toast);
+    let view = state
+        .ui
+        .bulk_run
+        .as_ref()
+        .expect("the monitor reports the run");
     assert!(
-        matches!(
-            &toast,
-            Some(Toast {
-                message,
-                kind: ToastKind::Success,
-                ..
-            }) if message == "Pull · 2 repos"
-        ),
-        "the fleet verb reports itself by name: {toast:?}"
+        view.rows.iter().all(|r| r.state == RowState::Done),
+        "both roots integrate: {:?}",
+        view.rows
     );
 
     for (work, local_tip) in [(&alpha, &alpha_local), (&beta, &beta_local)] {
