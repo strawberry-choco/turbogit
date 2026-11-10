@@ -41,7 +41,21 @@ fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) 
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
         .collect();
+    state.ui.bulk_scope = selected
+        .iter()
+        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
+        .collect();
     state
+}
+
+fn preflight(state: &AppState, op: BulkOp) -> turbogit_services::bulk_ops::Preflight {
+    state.bulk_preflight(op, &state.bulk_scope())
+}
+
+fn open(state: &mut AppState, op: BulkOp) {
+    let roots: Vec<turbogit_domain::model::RootId> =
+        state.bulk_scope().into_iter().map(|r| r.id).collect();
+    state.open_bulk_preflight(op, &roots);
 }
 
 fn rid(path: &Path) -> turbogit_domain::model::RootId {
@@ -72,9 +86,9 @@ fn a_typed_command_runs_on_every_selected_repo_through_the_monitor() {
     let (_tmp, project, alpha, ui) = project("cc-run");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    state.open_bulk_preflight(BulkOp::Custom);
+    open(&mut state, BulkOp::Custom);
     state.ui.bulk_command = "git branch bulk-marker".to_string();
-    let pf = state.bulk_preflight(BulkOp::Custom);
+    let pf = preflight(&state, BulkOp::Custom);
     assert_eq!(pf.will_run(), 2, "an unprotected fleet all runs");
     assert_eq!(pf.total(), 2);
 
@@ -147,7 +161,7 @@ fn a_failed_command_surfaces_the_git_stderr_on_the_row() {
 fn destructive_commands_expose_the_extra_confirmation_state() {
     let (_tmp, project, alpha, ui) = project("cc-destructive");
     let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
-    state.open_bulk_preflight(BulkOp::Custom);
+    open(&mut state, BulkOp::Custom);
 
     assert!(
         !state.bulk_command_is_destructive(),
@@ -169,7 +183,7 @@ fn confirmed_commands_are_remembered_newest_first_without_duplicates() {
     let mut state = app_with_selection(&project, std::slice::from_ref(&alpha), &[&alpha]);
 
     let run = |state: &mut AppState, command: &str| {
-        state.open_bulk_preflight(BulkOp::Custom);
+        open(state, BulkOp::Custom);
         state.ui.bulk_command = command.to_string();
         let plan = BulkPlan {
             op: BulkOp::Custom,
@@ -199,7 +213,7 @@ fn recent_commands_persist_with_the_workspace_and_carry_over_a_restart() {
 
     let plan = BulkPlan {
         op: BulkOp::Custom,
-        roots: vec![rid(&alpha)],
+        roots: Vec::new(),
         rebase: false,
         branch: String::new(),
         command: "git gc".to_string(),
@@ -238,10 +252,11 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     let (_tmp, project, alpha, ui) = project("cc-protected");
     let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
     state.ui.repo_selection = [rid(&alpha), rid(&ui)].into_iter().collect();
+    state.ui.bulk_scope = vec![rid(&alpha), rid(&ui)];
 
-    state.open_bulk_preflight(BulkOp::Custom);
+    open(&mut state, BulkOp::Custom);
     state.ui.bulk_command = "git branch bulk-marker".to_string();
-    let pf = state.bulk_preflight(BulkOp::Custom);
+    let pf = preflight(&state, BulkOp::Custom);
     assert_eq!(
         pf.will_run(),
         0,
@@ -309,6 +324,7 @@ fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
     let (_tmp, project, alpha, _ui) = project("cc-retry-protected");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     state.ui.repo_selection = [rid(&alpha)].into_iter().collect();
+    state.ui.bulk_scope = vec![rid(&alpha)];
 
     let plan = BulkPlan {
         op: BulkOp::Custom,

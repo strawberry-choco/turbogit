@@ -56,7 +56,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
-    let pf = state.bulk_preflight(op);
+    let pf = state.bulk_preflight(op, &state.bulk_scope());
     let will_run = pf.will_run();
     let total = pf.total();
 
@@ -213,7 +213,7 @@ fn skip_detail(reason: SkipReason) -> &'static str {
 }
 
 fn command_body(ui: &mut Ui, state: &mut AppState) {
-    let pf = state.bulk_preflight(BulkOp::Custom);
+    let pf = state.bulk_preflight(BulkOp::Custom, &state.bulk_scope());
     let will_run = pf.will_run();
     let total = pf.total();
     let command = state.ui.bulk_command.trim().to_string();
@@ -349,7 +349,7 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn branch_body(ui: &mut Ui, state: &mut AppState) {
-    let bpf = state.bulk_branch_preflight();
+    let bpf = state.bulk_branch_preflight(&state.bulk_scope());
     let will_run = bpf.will_run();
     let total = bpf.total();
     let name = state.ui.bulk_branch_name.trim().to_string();

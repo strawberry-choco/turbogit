@@ -43,6 +43,12 @@ pub enum Action {
     Unshelve,
     CreatePatch,
     CopyPatchToClipboard,
+    FetchAll,
+    PullAll,
+    PushAll,
+    CreateBranchAll,
+    StashAll,
+    CustomAll,
 }
 
 impl Action {
@@ -77,6 +83,12 @@ impl Action {
             Action::Unshelve => "Unshelve\u{2026}",
             Action::CreatePatch => crate::ui::create_patch::LOCAL_CHANGES_VERB,
             Action::CopyPatchToClipboard => crate::ui::create_patch::CLIPBOARD_VERB,
+            Action::FetchAll => "Fetch All Repositories",
+            Action::PullAll => "Pull All Repositories",
+            Action::PushAll => "Push All Repositories",
+            Action::CreateBranchAll => "Create Branch in All Repositories",
+            Action::StashAll => "Stash All Repositories",
+            Action::CustomAll => "Custom Command in All Repositories",
         }
     }
 
@@ -131,6 +143,12 @@ impl Action {
             Action::Unshelve,
             Action::CreatePatch,
             Action::CopyPatchToClipboard,
+            Action::FetchAll,
+            Action::PullAll,
+            Action::PushAll,
+            Action::CreateBranchAll,
+            Action::StashAll,
+            Action::CustomAll,
         ]
     }
 }
@@ -201,7 +219,21 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::CreatePatch => turbogit_app::create_patch::open_from_selection(state),
         Action::CopyPatchToClipboard => turbogit_app::create_patch::copy_from_selection(state),
         Action::Unshelve => state.open_unshelve_dialog(),
+        Action::FetchAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::FetchAll),
+        Action::PullAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::PullAll),
+        Action::PushAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::PushAll),
+        Action::CreateBranchAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::CreateBranch),
+        Action::StashAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::StashAll),
+        Action::CustomAll => run_fleet(state, turbogit_app::bulk_ops::BulkOp::Custom),
     }
+}
+
+/// D7: a palette entry has no row to inherit a root from, so it starts with
+/// every registered root selected.
+fn run_fleet(state: &mut AppState, op: turbogit_app::bulk_ops::BulkOp) {
+    let roots: Vec<turbogit_domain::model::RootId> =
+        state.multi.roots.iter().map(|r| r.id.clone()).collect();
+    state.open_bulk_preflight(op, &roots);
 }
 
 fn run_lifecycle_verb(state: &mut AppState, verb: LifecycleVerb) {

@@ -1742,6 +1742,65 @@ fn rollback_discards_the_selection_across_every_repo_that_owns_it() {
 }
 
 #[test]
+fn the_fleet_strip_opens_the_preflight_and_the_history_popup_reaches_rollback() {
+    use turbogit_app::bulk_history::{BulkRunRecord, RepoOutcome, RepoRecord};
+    use turbogit_app::bulk_ops::BulkOp;
+
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "fleet-repo");
+    git(&repo.path, &["checkout", "-q", "-b", "release/y"]);
+    git(&repo.path, &["checkout", "-q", "main"]);
+
+    let mut state = app_state(std::slice::from_ref(&repo.path));
+    state.ui.bulk_history = vec![BulkRunRecord {
+        id: 7,
+        at: chrono::Local::now().timestamp_millis(),
+        op: BulkOp::CreateBranch,
+        branch: "release/y".to_string(),
+        repos: vec![RepoRecord {
+            root: repo.path.clone(),
+            name: "fleet-repo".to_string(),
+            prior_branch: Some("main".to_string()),
+            created: true,
+            outcome: RepoOutcome::Done,
+        }],
+        rolled_back: false,
+    }];
+    let mut h = harness(state);
+
+    h.get_by_label("Fetch all").click();
+    h.run();
+    assert_eq!(h.state().ui.bulk_op, Some(BulkOp::FetchAll));
+    let only_root = h.state().multi.roots[0].id.clone();
+    assert_eq!(
+        h.state().ui.bulk_scope,
+        vec![only_root],
+        "the strip opens the preflight on every registered root"
+    );
+    h.state_mut().ui.bulk_op = None;
+    h.run();
+
+    h.get_by_label("Fleet history").click();
+    h.run();
+    assert_painted(&h, "Create branch release/y · 1 repos");
+    h.get_by_label("Details Create branch release/y").click();
+    h.run();
+    assert_painted(&h, "fleet-repo · done");
+    h.get_by_label("Rollback Create branch release/y").click();
+    h.run();
+    assert!(
+        h.state().ui.bulk_history[0].rolled_back,
+        "the popup rolls the record back"
+    );
+    assert!(
+        git(&repo.path, &["branch", "--list", "release/y"])
+            .trim()
+            .is_empty(),
+        "the rollback reaches the real branch from the Changes window"
+    );
+}
+
+#[test]
 fn refresh_icon_refreshes_changes() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "refresh-repo");

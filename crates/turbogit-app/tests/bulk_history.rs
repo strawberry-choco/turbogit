@@ -44,6 +44,10 @@ fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) 
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
         .collect();
+    state.ui.bulk_scope = selected
+        .iter()
+        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
+        .collect();
     state
 }
 

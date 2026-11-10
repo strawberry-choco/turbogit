@@ -12,6 +12,7 @@ use egui::{
     Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
+use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, BlameTarget, CommitSubTab, Dialog, PendingConfirm, Toast};
@@ -332,7 +333,112 @@ fn filter_buckets<'a>(state: &AppState, mut buckets: Vec<Bucket<'a>>) -> (Vec<Bu
 }
 
 fn local_changes_body(ui: &mut Ui, state: &mut AppState) {
+    fleet_strip(ui, state);
     two_zone(ui, state, changelist_pane, preview_and_editor_pane);
+}
+
+/// D12: the fleet operations that lost the summary page stay one click away.
+/// The strip spans the tool window rather than the 340pt commit column, and
+/// every entry seeds the preflight with every registered root; a fleet
+/// operation has no per-repo row to take a narrower scope from.
+fn fleet_strip(ui: &mut Ui, state: &mut AppState) {
+    ui.horizontal_wrapped(|ui| {
+        for (label, op) in [
+            ("Fetch all", BulkOp::FetchAll),
+            ("Pull all", BulkOp::PullAll),
+            ("Push all", BulkOp::PushAll),
+            ("Create branch", BulkOp::CreateBranch),
+            ("Stash all", BulkOp::StashAll),
+            ("Custom command", BulkOp::Custom),
+        ] {
+            let button = widgets::ghost_button(ui, None, label);
+            if button.clicked() {
+                let scope: Vec<RootId> = state
+                    .multi
+                    .roots
+                    .iter()
+                    .map(|root| root.id.clone())
+                    .collect();
+                state.open_bulk_preflight(op, &scope);
+            }
+        }
+        let history = widgets::ghost_button(ui, None, "Fleet history");
+        fleet_history(ui, &history, state);
+    });
+    ui.add_space(crate::theme::PANEL_PADDING);
+}
+
+fn fleet_history(ui: &mut Ui, trigger: &egui::Response, state: &mut AppState) {
+    use egui::{Popup, PopupCloseBehavior};
+    let mut open = state.ui.fleet_history_open;
+    if trigger.clicked() {
+        open = !open;
+    }
+    let popup = Popup::from_response(trigger)
+        .id(egui::Id::new("fleet_history"))
+        .open_bool(&mut open)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .frame(widgets::menu_surface(ui))
+        .width(440.0);
+    popup.show(|ui| {
+        ui.set_min_width(400.0);
+        ui.set_max_width(440.0);
+        widgets::group_title(ui, "RECENT FLEET OPERATIONS");
+        if state.ui.bulk_history.is_empty() {
+            ui.label("No fleet operations yet.");
+            return;
+        }
+        for rec in state.ui.bulk_history.clone() {
+            let op_label = if rec.op == BulkOp::CreateBranch && !rec.branch.is_empty() {
+                format!("Create branch {}", rec.branch)
+            } else {
+                rec.op.label().to_string()
+            };
+            ui.horizontal(|ui| {
+                ui.label(turbogit_app::bulk_history::format_time(rec.at));
+                ui.label(format!("{} · {} repos", op_label, rec.repos.len()));
+                ui.label(rec.summary());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if rec.reversible() && !rec.rolled_back {
+                        let rollback = ui.small_button("Rollback");
+                        rollback.widget_info(|| {
+                            WidgetInfo::labeled(
+                                WidgetType::Button,
+                                true,
+                                format!("Rollback {op_label}"),
+                            )
+                        });
+                        if rollback.clicked() {
+                            state.bulk_rollback(rec.id);
+                        }
+                    }
+                    let details = ui.small_button("Details");
+                    details.widget_info(|| {
+                        WidgetInfo::labeled(WidgetType::Button, true, format!("Details {op_label}"))
+                    });
+                    if details.clicked() {
+                        state.ui.bulk_history_open =
+                            (state.ui.bulk_history_open != Some(rec.id)).then_some(rec.id);
+                    }
+                });
+            });
+            if state.ui.bulk_history_open == Some(rec.id) {
+                for repo in &rec.repos {
+                    let outcome = match &repo.outcome {
+                        turbogit_app::bulk_history::RepoOutcome::Done => "done".to_string(),
+                        turbogit_app::bulk_history::RepoOutcome::Failed { error } => {
+                            format!("failed ({error})")
+                        }
+                        turbogit_app::bulk_history::RepoOutcome::Skipped { reason } => {
+                            format!("skipped ({reason})")
+                        }
+                    };
+                    ui.label(format!("    {} · {outcome}", repo.name));
+                }
+            }
+        }
+    });
+    state.ui.fleet_history_open = open;
 }
 
 fn two_zone(

@@ -366,7 +366,14 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             if let Some(op) = action
                 && btn.clicked()
             {
-                state.open_bulk_preflight(op);
+                let scope: Vec<RootId> = state
+                    .multi
+                    .roots
+                    .iter()
+                    .filter(|r| state.ui.repo_selection.contains(&r.id))
+                    .map(|r| r.id.clone())
+                    .collect();
+                state.open_bulk_preflight(op, &scope);
             }
         }
     }

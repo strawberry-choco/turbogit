@@ -888,6 +888,9 @@ pub struct UiState {
     pub smart_group_rules: Vec<crate::smart_rules::SmartGroupRule>,
     pub repo_selection: HashSet<RootId>,
     pub bulk_op: Option<BulkOp>,
+    /// The explicit root list the open preflight runs on. Empty means every
+    /// root; `open_bulk_preflight` always seeds it.
+    pub bulk_scope: Vec<RootId>,
     pub bulk_rebase: bool,
     pub bulk_branch_name: String,
     pub bulk_from_upstream: bool,
@@ -899,6 +902,7 @@ pub struct UiState {
     pub pinned_views: Vec<crate::pinned_views::PinnedView>,
     pub bulk_history: Vec<crate::bulk_history::BulkRunRecord>,
     pub bulk_history_open: Option<u64>,
+    pub fleet_history_open: bool,
     pub smart_rule_editor_open: bool,
     pub smart_rule_editing: Option<usize>,
     pub smart_rule_draft: Option<crate::smart_rules::SmartGroupRule>,
@@ -3074,21 +3078,31 @@ impl AppState {
             .collect()
     }
 
-    pub fn bulk_preflight(&self, op: BulkOp) -> Preflight {
-        let roots = self.bulk_selected_roots();
-        bulk_ops::preflight(op, &roots, &self.settings, self.ui.bulk_rebase, &|id| {
+    pub fn bulk_preflight(&self, op: BulkOp, roots: &[Root]) -> Preflight {
+        bulk_ops::preflight(op, roots, &self.settings, self.ui.bulk_rebase, &|id| {
             self.caches.ahead_behind(id).unwrap_or((0, 0))
         })
     }
 
-    pub fn bulk_branch_preflight(&self) -> bulk_ops::BranchPreflight {
-        let roots = self.bulk_selected_roots();
+    pub fn bulk_branch_preflight(&self, roots: &[Root]) -> bulk_ops::BranchPreflight {
         bulk_ops::branch_preflight(
-            &roots,
+            roots,
             self.ui.bulk_branch_name.trim(),
             self.ui.bulk_from_upstream,
             &|id| self.caches.ahead_behind(id).unwrap_or((0, 0)),
         )
+    }
+
+    /// The roots a fleet preflight was opened with, in registration order.
+    /// An unseeded scope is every root, so a dialog opened from the palette
+    /// and a call site that forgot to seed agree instead of running on none.
+    pub fn bulk_scope(&self) -> Vec<Root> {
+        self.multi
+            .roots
+            .iter()
+            .filter(|r| self.ui.bulk_scope.is_empty() || self.ui.bulk_scope.contains(&r.id))
+            .cloned()
+            .collect()
     }
 
     pub fn commit_targets(&self) -> Vec<Root> {
@@ -3181,7 +3195,12 @@ impl AppState {
         self.spawn_cascade_pass(planned_ids, control, label, step, stopped_as_failed);
     }
 
-    pub fn open_bulk_preflight(&mut self, op: BulkOp) {
+    pub fn open_bulk_preflight(&mut self, op: BulkOp, roots: &[RootId]) {
+        self.ui.bulk_scope = if roots.is_empty() {
+            self.multi.roots.iter().map(|r| r.id.clone()).collect()
+        } else {
+            roots.to_vec()
+        };
         self.ui.bulk_op = Some(op);
         self.ui.bulk_rebase = self.settings.update_method == UpdateMethod::Rebase;
         if op == BulkOp::CreateBranch {
@@ -3212,7 +3231,8 @@ impl AppState {
         if siblings.is_empty() {
             return;
         }
-        self.ui.repo_selection = siblings.into_iter().collect();
+        self.ui.repo_selection = siblings.iter().cloned().collect();
+        self.ui.bulk_scope = siblings;
         self.ui.bulk_op = Some(BulkOp::Merge);
     }
 
@@ -3556,10 +3576,22 @@ impl AppState {
             self.record_custom_command(&command);
         }
 
+        // The preflight's explicit scope is the run's reporting scope; the
+        // plan's roots are the ones the user actually confirmed. Roots in the
+        // scope but outside the plan are painted as skipped so Retry skipped
+        // can pick them up, exactly as the old selection-based fleet did.
+        let scope: Vec<Root> = if self.ui.bulk_scope.is_empty() {
+            plan.roots
+                .iter()
+                .filter_map(|id| self.multi.by_id(id).cloned())
+                .collect()
+        } else {
+            self.bulk_scope()
+        };
+
         let mut fleet: Vec<(RootId, String, Option<String>)> = match plan.op {
             BulkOp::CreateBranch => {
-                let roots = self.bulk_selected_roots();
-                let bpf = bulk_ops::branch_preflight(&roots, &plan.branch, plan.rebase, &|id| {
+                let bpf = bulk_ops::branch_preflight(&scope, &plan.branch, plan.rebase, &|id| {
                     self.caches.ahead_behind(id).unwrap_or((0, 0))
                 });
                 bpf.rows
@@ -3578,8 +3610,7 @@ impl AppState {
                     .collect()
             }
             _ => {
-                let roots = self.bulk_selected_roots();
-                let pf = bulk_ops::preflight(plan.op, &roots, &self.settings, plan.rebase, &|id| {
+                let pf = bulk_ops::preflight(plan.op, &scope, &self.settings, plan.rebase, &|id| {
                     self.caches.ahead_behind(id).unwrap_or((0, 0))
                 });
                 for row in pf.rows.iter().filter(|r| {
@@ -3625,8 +3656,7 @@ impl AppState {
         }
         let control = bulk_run::RunControl::default();
         let undo: Vec<crate::bulk_history::UndoRow> = if plan.op == BulkOp::CreateBranch {
-            let roots = self.bulk_selected_roots();
-            let bpf = bulk_ops::branch_preflight(&roots, &plan.branch, plan.rebase, &|id| {
+            let bpf = bulk_ops::branch_preflight(&scope, &plan.branch, plan.rebase, &|id| {
                 self.caches.ahead_behind(id).unwrap_or((0, 0))
             });
             bpf.rows
@@ -3659,7 +3689,10 @@ impl AppState {
             merge_for_view,
             undo,
         ));
+        // The plan is the confirmed set: the fleet above may mark a scope root
+        // skipped, but only the plan's roots are dispatched.
         let roots = plan.roots.clone();
+        self.ui.bulk_scope.clear();
         self.dispatch_bulk_pass(plan, merge_opts, roots, control);
     }
 

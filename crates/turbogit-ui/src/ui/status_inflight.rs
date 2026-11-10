@@ -96,18 +96,20 @@ fn held_by(state: &AppState) -> Vec<InFlight> {
 
 /// The root a menu-route verb acts on.
 ///
-/// Two roots can hold operations at once, so the menu route has to name one. The
-/// focused root answers first when it holds a state that offers the verb; a
-/// focused root that cannot honour it does not **veto** it, the search moves on
-/// to the root that can, which is what makes `Skip Commit` do something when the
-/// rebase is in the other repository. Nothing offers it: `None`, and the caller
-/// says so rather than acting on an arbitrary root.
+/// Two roots can hold operations at once, so the menu route has to name one.
+/// D10 resolves at the most specific context available: a right-clicked row is
+/// handled by the menu that owns it, the multi-selection answers next, and the
+/// root that offers the verb is the fallback. An empty selection therefore
+/// means every root is searched, which is what makes `Skip Commit` do
+/// something when the rebase is in the only repository holding one. Nothing
+/// offers it: `None`, and the caller says so rather than acting on an
+/// arbitrary root.
 pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, OwnedOperation)> {
     let found = held_by(state);
     let offers = |item: &InFlight| LifecycleVerb::offered_for(item.owner).contains(&verb);
     found
         .iter()
-        .find(|item| state.selected_root.as_ref() == Some(&item.root) && offers(item))
+        .find(|item| state.ui.repo_selection.contains(&item.root) && offers(item))
         .or_else(|| found.iter().find(|item| offers(item)))
         .map(|item| (item.root.clone(), item.owner))
 }

@@ -44,7 +44,17 @@ fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) 
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
         .collect();
+    state.ui.bulk_scope = selected
+        .iter()
+        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
+        .collect();
     state
+}
+
+fn open(state: &mut AppState, op: BulkOp) {
+    let roots: Vec<turbogit_domain::model::RootId> =
+        state.bulk_scope().into_iter().map(|r| r.id).collect();
+    state.open_bulk_preflight(op, &roots);
 }
 
 fn rid(path: &Path) -> turbogit_domain::model::RootId {
@@ -87,7 +97,7 @@ fn run_bulk_confirmed_opens_a_live_monitor_that_tracks_every_selected_repo() {
     assert_eq!(state.ui.bulk_op, None);
     let view = state.ui.bulk_run.as_ref().expect("monitor opened");
     assert_eq!(view.op, BulkOp::PullAll);
-    assert_eq!(view.rows.len(), 2, "one row per selected repo");
+    assert_eq!(view.rows.len(), 2, "one row per planned repo");
     let alpha_row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
     let ui_row = view.rows.iter().find(|r| r.name == "ui").unwrap();
     assert!(matches!(
@@ -236,9 +246,9 @@ fn a_confirmed_branch_cascade_preflights_the_fleet_and_lands_repos_on_the_branch
         &[&alpha, &existing, &ui],
     );
 
-    state.open_bulk_preflight(BulkOp::CreateBranch);
+    open(&mut state, BulkOp::CreateBranch);
     state.ui.bulk_branch_name = "feature/x".to_string();
-    let pf = state.bulk_branch_preflight();
+    let pf = state.bulk_branch_preflight(&state.bulk_scope());
     let action = |name: &str| {
         pf.rows
             .iter()
@@ -269,7 +279,7 @@ fn a_confirmed_branch_cascade_preflights_the_fleet_and_lands_repos_on_the_branch
     let view = state.ui.bulk_run.as_ref().expect("monitor opened");
     assert_eq!(view.op, BulkOp::CreateBranch);
     assert_eq!(view.branch, "feature/x");
-    assert_eq!(view.rows.len(), 3, "one row per selected repo");
+    assert_eq!(view.rows.len(), 3, "one row per planned repo");
 
     wait_for_run_end(&mut state);
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");

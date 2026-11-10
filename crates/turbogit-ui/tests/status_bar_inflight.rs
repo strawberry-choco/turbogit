@@ -328,7 +328,7 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     let mut state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
         .with_settings(VcsSettings::default());
 
-    state.selected_root = Some(RootId(p.alpha.clone().into()));
+    state.ui.repo_selection = [RootId(p.alpha.clone().into())].into_iter().collect();
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
         Some((RootId(p.alpha.clone().into()), OwnedOperation::Rebase)),
@@ -337,19 +337,19 @@ fn the_menu_route_resolves_the_root_that_offers_the_verb() {
     assert_eq!(
         target_for(&state, LifecycleVerb::Abort),
         Some((RootId(p.alpha.clone().into()), OwnedOperation::Rebase)),
-        "the focused root answers first"
+        "the selected root answers first"
     );
 
-    state.selected_root = Some(RootId(p.beta.clone().into()));
+    state.ui.repo_selection = [RootId(p.beta.clone().into())].into_iter().collect();
     assert_eq!(
         target_for(&state, LifecycleVerb::Skip),
         Some((RootId(p.alpha.clone().into()), OwnedOperation::Rebase)),
-        "Skip belongs to the root that is rebasing, not to the one in focus"
+        "Skip belongs to the root that is rebasing, not to the one in selection"
     );
     assert_eq!(
         target_for(&state, LifecycleVerb::Continue),
         Some((RootId(p.beta.clone().into()), OwnedOperation::CherryPick)),
-        "the focused cherry-pick answers Continue"
+        "the selected cherry-pick answers Continue"
     );
 }
 

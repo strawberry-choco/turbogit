@@ -44,7 +44,21 @@ fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) 
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
         .collect();
+    state.ui.bulk_scope = selected
+        .iter()
+        .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
+        .collect();
     state
+}
+
+fn preflight(state: &AppState, op: BulkOp) -> turbogit_services::bulk_ops::Preflight {
+    state.bulk_preflight(op, &state.bulk_scope())
+}
+
+fn open(state: &mut AppState, op: BulkOp) {
+    let roots: Vec<turbogit_domain::model::RootId> =
+        state.bulk_scope().into_iter().map(|r| r.id).collect();
+    state.open_bulk_preflight(op, &roots);
 }
 
 #[test]
@@ -52,20 +66,20 @@ fn bulk_preflight_classifies_the_selected_repos_for_the_operation() {
     let (_tmp, project, alpha, ui) = project("pf-classify");
     let state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
 
-    let pf = state.bulk_preflight(BulkOp::PullAll);
+    let pf = preflight(&state, BulkOp::PullAll);
     assert_eq!(pf.rows.len(), 2, "one row per selected repo");
     let alpha_row = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
     let ui_row = pf.rows.iter().find(|r| r.name == "ui").unwrap();
     assert!(alpha_row.outcome.is_ok(), "alpha should run: {alpha_row:?}");
     assert_eq!(ui_row.outcome, Err(SkipReason::DirtyWorktree));
 
-    let pf = state.bulk_preflight(BulkOp::StashAll);
+    let pf = preflight(&state, BulkOp::StashAll);
     let alpha_row = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
     let ui_row = pf.rows.iter().find(|r| r.name == "ui").unwrap();
     assert_eq!(alpha_row.outcome, Err(SkipReason::CleanTree));
     assert!(ui_row.outcome.is_ok(), "dirty ui should stash: {ui_row:?}");
 
-    let pf = state.bulk_preflight(BulkOp::PushAll);
+    let pf = preflight(&state, BulkOp::PushAll);
     assert_eq!(pf.will_run(), 2, "both repos are dirty-ok with upstreams");
 }
 
@@ -77,12 +91,12 @@ fn bulk_preflight_uses_the_cached_ahead_behind_counts_for_divergence() {
         .caches
         .store_ahead_behind(turbogit_domain::model::RootId(alpha.clone().into()), (2, 1));
 
-    let pf = state.bulk_preflight(BulkOp::PullAll);
+    let pf = preflight(&state, BulkOp::PullAll);
     let alpha_row = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
     assert_eq!(alpha_row.outcome, Err(SkipReason::Diverged));
     assert_eq!((alpha_row.ahead, alpha_row.behind), (2, 1));
 
-    let pf = state.bulk_preflight(BulkOp::FetchAll);
+    let pf = preflight(&state, BulkOp::FetchAll);
     assert_eq!(pf.will_run(), 2, "fetch never skips");
 }
 
@@ -91,9 +105,61 @@ fn bulk_preflight_ignores_roots_outside_the_selection() {
     let (_tmp, project, alpha, ui) = project("pf-scope");
     let state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha]);
 
-    let pf = state.bulk_preflight(BulkOp::PullAll);
+    let pf = preflight(&state, BulkOp::PullAll);
     assert_eq!(pf.rows.len(), 1, "only the selected root is in the matrix");
     assert_eq!(pf.rows[0].name, "alpha");
+}
+
+#[test]
+fn a_preflight_can_be_opened_on_an_explicit_root_list() {
+    let (_tmp, project, alpha, ui) = project("pf-explicit");
+    let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    let scope = vec![turbogit_domain::model::RootId(ui.clone().into())];
+
+    state.open_bulk_preflight(BulkOp::FetchAll, &scope);
+
+    assert_eq!(state.ui.bulk_op, Some(BulkOp::FetchAll));
+    assert_eq!(
+        state.ui.bulk_scope, scope,
+        "the explicit list is the preflight's scope"
+    );
+    let pf = state.bulk_preflight(BulkOp::FetchAll, &state.bulk_scope());
+    assert_eq!(pf.rows.len(), 1, "one row for the explicit root");
+    assert_eq!(pf.rows[0].name, "ui");
+}
+
+#[test]
+fn run_bulk_confirmed_dispatches_the_plan_without_a_repo_selection() {
+    let (_tmp, project, alpha, ui) = project("pf-plan-roots");
+    let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    assert!(state.ui.repo_selection.is_empty());
+    std::fs::write(ui.join("base.txt"), "work\n").unwrap();
+
+    let plan = BulkPlan {
+        op: BulkOp::StashAll,
+        roots: vec![turbogit_domain::model::RootId(ui.clone().into())],
+        rebase: false,
+        branch: String::new(),
+        command: String::new(),
+    };
+    state.run_bulk_confirmed(plan);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && state.ui.toast.is_none() {
+        state.drain_events();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        !git(&ui, &["stash", "list"]).trim().is_empty(),
+        "the plan's root is stashed"
+    );
+    assert!(
+        git(&alpha, &["stash", "list"]).trim().is_empty(),
+        "a registered root outside the plan is untouched"
+    );
+    let view = state.ui.bulk_run.as_ref().expect("monitor");
+    assert_eq!(view.rows.len(), 1, "the monitor is the plan, not the fleet");
+    assert_eq!(view.rows[0].root, turbogit_domain::model::RootId(ui.into()));
 }
 
 #[test]
@@ -104,11 +170,11 @@ fn open_bulk_preflight_seeds_the_pull_policy_from_settings() {
     assert_eq!(state.ui.bulk_op, None, "no preflight modal initially");
 
     state.settings.update_method = UpdateMethod::Rebase;
-    state.open_bulk_preflight(BulkOp::PullAll);
+    open(&mut state, BulkOp::PullAll);
     assert_eq!(state.ui.bulk_op, Some(BulkOp::PullAll));
     assert!(state.ui.bulk_rebase, "policy seeds from settings");
 
-    state.open_bulk_preflight(BulkOp::FetchAll);
+    open(&mut state, BulkOp::FetchAll);
     assert_eq!(state.ui.bulk_op, Some(BulkOp::FetchAll));
 }
 

@@ -9,6 +9,7 @@ use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text, settle_quiet,
     shell_harness_over,
 };
+use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::popups::Action;
@@ -300,6 +301,47 @@ fn palette_retains_every_prior_entry_plus_two_new_ones() {
     }
     for label in ["Go to Log", "Open Welcome"] {
         assert_painted(&harness, label);
+    }
+}
+
+#[test]
+fn every_fleet_operation_is_reachable_from_the_palette_on_every_root() {
+    let (_project, dir) = repo_project();
+    let mut harness = feedback_harness(dir);
+    let every_root: Vec<_> = harness
+        .state()
+        .multi
+        .roots
+        .iter()
+        .map(|r| r.id.clone())
+        .collect();
+    assert!(!every_root.is_empty(), "the fixture registers a root");
+
+    for (query, label, op) in [
+        ("fetch all", "Fetch All Repositories", BulkOp::FetchAll),
+        ("pull all", "Pull All Repositories", BulkOp::PullAll),
+        ("push all", "Push All Repositories", BulkOp::PushAll),
+        (
+            "create branch in all",
+            "Create Branch in All Repositories",
+            BulkOp::CreateBranch,
+        ),
+        ("stash all", "Stash All Repositories", BulkOp::StashAll),
+        (
+            "custom command in all",
+            "Custom Command in All Repositories",
+            BulkOp::Custom,
+        ),
+    ] {
+        run_palette_entry(&mut harness, query, label);
+        let state = harness.state();
+        assert_eq!(state.ui.bulk_op, Some(op), "`{label}` opens its preflight");
+        assert_eq!(
+            state.ui.bulk_scope, every_root,
+            "`{label}` starts with every root selected"
+        );
+        harness.state_mut().ui.bulk_op = None;
+        settle_quiet(&mut harness);
     }
 }
 

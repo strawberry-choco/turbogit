@@ -45,6 +45,7 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
 fn app_selected(project: &Path, roots: &[PathBuf]) -> AppState {
     let mut state = AppState::for_roots(project, roots);
     state.ui.repo_selection = roots.iter().map(|p| rid(p)).collect();
+    state.ui.bulk_scope = roots.iter().map(|p| rid(p)).collect();
     state
 }
 

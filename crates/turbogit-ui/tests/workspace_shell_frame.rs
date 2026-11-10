@@ -338,8 +338,14 @@ fn shell_is_two_zones_without_metadata_rail() {
     ] {
         assert_not_painted(&h, old);
     }
+    // The Changes tool window now owns the fleet strip ("Fetch all", …), so
+    // the legacy toolbar is pinned by its exact bare labels, not substrings.
+    let painted = test_support::harness::painted_text(&h);
     for old in ["Fetch", "Pull", "Push", "More"] {
-        assert_not_painted(&h, old);
+        assert!(
+            !painted.iter().any(|t| t == old),
+            "`{old}` was unexpectedly painted as a bare toolbar label; painted text:\n{painted:#?}"
+        );
     }
 
     assert_painted(&h, "1 total");
