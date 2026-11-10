@@ -146,10 +146,7 @@ fn ensure_log_data(state: &mut AppState) {
             state.fetch_refs(id);
         }
     }
-    if let (Some(root), Some(cid)) = (
-        state.selected_root.clone(),
-        state.ui.selected_commit.clone(),
-    ) {
+    if let Some((root, cid)) = state.ui.selected_commit.clone() {
         state.ensure_files(&root, &cid);
         state.fetch_file_stats(root, cid);
     }
@@ -159,8 +156,7 @@ fn ensure_log_data(state: &mut AppState) {
         }
         return;
     }
-    if let (Some(root), Some(path)) = (state.selected_root.clone(), state.ui.log_path_scope.clone())
-    {
+    if let Some((root, path)) = state.ui.log_path_scope.clone() {
         state.ensure_log(&root, LogScope::Path(path));
     }
     if let Some(ref_name) = state.ui.log_ref_scope.clone() {
@@ -211,12 +207,11 @@ fn listed_windows(state: &AppState) -> Vec<ListedWindow> {
             .into_iter()
             .map(|root| ListedWindow::Scoped(root, LogScope::Ref(ref_name.clone())))
             .collect(),
-        (None, Some(path)) => state
-            .selected_root
-            .clone()
-            .map(|root| ListedWindow::Scoped(root, LogScope::Path(path.clone())))
-            .into_iter()
-            .collect(),
+        (None, Some((root, path))) => std::iter::once(ListedWindow::Scoped(
+            root.clone(),
+            LogScope::Path(path.clone()),
+        ))
+        .collect(),
         (None, None) => vec![ListedWindow::Unscoped],
     };
     let query = state.ui.log_filter.trim();
@@ -241,7 +236,7 @@ fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a 
         // The scoped name owns the answer: read this root's own ref window when
         // it is in the view's read set, and say "not in this view" (`None`)
         // otherwise. Falling through to the plain window would let a stale
-        // `selected_root × selected_commit` pair show a row the listing hid.
+        // `(root, commit)` pair show a row the listing hid.
         if !visible_root_ids(state)
             .iter()
             .any(|candidate| candidate == root)
@@ -253,7 +248,7 @@ fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a 
             .ref_log(root, ref_name)
             .and_then(|commits| commits.iter().find(|c| c.id == cid));
     }
-    if let Some(path) = &state.ui.log_path_scope
+    if let Some((_, path)) = &state.ui.log_path_scope
         && let Some(commits) = state.caches.path_log(root, path)
     {
         return commits.iter().find(|c| c.id == cid);
@@ -471,8 +466,7 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
             // goes into the scope and the selection narrows to that root. The
             // scope itself keeps no root axis.
             state.ui.log_ref_scope = Some(branch);
-            state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root.clone()]);
-            state.selected_root = Some(root);
+            state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root]);
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
         }
@@ -604,7 +598,7 @@ fn hidden_jump_band(ui: &mut Ui, state: &mut AppState, root: RootId, cid: Commit
         Some(true) => {
             state.reset_log_filters();
             state.ui.log_hidden_jump = None;
-            state.ui.selected_commit = Some(cid.clone());
+            state.ui.selected_commit = Some((root.clone(), cid.clone()));
             state.ui.log_scroll_to = Some(cid);
         }
         Some(false) => {
@@ -619,7 +613,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::pane_header(ui, "COMMITS", None, |_ui| {});
     ui.horizontal(|ui| {
         widgets::search_input(ui, "Search commits", &mut state.ui.log_filter);
-        if let Some(path) = state.ui.log_path_scope.clone() {
+        if let Some((_, path)) = state.ui.log_path_scope.clone() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let remove = ui
                     .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
@@ -802,8 +796,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     }
     if let Some((root, name)) = ref_filter {
         state.ui.log_ref_scope = Some(name);
-        state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root.clone()]);
-        state.selected_root = Some(root);
+        state.ui.log_roots = turbogit_app::log_filters::RootFilter::Only(vec![root]);
         state.ui.selected_commit = None;
         state.ui.log_selected_file = None;
         state.ui.log_commit_menu = None;
@@ -821,8 +814,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn select_commit_row(state: &mut AppState, root: RootId, id: String) {
-    state.selected_root = Some(root);
-    state.ui.selected_commit = Some(id);
+    state.ui.selected_commit = Some((root, id));
     state.ui.log_selected_file = None;
 }
 
@@ -903,15 +895,16 @@ fn apply_commit_action(
             state.ui.toast = Some(Toast::success("Copied commit message"));
         }
         CommitMenuAction::CherryPickTo => {
-            state.ui.dlg.cherry_pick_commit = Some(cid.to_owned());
+            state.ui.dlg.cherry_pick_commit = Some((root.clone(), cid.to_owned()));
             state.ui.dialog = Some(Dialog::CherryPickTarget);
         }
         CommitMenuAction::CherryPickAcross => {
-            state.open_cherry_across();
+            state.open_cherry_across(root.clone());
             state.ui.dialog = Some(Dialog::CherryPickAcross);
         }
         CommitMenuAction::RevertCommit => {
             state.ui.confirm = Some(PendingConfirm::RevertCommit {
+                root: root.clone(),
                 commit: cid.to_owned(),
             });
         }
@@ -940,7 +933,7 @@ fn apply_commit_action(
             }
         }
         CommitMenuAction::NewTag => {
-            state.open_tag_dialog(Some(cid));
+            state.open_tag_dialog(Some(root.clone()), Some(cid));
         }
         CommitMenuAction::DropCommit => {
             state.open_rewrite_preflight(root, cid, turbogit_app::state::HistoryVerb::Drop);
@@ -954,6 +947,9 @@ fn apply_commit_action(
         }
         CommitMenuAction::RewordCommit => {
             state.open_reword_editor(root, cid);
+        }
+        CommitMenuAction::InteractiveRebase => {
+            state.open_interactive_rebase(root, cid);
         }
     }
 }
@@ -1074,7 +1070,11 @@ fn commit_row(
     date_mode: DateFormat,
     multi_root: bool,
 ) -> RowIntent {
-    let selected = state.ui.selected_commit.as_deref() == Some(c.id.as_str());
+    let selected = state
+        .ui
+        .selected_commit
+        .as_ref()
+        .is_some_and(|(root, id)| root == &c.root && id == &c.id);
     let (rect, response) = allocate_row(ui);
 
     paint_log_row(ui, rect, selected, response.hovered());
@@ -1406,18 +1406,17 @@ enum FileAction {
 }
 
 fn files_pane(ui: &mut Ui, state: &mut AppState) {
-    let selection = state
-        .selected_root
-        .as_ref()
-        .zip(state.ui.selected_commit.as_ref());
+    let selection = state.ui.selected_commit.clone();
     let files = selection
+        .as_ref()
         .and_then(|(root, cid)| state.caches.files_for(root, cid))
         .unwrap_or(&[]);
     let stats = selection
+        .as_ref()
         .and_then(|(root, cid)| state.caches.file_stats_for(root, cid))
         .unwrap_or(&[]);
 
-    let count = selection.map(|_| files.len().to_string());
+    let count = selection.as_ref().map(|_| files.len().to_string());
     widgets::pane_header(ui, "CHANGED FILES", count.as_deref(), |_ui| {});
 
     let Some((root_id, cid)) = selection else {
@@ -1425,7 +1424,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let parent = find_commit(state, root_id, cid).and_then(|c| c.parents.first().cloned());
+    let parent = find_commit(state, &root_id, &cid).and_then(|c| c.parents.first().cloned());
 
     let changes_state = log_states::changed_files(state);
 
@@ -1444,7 +1443,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
                 if !row_shown(ch) {
                     continue;
                 }
-                let row_action = file_row(ui, state, root_id, ch, file_stat(stats, &ch.path));
+                let row_action = file_row(ui, state, &root_id, ch, file_stat(stats, &ch.path));
                 if matches!(action, FileAction::None) {
                     action = row_action;
                 }
@@ -1462,7 +1461,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             }
         });
 
-    if let Some(selected) = state.ui.log_selected_file.clone() {
+    if let Some((_, selected)) = state.ui.log_selected_file.clone() {
         ui.separator();
         ui.horizontal(|ui| {
             if ui.link("Open diff").clicked() {
@@ -1483,13 +1482,13 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         FileAction::None => {}
         FileAction::Refresh => state.refresh_commit_changes(),
         FileAction::Select(path) => {
-            state.ui.log_selected_file = Some(path);
+            state.ui.log_selected_file = Some((root_id.clone(), path));
         }
         FileAction::OpenMenu(path) => {
             state.ui.log_file_menu = Some((root_id.clone(), cid.to_owned(), path));
         }
         FileAction::OpenDiff(path) => {
-            state.ui.log_selected_file = Some(path.clone());
+            state.ui.log_selected_file = Some((root_id.clone(), path.clone()));
             state.ui.diff = Some(DiffTarget::commit(
                 root_id.clone(),
                 parent,
@@ -1506,7 +1505,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             state.ui.blame_caret_line = None;
         }
         FileAction::ScopeHistory(path) => {
-            state.ui.log_path_scope = Some(path);
+            state.ui.log_path_scope = Some((root_id.clone(), path));
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
         }
@@ -1538,7 +1537,11 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
         |ui, state| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_min_width(240.0);
-            let already_scoped = state.ui.log_path_scope.as_deref() == Some(path.as_path());
+            let already_scoped = state
+                .ui
+                .log_path_scope
+                .as_ref()
+                .is_some_and(|(root, scoped)| root == &root_id && scoped == &path);
             let mut picked = None;
             if menu_item(
                 ui,
@@ -1606,7 +1609,7 @@ fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action
             state.ui.blame_caret_line = None;
         }
         FileAction::ScopeHistory(path) => {
-            state.ui.log_path_scope = Some(path);
+            state.ui.log_path_scope = Some((root.clone(), path));
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
         }
@@ -1640,7 +1643,11 @@ fn file_row(
     change: &turbogit_domain::model::Change,
     stat: Option<(usize, usize)>,
 ) -> FileAction {
-    let selected = state.ui.log_selected_file.as_ref() == Some(&change.path);
+    let selected = state
+        .ui
+        .log_selected_file
+        .as_ref()
+        .is_some_and(|(scoped_root, scoped)| scoped_root == root && scoped == &change.path);
     let (rect, response) = allocate_file_row(ui);
     paint_log_row(ui, rect, selected, response.hovered());
 
@@ -1833,11 +1840,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         action = DetailAction::Refresh;
     }
 
-    let Some((root_id, cid)) = state
-        .selected_root
-        .as_ref()
-        .zip(state.ui.selected_commit.as_ref())
-    else {
+    let Some((root_id, cid)) = state.ui.selected_commit.clone() else {
         ui.label(
             RichText::new("Select a commit…")
                 .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
@@ -1846,7 +1849,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let Some(commit) = find_commit(state, root_id, cid) else {
+    let Some(commit) = find_commit(state, &root_id, &cid) else {
         return;
     };
 
@@ -1863,10 +1866,10 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(4.0);
     paint_detail_list(ui, &commit_detail_rows(commit), &mut action);
 
-    let files = state.caches.files_for(root_id, &commit.id).unwrap_or(&[]);
+    let files = state.caches.files_for(&root_id, &commit.id).unwrap_or(&[]);
     let stats = state
         .caches
-        .file_stats_for(root_id, &commit.id)
+        .file_stats_for(&root_id, &commit.id)
         .unwrap_or(&[]);
     let added: usize = stats.iter().filter_map(|f| f.insertions).sum();
     let removed: usize = stats.iter().filter_map(|f| f.deletions).sum();
@@ -1915,7 +1918,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 
     match action {
         DetailAction::SelectParent(parent) => {
-            state.ui.selected_commit = Some(parent.clone());
+            state.ui.selected_commit = Some((root_id.clone(), parent.clone()));
             state.ui.log_selected_file = None;
             state.ui.log_scroll_to = Some(parent);
         }

@@ -78,12 +78,12 @@ const NO_OPERATION: CommitFacts = CommitFacts {
 };
 
 #[track_caller]
-fn gate(commit: &Commit, facts: CommitFacts<'_>) -> [MenuItemState; 11] {
+fn gate(commit: &Commit, facts: CommitFacts<'_>) -> [MenuItemState; 12] {
     commit_menu_items(commit, &facts)
 }
 
 #[track_caller]
-fn blocked(items: &[MenuItemState; 11], verb: CommitMenuAction) -> MenuItemState {
+fn blocked(items: &[MenuItemState; 12], verb: CommitMenuAction) -> MenuItemState {
     items[verb.index()]
 }
 

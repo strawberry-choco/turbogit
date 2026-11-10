@@ -655,8 +655,7 @@ fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
         "a refused rewrite moved nothing, so nothing follows it"
     );
     assert_eq!(
-        state.ui.selected_commit.as_deref(),
-        None,
+        state.ui.selected_commit, None,
         "and the selection is whatever the developer chose, not a rewrite's aftermath"
     );
 }

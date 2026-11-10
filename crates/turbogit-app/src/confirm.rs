@@ -159,7 +159,7 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
             "Clone the repository at the given URL?".to_string(),
             vec![Button::ok(), Button::cancel()],
         ),
-        PendingConfirm::RevertCommit { commit } => Prompt::question(
+        PendingConfirm::RevertCommit { commit, .. } => Prompt::question(
             format!(
                 "Revert commit {}? A new inverse commit will be created on the current branch.",
                 crate::state::short_sha(commit)
@@ -340,10 +340,7 @@ pub fn run(state: &mut AppState, c: PendingConfirm) {
                 move |v| v.submodule_deinit(root.as_path(), &path, false),
             ));
         }
-        PendingConfirm::RevertCommit { commit } => {
-            let Some(root) = state.selected_root.clone() else {
-                return;
-            };
+        PendingConfirm::RevertCommit { root, commit } => {
             let settings = state.settings.clone();
             state.dispatch(Operation::custom(
                 format!("Revert {}", short_sha(&commit)),

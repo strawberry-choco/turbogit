@@ -352,7 +352,7 @@ fn a_scope_that_fits_its_viewport_never_loads_a_second_batch() {
     let root_id = harness.state().multi.roots[0].id.clone();
 
     let scope = path_scope("f.txt");
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &scope) == LOG_BATCH_SIZE
     });
@@ -389,7 +389,7 @@ fn the_status_line_reports_the_scopes_loaded_window_not_the_rows_drawn() {
     let root_id = harness.state().multi.roots[0].id.clone();
 
     let scope = path_scope("f.txt");
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &scope) == LOG_BATCH_SIZE
     });
@@ -433,7 +433,7 @@ fn a_scope_shorter_than_one_batch_reads_once_and_offers_nothing() {
     let (mut harness, recorder) = seeded_harness(&project, std::slice::from_ref(&repo));
     let root_id = harness.state().multi.roots[0].id.clone();
 
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &path_scope("f.txt")) == 4
     });
@@ -618,7 +618,7 @@ fn scoping_still_replaces_or_narrows_the_listing_with_the_gate_open() {
     assert_painted(&harness, &subject(&repo, "only: off the path"));
 
     let path = path_scope("f.txt");
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &path) == LOG_BATCH_SIZE
     });
@@ -920,7 +920,7 @@ fn dragging_the_scrollbar_to_the_end_loads_a_scoped_list_further() {
     let root_id = harness.state().multi.roots[0].id.clone();
 
     let scope = path_scope("f.txt");
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &scope) == LOG_BATCH_SIZE
     });

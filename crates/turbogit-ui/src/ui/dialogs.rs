@@ -5,7 +5,7 @@ use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
 use turbogit_app::{integrate_service, shelve_stash, sync_service, tag_service};
-use turbogit_domain::model::{BranchKind, DisplayName, MergeStrategy};
+use turbogit_domain::model::{BranchKind, DisplayName, MergeStrategy, RootId};
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
 use crate::ui::components::{KitButton, counted, kit_button};
@@ -82,7 +82,7 @@ fn close(state: &mut AppState) {
 
 fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     ui.label("Apply the selected commit onto which branch?");
-    if state.ui.dlg.cherry_pick_commit.is_none() {
+    let Some((root, commit)) = state.ui.dlg.cherry_pick_commit.clone() else {
         widgets::empty_state(ui, "No commit selected.");
         widgets::dialog_footer(ui, |ui| {
             if ui.button("Cancel").clicked() {
@@ -90,12 +90,11 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
             }
         });
         return;
-    }
+    };
 
     let local: Vec<String> = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
+        .multi
+        .by_id(&root)
         .map(|r| {
             r.branches
                 .iter()
@@ -107,7 +106,10 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     if local.is_empty() {
         widgets::empty_state(ui, "No local branches.");
     }
-    let current = current_branch_name(state);
+    let current = state
+        .multi
+        .by_id(&root)
+        .and_then(|r| r.current_branch.clone());
     for name in local {
         let (label, reason) = if current.as_deref() == Some(name.as_str()) {
             (
@@ -126,9 +128,8 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
             .add_enabled(reason.is_empty(), egui::Button::new(label))
             .on_disabled_hover_text(reason);
         if row.clicked() {
-            if let Some(commit) = state.ui.dlg.cherry_pick_commit.take() {
-                state.cherry_pick_to(commit, name.clone());
-            }
+            state.ui.dlg.cherry_pick_commit = None;
+            state.cherry_pick_to(root.clone(), commit.clone(), name.clone());
             close(state);
         }
     }
@@ -355,7 +356,7 @@ fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
                 .ui
                 .log_path_scope
                 .as_ref()
-                .and_then(|path| state.caches.path_log(root, path))
+                .and_then(|(_, path)| state.caches.path_log(root, path))
         })?;
     commits
         .iter()
@@ -369,8 +370,13 @@ fn current_branch_name(state: &AppState) -> Option<String> {
 }
 
 fn merge(ui: &mut Ui, state: &mut AppState) {
-    let branches: Vec<String> = state
-        .selected_root
+    let root = state
+        .ui
+        .dlg
+        .merge_root
+        .clone()
+        .or_else(|| state.selected_root.clone());
+    let branches: Vec<String> = root
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
         .map(|r| {
@@ -458,8 +464,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
     if !target.is_empty() {
         let key = (target.clone(), state.ui.dlg.merge_strategy);
         if state.ui.dlg.merge_preview_key.as_ref() != Some(&key) {
-            let preview = state
-                .selected_root
+            let preview = root
                 .as_ref()
                 .and_then(|root| state.merge_preview(root, &target, key.1));
             state.ui.dlg.merge_preview = preview;
@@ -471,9 +476,12 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
     }
     ui.add_space(6.0);
 
-    let siblings = state.merge_cascade_siblings();
+    let siblings = root
+        .as_ref()
+        .map(|root| state.merge_cascade_siblings(root))
+        .unwrap_or_default();
     if !siblings.is_empty() {
-        cascade_banner(ui, state, siblings.len());
+        cascade_banner(ui, state, root.as_ref(), siblings.len());
         ui.add_space(4.0);
     }
 
@@ -482,7 +490,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
             let can_merge = !target.is_empty();
             let merge_btn = ui.add_enabled(can_merge, egui::Button::new("Merge"));
             if merge_btn.clicked() {
-                let root = state.selected_root.clone();
+                let root = root.clone();
                 let target = state.ui.dlg.merge_target.clone();
                 let opts = state.merge_dialog_opts();
                 let clean = state.settings.clean_tree_method;
@@ -537,7 +545,7 @@ fn preview_box(ui: &mut Ui, preview: integrate_service::MergePreview, strategy: 
     });
 }
 
-fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
+fn cascade_banner(ui: &mut Ui, state: &mut AppState, root: Option<&RootId>, siblings: usize) {
     widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
         ui.horizontal(|ui| {
             ui.colored_label(
@@ -548,8 +556,10 @@ fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
                 ),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("View plan →").clicked() {
-                    state.open_merge_cascade_plan();
+                if ui.button("View plan →").clicked()
+                    && let Some(root) = root
+                {
+                    state.open_merge_cascade_plan(root);
                 }
             });
         });
@@ -557,9 +567,12 @@ fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
 }
 
 fn rebase(ui: &mut Ui, state: &mut AppState) {
-    let current = current_branch_name(state);
-    let branches: Vec<String> = state
-        .selected_root
+    let root = state.selected_root.clone();
+    let current = root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .and_then(|r| r.current_branch.clone());
+    let branches: Vec<String> = root
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
         .map(|r| {
@@ -650,7 +663,7 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(4.0);
 
     let onto = state.ui.dlg.rebase_onto.trim().to_string();
-    let (new_verdict, old_verdict) = onto_base_verdicts(state, onto_enabled);
+    let (new_verdict, old_verdict) = onto_base_verdicts(state, root.as_ref(), onto_enabled);
     let effective_base = if onto_enabled {
         if old_verdict == BaseVerdict::Usable {
             state.ui.dlg.rebase_old_base.trim().to_string()
@@ -663,8 +676,7 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     let mut replay: Vec<turbogit_domain::model::RebasePlanEntry> = Vec::new();
     if !effective_base.is_empty() {
         if state.ui.dlg.rebase_preview_key.as_deref() != Some(effective_base.as_str()) {
-            let preview = state
-                .selected_root
+            let preview = root
                 .as_ref()
                 .and_then(|root| state.rebase_plan(root, &effective_base));
             state.ui.dlg.rebase_preview = preview;
@@ -739,15 +751,19 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(6.0);
     }
 
-    let siblings = state.rebase_affected_siblings();
+    let siblings = root
+        .as_ref()
+        .map(|root| state.rebase_affected_siblings(root))
+        .unwrap_or_default();
     if !siblings.is_empty() && !replay.is_empty() {
-        rebase_banner(ui, state, replay.len(), siblings.len() + 1);
+        rebase_banner(ui, state, root.as_ref(), replay.len(), siblings.len() + 1);
         ui.add_space(4.0);
     }
 
-    let protected = state.rebase_branch_is_protected();
-    let in_flight = state
-        .selected_root
+    let protected = root
+        .as_ref()
+        .is_some_and(|root| state.rebase_branch_is_protected(root));
+    let in_flight = root
         .as_ref()
         .and_then(|root| state.holding_operation(root.as_path()));
     widgets::dialog_footer(ui, |ui| {
@@ -796,7 +812,7 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                     String::new()
                 });
             if start.clicked() {
-                let root = state.selected_root.clone();
+                let root = root.clone();
                 let mode = state.ui.dlg.rebase_mode;
                 let opts = state.rebase_dialog_opts();
                 let settings = state.settings.clone();
@@ -853,11 +869,15 @@ enum BaseVerdict {
 /// value itself, so editing a field re-asks and anything else does not. With
 /// the option off both fields are inert and answer `Usable`, which keeps the
 /// start gate a single expression.
-fn onto_base_verdicts(state: &mut AppState, onto_enabled: bool) -> (BaseVerdict, BaseVerdict) {
+fn onto_base_verdicts(
+    state: &mut AppState,
+    root: Option<&RootId>,
+    onto_enabled: bool,
+) -> (BaseVerdict, BaseVerdict) {
     if !onto_enabled {
         return (BaseVerdict::Usable, BaseVerdict::Usable);
     }
-    let Some(root) = state.selected_root.clone() else {
+    let Some(root) = root else {
         return (BaseVerdict::Empty, BaseVerdict::Empty);
     };
     let new_value = state.ui.dlg.rebase_new_base.trim().to_string();
@@ -878,11 +898,11 @@ fn onto_base_verdicts(state: &mut AppState, onto_enabled: bool) -> (BaseVerdict,
         .map(|(_, ok)| *ok);
     let new_ok = match new_cached {
         Some(ok) => ok,
-        None => !new_value.is_empty() && state.revision_exists(&root, &new_value),
+        None => !new_value.is_empty() && state.revision_exists(root, &new_value),
     };
     let old_ok = match old_cached {
         Some(ok) => ok,
-        None => !old_value.is_empty() && state.revision_exists(&root, &old_value),
+        None => !old_value.is_empty() && state.revision_exists(root, &old_value),
     };
     state.ui.dlg.rebase_new_base_check = Some((new_value.clone(), new_ok));
     state.ui.dlg.rebase_old_base_check = Some((old_value.clone(), old_ok));
@@ -931,7 +951,13 @@ fn onto_base_field(
     }
 }
 
-fn rebase_banner(ui: &mut Ui, state: &mut AppState, commits: usize, repos: usize) {
+fn rebase_banner(
+    ui: &mut Ui,
+    state: &mut AppState,
+    root: Option<&RootId>,
+    commits: usize,
+    repos: usize,
+) {
     widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
         ui.horizontal(|ui| {
             ui.colored_label(
@@ -942,8 +968,10 @@ fn rebase_banner(ui: &mut Ui, state: &mut AppState, commits: usize, repos: usize
                 ),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("View affected →").clicked() {
-                    state.open_rebase_affected_list();
+                if ui.button("View affected →").clicked()
+                    && let Some(root) = root
+                {
+                    state.open_rebase_affected_list(root);
                 }
             });
         });
@@ -951,11 +979,14 @@ fn rebase_banner(ui: &mut Ui, state: &mut AppState, commits: usize, repos: usize
 }
 
 fn tag(ui: &mut Ui, state: &mut AppState) {
+    let root = state
+        .ui
+        .dlg
+        .tag_root
+        .clone()
+        .or_else(|| state.selected_root.clone());
     if state.ui.dlg.tag_existing.is_none() {
-        state.ui.dlg.tag_existing = state
-            .selected_root
-            .as_ref()
-            .and_then(|root| state.tag_names(root));
+        state.ui.dlg.tag_existing = root.as_ref().and_then(|root| state.tag_names(root));
     }
 
     group_title(ui, "TAG NAME");
@@ -1016,8 +1047,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
     });
     if state.ui.dlg.tag_target_picker_open {
         if state.ui.dlg.tag_candidates.is_none() {
-            state.ui.dlg.tag_candidates = state
-                .selected_root
+            state.ui.dlg.tag_candidates = root
                 .as_ref()
                 .and_then(|root| state.recent_commits(root, 50));
         }
@@ -1078,10 +1108,8 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.checkbox(&mut state.ui.dlg.tag_sign, "Sign with GPG key");
             if state.ui.dlg.tag_sign && !state.ui.dlg.tag_signing_key_fetched {
-                state.ui.dlg.tag_signing_key = state
-                    .selected_root
-                    .as_ref()
-                    .and_then(|root| state.signing_key(root));
+                state.ui.dlg.tag_signing_key =
+                    root.as_ref().and_then(|root| state.signing_key(root));
                 state.ui.dlg.tag_signing_key_fetched = true;
             }
             if state.ui.dlg.tag_sign
@@ -1114,7 +1142,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
             })
             .inner;
         if create.clicked() {
-            let root = state.selected_root.clone();
+            let root = root.clone();
             let spec = turbogit_domain::model::TagSpec {
                 name: state.ui.dlg.tag_name.trim().to_string(),
                 target: (!state.ui.dlg.tag_target.is_empty())

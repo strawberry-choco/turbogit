@@ -142,7 +142,7 @@ fn a_scope_change_rebuilds_from_the_scoped_listing() {
         turbogit_app::events::LogBatchMode::Replace,
         vec![commit(&alpha, "s1", 100)],
     );
-    state.ui.log_path_scope = Some(path);
+    state.ui.log_path_scope = Some((alpha.clone(), path));
     let scoped = state.sync_log_display();
     assert!(!Arc::ptr_eq(&unscoped, &scoped), "a scope must rebuild");
     assert_eq!(
@@ -209,7 +209,7 @@ fn selecting_a_row_does_not_rebuild_the_window() {
     state.selected_root = Some(alpha.clone());
     let before = state.sync_log_display();
 
-    state.ui.selected_commit = Some("a1".to_owned());
+    state.ui.selected_commit = Some((alpha.clone(), "a1".to_owned()));
     let after = state.sync_log_display();
     assert!(
         Arc::ptr_eq(&before, &after),
@@ -223,14 +223,11 @@ fn selecting_a_row_does_not_rebuild_the_window() {
         turbogit_app::events::LogBatchMode::Replace,
         vec![commit(&beta, "b1", 100)],
     );
-    state.ui.log_path_scope = Some(path);
-    state.selected_root = Some(alpha.clone());
-    state.sync_log_display();
-    state.selected_root = Some(beta.clone());
+    state.ui.log_path_scope = Some((beta.clone(), path));
     let rescoped = state.sync_log_display();
     assert_eq!(
         ids(&rescoped),
         ["b1"],
-        "the scoped listing is read for the selected repository"
+        "the scoped listing is read for the pair's repository"
     );
 }

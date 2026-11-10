@@ -32,7 +32,10 @@ fn revert_through_the_confirm_gate_creates_and_commits_the_revert() {
     let mut state = AppState::for_roots(&project, &[project.join("alpha")]);
     let root_id = state.multi.roots[0].id.clone();
 
-    state.run_confirmed(PendingConfirm::RevertCommit { commit: c2.clone() });
+    state.run_confirmed(PendingConfirm::RevertCommit {
+        root: root_id.clone(),
+        commit: c2.clone(),
+    });
     state.drain_events();
     assert!(
         state.caches.log(&root_id).is_some_and(|cs| cs
@@ -65,7 +68,7 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
     state.settings.protected_branch_patterns.clear();
     let root_id = state.multi.roots[0].id.clone();
 
-    state.cherry_pick_to(fc, "main".to_string());
+    state.cherry_pick_to(root_id.clone(), fc, "main".to_string());
     state.drain_events();
     assert!(
         state

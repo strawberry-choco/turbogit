@@ -429,7 +429,7 @@ fn acceptance_matrix_screenshots() {
     snapshot(&mut h, "03-git-log");
 
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
-    h.state_mut().ui.selected_commit = Some(head);
+    h.state_mut().ui.selected_commit = Some((RootId(repo.clone().into()), head));
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();

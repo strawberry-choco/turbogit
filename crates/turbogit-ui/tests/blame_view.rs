@@ -419,7 +419,12 @@ fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     settle_reads(&mut harness);
 
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(seed.c1.as_str()),
         "the line's commit must become the log selection"
     );

@@ -188,10 +188,11 @@ fn a_user_filter_reads_only_matching_commits_from_the_real_repository() {
 #[test]
 fn two_legacy_filters_are_read_together_instead_of_one_silently_winning() {
     let mut harness = log_harness();
+    let root = harness.state().multi.roots[0].id.clone();
     {
         let state = harness.state_mut();
         state.ui.log_ref_scope = Some("main".to_owned());
-        state.ui.log_path_scope = Some("README.md".into());
+        state.ui.log_path_scope = Some((root, "README.md".into()));
     }
 
     let key = harness
@@ -206,11 +207,12 @@ fn two_legacy_filters_are_read_together_instead_of_one_silently_winning() {
 #[test]
 fn clear_resets_every_filter_including_the_root_selection() {
     let mut harness = log_harness();
+    let root = harness.state().multi.roots[0].id.clone();
     {
         let state = harness.state_mut();
         state.ui.log_author_filter = Some("alice".to_owned());
         state.ui.log_date_filter = DateFilter::Last24Hours { since: 1 };
-        state.ui.log_path_scope = Some("src/lib.rs".into());
+        state.ui.log_path_scope = Some((root, "src/lib.rs".into()));
         state.ui.log_roots = RootFilter::Only(
             state
                 .multi

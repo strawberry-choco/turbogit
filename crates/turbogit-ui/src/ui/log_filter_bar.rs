@@ -354,8 +354,8 @@ fn paths_readback(state: &AppState) -> Option<String> {
         })
     };
     match (&state.ui.log_path_scope, roots_note) {
-        (Some(path), None) => Some(path.display().to_string()),
-        (Some(path), Some(note)) => Some(format!("{} · {note}", path.display())),
+        (Some((_, path)), None) => Some(path.display().to_string()),
+        (Some((_, path)), Some(note)) => Some(format!("{} · {note}", path.display())),
         (None, note) => note,
     }
 }
@@ -703,7 +703,19 @@ fn paths_menu(ui: &mut Ui, state: &mut AppState) -> bool {
         "Path",
     ) {
         let text = state.ui.log_path_input.trim().to_owned();
-        state.ui.log_path_scope = (!text.is_empty()).then(|| PathBuf::from(text.as_str()));
+        // A typed path names no repository: read the one the row selection is
+        // about, and fall back to the first registered root at rest.
+        let root = state
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(root, _)| root.clone())
+            .or_else(|| state.multi.roots.first().map(|root| root.id.clone()));
+        state.ui.log_path_scope = if text.is_empty() {
+            None
+        } else {
+            root.map(|root| (root, PathBuf::from(text.as_str())))
+        };
         close = true;
     }
     widgets::menu_rule(ui);

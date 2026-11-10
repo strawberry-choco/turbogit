@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{painted_galleys, settle, shell_harness_over};
 use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::model::RootId;
 use turbogit_ui::theme::font_definitions;
 
 const SUBJECT: &str = "修复提交视图无法显示中文";
@@ -60,7 +61,7 @@ fn the_commit_view_paints_chinese_in_real_glyphs() {
     h.state_mut().ui.tab = Tab::Log;
     settle(&mut h);
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
-    h.state_mut().ui.selected_commit = Some(head);
+    h.state_mut().ui.selected_commit = Some((RootId(repo.clone().into()), head));
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();

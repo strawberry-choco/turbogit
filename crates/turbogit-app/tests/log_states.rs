@@ -295,7 +295,7 @@ fn an_empty_path_scope_reads_as_file_history() {
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
     let path = PathBuf::from("never-touched.txt");
-    state.ui.log_path_scope = Some(path.clone());
+    state.ui.log_path_scope = Some((root.clone(), path.clone()));
     state.ensure_log(&root, LogScope::Path(path));
     let list = log_states::commit_list(&state, true);
     assert_eq!(list, LogState::FileHistory);
@@ -309,7 +309,7 @@ fn a_failed_path_scope_read_names_file_history() {
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
     let path = PathBuf::from("f.txt");
-    state.ui.log_path_scope = Some(path.clone());
+    state.ui.log_path_scope = Some((root.clone(), path.clone()));
     fail(
         &mut state,
         &LogRead::Scope(root.clone(), LogScope::Path(path)),
@@ -368,7 +368,7 @@ fn an_absent_search_term_owns_no_filtering_state() {
     let (mut state, root) = loaded(&project, 3);
     assert_eq!(log_states::filtering(&state), LogState::Ready);
     state.ui.log_filter = "token".to_owned();
-    state.ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    state.ui.log_path_scope = Some((root.clone(), PathBuf::from("f.txt")));
     state.ensure_log(&root, LogScope::Path(PathBuf::from("f.txt")));
     let key = state
         .log_filter_key()
@@ -387,7 +387,7 @@ fn a_failed_details_read_names_details_and_not_commits() {
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
     let cid = head(&state, &root);
-    state.ui.selected_commit = Some(cid.clone());
+    state.ui.selected_commit = Some((root.clone(), cid.clone()));
     fail(
         &mut state,
         &LogRead::Details(root.clone(), cid.clone()),
@@ -417,7 +417,7 @@ fn a_selection_whose_details_are_not_in_yet_is_loading_details() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
-    state.ui.selected_commit = Some(head(&state, &root));
+    state.ui.selected_commit = Some((root.clone(), head(&state, &root)));
     let details = log_states::commit_details(&state);
     assert_eq!(details, LogState::LoadingDetails);
     assert_eq!(details.label(), "Loading selected details");
@@ -439,7 +439,7 @@ fn a_failed_changes_read_names_changes() {
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
     let cid = head(&state, &root);
-    state.ui.selected_commit = Some(cid.clone());
+    state.ui.selected_commit = Some((root.clone(), cid.clone()));
     fail(&mut state, &LogRead::Changes(root, cid), "bad object");
     let changes = log_states::changed_files(&state);
     assert_eq!(changes, LogState::ChangesFailed("bad object".to_owned()));

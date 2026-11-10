@@ -18,10 +18,11 @@ pub enum CommitMenuAction {
     RewordCommit,
     NewBranch,
     NewTag,
+    InteractiveRebase,
 }
 
 impl CommitMenuAction {
-    pub const ORDER: [Self; 11] = [
+    pub const ORDER: [Self; 12] = [
         Self::CopyHash,
         Self::CopyMessage,
         Self::CreatePatch,
@@ -33,6 +34,7 @@ impl CommitMenuAction {
         Self::RewordCommit,
         Self::NewBranch,
         Self::NewTag,
+        Self::InteractiveRebase,
     ];
 
     pub const fn index(self) -> usize {
@@ -48,6 +50,7 @@ impl CommitMenuAction {
             Self::RewordCommit => 8,
             Self::NewBranch => 9,
             Self::NewTag => 10,
+            Self::InteractiveRebase => 11,
         }
     }
 
@@ -87,8 +90,8 @@ pub struct CommitFacts<'a> {
     pub repo_name: &'a str,
 }
 
-pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemState; 11] {
-    let mut items = [MenuItemState::enabled(); 11];
+pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemState; 12] {
+    let mut items = [MenuItemState::enabled(); 12];
 
     let needs_clean_tree = [
         CommitMenuAction::CherryPickTo,
@@ -112,6 +115,10 @@ pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemS
     let rewriteable = [
         (CommitMenuAction::DropCommit, RewriteVerb::Drop),
         (CommitMenuAction::RewordCommit, RewriteVerb::Reword),
+        (
+            CommitMenuAction::InteractiveRebase,
+            RewriteVerb::Interactive,
+        ),
     ];
     for (action, verb) in rewriteable {
         items[action.index()] = match rewrite_gating::blocked(commit, facts) {
@@ -233,6 +240,13 @@ pub fn commit_menu(
         CommitMenuAction::NewTag,
         Icon::TAG,
         "New tag",
+        None,
+        MenuItemKind::Default
+    );
+    row!(
+        CommitMenuAction::InteractiveRebase,
+        Icon::GIT_BRANCH,
+        "Interactive rebase from here…",
         None,
         MenuItemKind::Default
     );

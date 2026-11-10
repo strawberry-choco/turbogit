@@ -172,7 +172,7 @@ fn a_narrow_and_short_window_still_yield_without_swallowing_the_graph() {
     let mut state = AppState::new(seed.project.clone());
     warm_log_and_refs(&mut state);
     state.ui.tab = Tab::Log;
-    state.ui.selected_commit = Some(seed.c2.clone());
+    state.ui.selected_commit = Some((RootId(seed.alpha.clone().into()), seed.c2.clone()));
     let harness = harness_sized(state, egui::vec2(560.0, 380.0));
 
     assert_painted(&harness, "CHANGED FILES");
@@ -460,7 +460,12 @@ fn details_pane_shows_hash_author_date_parents_message_for_selection() {
     settle(&mut harness);
 
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(seed.c2.as_str()),
         "clicking a log row must select the commit"
     );
@@ -702,18 +707,9 @@ fn wait_for_file_stats(harness: &mut Harness<'_, AppState>) {
     loop {
         harness.state_mut().drain_events();
         harness.step();
-        let loaded = harness
-            .state()
-            .ui
-            .selected_commit
-            .as_ref()
-            .is_some_and(|cid| {
-                harness
-                    .state()
-                    .selected_root
-                    .as_ref()
-                    .is_some_and(|root| harness.state().caches.file_stats_loaded(root, cid))
-            });
+        let loaded = harness.state().ui.selected_commit.as_ref().is_some_and(
+            |(root, cid)| harness.state().caches.file_stats_loaded(root, cid),
+        );
         if loaded {
             return;
         }
@@ -999,7 +995,7 @@ fn a_changed_file_row_opens_the_shared_menu_and_its_verbs_still_work() {
     settle_pumped(&mut harness);
     assert_eq!(
         harness.state().ui.log_path_scope,
-        Some(PathBuf::from("file.txt")),
+        Some((RootId(seed.alpha.clone().into()), PathBuf::from("file.txt"))),
         "the row's other verb still does what it did"
     );
 }
@@ -1009,7 +1005,8 @@ fn a_blocked_file_row_item_stays_visible_and_states_its_reason() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_second_commit(&mut harness, &seed);
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("file.txt"));
+    harness.state_mut().ui.log_path_scope =
+        Some((RootId(seed.alpha.clone().into()), PathBuf::from("file.txt")));
     settle_pumped(&mut harness);
 
     right_click_row(&mut harness, "file.txt");
@@ -1231,7 +1228,12 @@ fn scoped_history_keeps_graph_and_details_functional() {
     harness.get_by_label(&scoped_row).click();
     settle(&mut harness);
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(seed.c1.as_str()),
         "rows inside the scope must stay selectable"
     );
@@ -1758,7 +1760,7 @@ fn the_four_log_panes_are_stroke_less_cards_and_the_details_raised_parent_is_gon
     let mut state = AppState::new(seed.project.clone());
     warm_log_and_refs(&mut state);
     state.ui.tab = Tab::Log;
-    state.ui.selected_commit = Some(seed.c3.clone());
+    state.ui.selected_commit = Some((RootId(seed.alpha.clone().into()), seed.c3.clone()));
     let mut harness = harness_with(state);
     settle(&mut harness);
 
@@ -1954,7 +1956,7 @@ fn the_logs_chrome_names_no_ink_outside_the_shared_ramp() {
     let mut state = AppState::new(seed.project.clone());
     warm_log_and_refs(&mut state);
     state.ui.tab = Tab::Log;
-    state.ui.selected_commit = Some(seed.c2.clone());
+    state.ui.selected_commit = Some((RootId(seed.alpha.clone().into()), seed.c2.clone()));
     let mut harness = harness_with(state);
     settle(&mut harness);
 
@@ -2489,7 +2491,7 @@ fn no_row_in_the_log_window_indents_when_it_is_chosen() {
             .ui
             .log_selected_file
             .as_ref()
-            .map(|p| p.display().to_string()),
+            .map(|(_, p)| p.display().to_string()),
         Some(path.clone()),
         "clicking a file row chooses it, so this measures a chosen row"
     );
@@ -2905,7 +2907,8 @@ fn the_roots_column_does_not_move_the_rail() {
 
     let mut scoped = log_harness(&seed);
     select_second_commit(&mut scoped, &seed);
-    scoped.state_mut().ui.log_path_scope = Some(std::path::PathBuf::from("file.txt"));
+    scoped.state_mut().ui.log_path_scope =
+        Some((RootId(seed.alpha.clone().into()), std::path::PathBuf::from("file.txt")));
     settle(&mut scoped);
     assert!(
         scoped.state().ui.log_path_scope.is_some(),
@@ -3135,7 +3138,12 @@ fn the_details_pane_populates_on_selection_and_still_renders_its_empty_state() {
     let mut harness = log_harness(&seed);
     select_second_commit(&mut harness, &seed);
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(seed.c2.as_str()),
         "clicking a commit row selects it"
     );

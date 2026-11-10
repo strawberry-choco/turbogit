@@ -44,7 +44,7 @@ fn state(facts: CommitFacts, target: &Commit, item: CommitMenuAction) -> MenuIte
 
 #[test]
 fn the_designed_order_is_the_array_slots() {
-    assert_eq!(CommitMenuAction::ORDER.len(), 11);
+    assert_eq!(CommitMenuAction::ORDER.len(), 12);
     for (slot, action) in CommitMenuAction::ORDER.iter().enumerate() {
         assert_eq!(action.index(), slot, "{action:?} is painted in slot {slot}");
     }
@@ -251,7 +251,7 @@ fn menu_harness(
 }
 
 #[test]
-fn the_menu_renders_the_eleven_items_in_the_designed_order() {
+fn the_menu_renders_the_twelve_items_in_the_designed_order() {
     let (harness, _returned) = menu_harness(commit("feature: one", 1), CLEAN);
 
     let mut galleys = painted_galleys(&harness);
@@ -283,6 +283,7 @@ fn the_menu_renders_the_eleven_items_in_the_designed_order() {
             "Reword commit",
             "New branch",
             "New tag",
+            "Interactive rebase from here…",
         ],
         "item order and the two data segments"
     );
@@ -797,7 +798,12 @@ mod surface {
             "the surface owns the open state, keyed by the right-clicked commit"
         );
         assert_eq!(
-            harness.state().ui.selected_commit.as_deref(),
+            harness
+                .state()
+                .ui
+                .selected_commit
+                .as_ref()
+                .map(|(_, id)| id.as_str()),
             Some(seed.c2.as_str()),
             "and the press selected the row it opened"
         );
@@ -837,7 +843,12 @@ mod surface {
             "a click on another row closes it"
         );
         assert_eq!(
-            harness.state().ui.selected_commit.as_deref(),
+            harness
+                .state()
+                .ui
+                .selected_commit
+                .as_ref()
+                .map(|(_, id)| id.as_str()),
             Some(seed.c1.as_str()),
             "and that click still selected the row it landed on"
         );
@@ -899,7 +910,7 @@ mod surface {
         assert!(
             matches!(
                 &harness.state().ui.confirm,
-                Some(turbogit_app::state::PendingConfirm::RevertCommit { commit }) if commit == &seed.c2
+                Some(turbogit_app::state::PendingConfirm::RevertCommit { commit, .. }) if commit == &seed.c2
             ),
             "the ask names the right-clicked commit"
         );
@@ -907,12 +918,15 @@ mod surface {
 
         harness.get_by_label("OK").click();
         wait_for(&mut harness, |s| {
-            s.caches
-                .log(&s.selected_root.clone().unwrap())
-                .is_some_and(|cs| {
-                    cs.iter()
-                        .any(|c| c.message.to_lowercase().starts_with("revert"))
-                })
+            let root = s.multi.roots.first().map(|r| r.id.clone());
+            root.is_some_and(|root| {
+                s.caches
+                    .log(&root)
+                    .is_some_and(|cs| {
+                        cs.iter()
+                            .any(|c| c.message.to_lowercase().starts_with("revert"))
+                    })
+            })
         });
         let subject = git_with_env(
             &seed.alpha,
@@ -1161,7 +1175,6 @@ mod surface {
     pub(crate) struct CrossRoot {
         pub _tmp: TempDir,
         pub harness: Harness<'static, AppState>,
-        pub selected: RootId,
         pub selected_path: PathBuf,
         pub row_root: RootId,
         pub row_root_path: PathBuf,
@@ -1216,7 +1229,6 @@ mod surface {
         CrossRoot {
             _tmp: tmp,
             harness,
-            selected,
             selected_path: dirty,
             row_root,
             row_root_path: clean,
@@ -1232,7 +1244,6 @@ mod surface {
         let CrossRoot {
             _tmp,
             mut harness,
-            selected,
             row_root,
             commit,
             parent,
@@ -1241,12 +1252,7 @@ mod surface {
         assert_eq!(
             harness.state().ui.selected_commit,
             None,
-            "nothing is selected yet, so the press below is what moves the root"
-        );
-        assert_eq!(
-            harness.state().selected_root,
-            Some(selected),
-            "the app starts out looking at the other repository"
+            "nothing is selected yet, so the press below is what selects the row"
         );
 
         row_node(&harness, "clean work commit").click();
@@ -1254,14 +1260,9 @@ mod surface {
 
         let st = harness.state();
         assert_eq!(
-            st.selected_root,
-            Some(row_root),
-            "the press made the row's repository the selected one"
-        );
-        assert_eq!(
-            st.ui.selected_commit.as_deref(),
-            Some(commit.as_str()),
-            "and the pressed commit the selected commit"
+            st.ui.selected_commit,
+            Some((row_root.clone(), commit.clone())),
+            "the press selected the row's commit and carried its repository"
         );
         assert_eq!(
             st.ui.log_selected_file, None,
@@ -1276,7 +1277,6 @@ mod surface {
         let CrossRoot {
             _tmp,
             mut harness,
-            row_root,
             row_root_path,
             selected_path,
             landing,
@@ -1288,11 +1288,6 @@ mod surface {
             .to_string();
 
         right_click_row(&mut harness, "clean work commit");
-        assert_eq!(
-            harness.state().selected_root,
-            Some(row_root),
-            "the press made the row's repository the selected one"
-        );
         click_menu_item(&mut harness, "Cherry-pick to…");
         settle(&mut harness);
         assert_eq!(
@@ -1519,7 +1514,8 @@ mod surface {
         let target = menu_target(&harness);
         assert_eq!(target.as_deref(), Some(seed.c2.as_str()));
 
-        harness.state_mut().ui.selected_commit = Some(seed.c1.clone());
+        let root = harness.state().multi.roots[0].id.clone();
+        harness.state_mut().ui.selected_commit = Some((root, seed.c1.clone()));
         harness.step();
         assert_eq!(
             menu_target(&harness),

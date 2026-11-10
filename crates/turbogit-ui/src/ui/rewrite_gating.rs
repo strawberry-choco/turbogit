@@ -9,6 +9,7 @@ use crate::ui::commit_menu::{CommitFacts, reason};
 pub enum RewriteVerb {
     Drop,
     Reword,
+    Interactive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,8 +50,10 @@ mod text {
     pub(super) const REVERT: &str = "Cannot rewrite history during a revert";
     pub(super) const MERGE_DROP: &str = "a merge commit cannot be dropped";
     pub(super) const MERGE_REWORD: &str = "a merge commit cannot be reworded";
+    pub(super) const MERGE_REBASE: &str = "a merge commit cannot be rebased";
     pub(super) const ROOT_DROP: &str = "a root commit cannot be dropped";
     pub(super) const ROOT_REWORD: &str = "a root commit cannot be reworded";
+    pub(super) const ROOT_REBASE: &str = "a root commit cannot be rebased";
     pub(super) const OFF_BRANCH: &str = "not on the current branch";
     pub(super) const SEVERAL: &str = "the rewrite runs in one repository; several are in scope";
     pub(super) const EXTERNAL: &str = "the commit is in a repository outside the ones in scope";
@@ -66,10 +69,12 @@ impl Block {
             Self::MergeCommit => match verb {
                 RewriteVerb::Drop => text::MERGE_DROP,
                 RewriteVerb::Reword => text::MERGE_REWORD,
+                RewriteVerb::Interactive => text::MERGE_REBASE,
             },
             Self::RootCommit => match verb {
                 RewriteVerb::Drop => text::ROOT_DROP,
                 RewriteVerb::Reword => text::ROOT_REWORD,
+                RewriteVerb::Interactive => text::ROOT_REBASE,
             },
             Self::OffCurrentBranch => text::OFF_BRANCH,
             Self::SeveralInScope => text::SEVERAL,

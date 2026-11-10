@@ -159,7 +159,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::Rebase => state.ui.dialog = Some(Dialog::Rebase),
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),
         Action::Shelve => state.open_shelve_dialog(root),
-        Action::Tag => state.open_tag_dialog(None),
+        Action::Tag => state.open_tag_dialog(None, None),
         Action::CommitTab => state.ui.tab = Tab::Commit,
         Action::Settings => state.ui.settings_open = true,
         Action::Clone => {

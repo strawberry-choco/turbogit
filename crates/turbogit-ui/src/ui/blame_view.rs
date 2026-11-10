@@ -138,7 +138,7 @@ fn blame_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::B
     });
 
     if let Some(commit) = clicked {
-        state.ui.selected_commit = Some(commit.clone());
+        state.ui.selected_commit = Some((target.root.clone(), commit.clone()));
         state.ui.log_selected_file = None;
         state.ui.blame = None;
         state.ui.log_scroll_to = Some(commit);

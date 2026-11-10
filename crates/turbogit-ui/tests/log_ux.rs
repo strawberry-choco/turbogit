@@ -373,7 +373,7 @@ fn resting_at_the_bottom_of_a_scoped_list_loads_further_batches() {
     settle_until(&mut harness, &short(&seed.newest));
 
     let scope = LogScope::Path(PathBuf::from("f.txt"));
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle_where(&mut harness, |s| {
         scoped_len(s, &root_id, &scope) == LOG_BATCH_SIZE
     });
@@ -428,7 +428,7 @@ fn load_more_is_painted_inside_a_scope_while_the_scope_continues() {
     assert_painted(&harness, "Load more");
 
     let path = LogScope::Path(PathBuf::from("f.txt"));
-    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("f.txt"));
+    harness.state_mut().ui.log_path_scope = Some((root_id.clone(), PathBuf::from("f.txt")));
     settle(&mut harness);
     assert_eq!(
         scoped_len(harness.state(), &root_id, &path),
@@ -603,7 +603,12 @@ fn details_show_committer_copy_hash_and_clickable_parents() {
     harness.get_by_label(&short(&seed.c1)).click();
     settle(&mut harness);
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(seed.c1.as_str()),
         "clicking a parent hash must select the parent commit"
     );

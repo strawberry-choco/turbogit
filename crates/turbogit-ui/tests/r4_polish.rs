@@ -171,7 +171,7 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
     if let Some(root) = state.multi.roots.first().cloned()
         && let Some(head) = state.caches.log(&root.id).and_then(|c| c.first().cloned())
     {
-        state.ui.selected_commit = Some(head.id.clone());
+        state.ui.selected_commit = Some((root.id.clone(), head.id.clone()));
     }
     state.ui.tab = tab;
 

@@ -3,7 +3,7 @@ use turbogit_app::history_editor;
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, RebaseEditorTab};
-use turbogit_domain::model::RebaseAction;
+use turbogit_domain::model::{RebaseAction, RootId};
 
 use crate::theme::Palette;
 use crate::ui::components;
@@ -35,6 +35,8 @@ fn close(state: &mut AppState) {
     state.ui.dialog = None;
     state.ui.dlg.rebase_plan = None;
     state.ui.dlg.rebase_base = None;
+    state.ui.dlg.rebase_edit_root = None;
+    state.ui.dlg.rebase_edit_commit = None;
     state.ui.dlg.rebase_cautions = Vec::new();
     state.ui.dlg.rebase_todo = String::new();
     state.ui.dlg.rebase_todo_error = None;
@@ -43,32 +45,9 @@ fn close(state: &mut AppState) {
     state.ui.dlg.rebase_tab = RebaseEditorTab::default();
 }
 
-fn ensure_plan(state: &mut AppState) {
-    if state.ui.dlg.rebase_plan.is_some() {
-        return;
-    }
-    let Some(cid) = state.ui.selected_commit.clone() else {
-        return;
-    };
-    let Some(id) = state.selected_root.clone() else {
-        return;
-    };
-    let Some(base) = state.commit_base_ref(&id, &cid) else {
-        return;
-    };
-    let Some(plan) = state.rebase_plan(&id, &base) else {
-        return;
-    };
-    state.ui.dlg.rebase_base = Some(base);
-    state.ui.dlg.rebase_cautions = state.rebase_cautions(&id, &plan);
-    state.ui.dlg.rebase_todo = history_editor::render_todo(&plan);
-    state.ui.dlg.rebase_plan = Some(plan);
-}
-
 fn body(ui: &mut Ui, state: &mut AppState) {
-    ensure_plan(state);
     let Some(mut plan) = state.ui.dlg.rebase_plan.take() else {
-        ui.label("Select a commit in the Log tab first, then open this editor.");
+        ui.label("Choose Interactive rebase from a commit's context menu.");
         if ui.button("Close").clicked() {
             close(state);
         }
@@ -134,9 +113,12 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Start rebase").clicked() {
-                let root = state.selected_root.clone();
+                let root = state.ui.dlg.rebase_edit_root.clone();
                 let settings = state.settings.clone();
-                let branch = current_branch(state).unwrap_or_default();
+                let branch = root
+                    .as_ref()
+                    .and_then(|root| current_branch(state, root))
+                    .unwrap_or_default();
                 if let Some(root) = root {
                     let op = Operation::rebase_interactive(
                         &root,
@@ -157,22 +139,19 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn current_branch(state: &AppState) -> Option<String> {
-    let id = state.selected_root.as_ref()?;
-    state.multi.by_id(id)?.current_branch.clone()
+fn current_branch(state: &AppState, root: &RootId) -> Option<String> {
+    state.multi.by_id(root)?.current_branch.clone()
 }
 
 fn rail(ui: &mut Ui, state: &mut AppState) {
     widgets::cautions_rail(ui, &state.ui.dlg.rebase_cautions);
 
-    let siblings = state.rebase_affected_siblings();
+    let Some(root) = state.ui.dlg.rebase_edit_root.clone() else {
+        return;
+    };
+    let siblings = state.rebase_affected_siblings(&root);
     widgets::group_title(ui, &format!("AFFECTED REPOS · {}", siblings.len() + 1));
-    for id in state
-        .selected_root
-        .iter()
-        .cloned()
-        .chain(siblings.iter().cloned())
-    {
+    for id in std::iter::once(root).chain(siblings.iter().cloned()) {
         if let Some(root) = state.multi.by_id(&id) {
             ui.horizontal(|ui| {
                 ui.label(
@@ -208,13 +187,14 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     widgets::recovery_note(ui, &state.rewrite_backup_ref());
     ui.add_space(6.0);
     ui.label("Abort at any time to restore the pre-rewrite state.");
-    let held = state
-        .selected_path()
-        .and_then(|root| state.holding_operation(&root));
+    let root = state.ui.dlg.rebase_edit_root.clone();
+    let held = root
+        .as_ref()
+        .and_then(|root| state.holding_operation(root.as_path()));
     if turbogit_app::integrate_service::operation_in_progress(held)
         && ui.button("Abort & restore").clicked()
     {
-        if let Some(root) = state.selected_root.clone() {
+        if let Some(root) = root {
             state.dispatch(shell_writes::rewrite::abort_interactive_rebase(&root));
         }
         close(state);

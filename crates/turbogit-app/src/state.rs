@@ -113,6 +113,9 @@ pub struct DialogState {
     pub push_set_upstream: bool,
     pub push_preview_output: Option<PushPreview>,
     pub merge_target: String,
+    /// The repository the Merge dialog merges into. A branch row passes its
+    /// own root; the palette leaves it to the dialog's selector.
+    pub merge_root: Option<RootId>,
     pub merge_no_ff: bool,
     pub merge_no_verify: bool,
     pub merge_strategy: turbogit_domain::model::MergeStrategy,
@@ -185,7 +188,7 @@ pub struct DialogState {
     pub rewrite_preflight: Option<RewritePreflight>,
     pub reword: Option<RewordDraft>,
     pub reword_message: String,
-    pub cherry_pick_commit: Option<String>,
+    pub cherry_pick_commit: Option<(RootId, CommitId)>,
     pub cherry_source: Option<RootId>,
     pub cherry_candidates: Vec<Commit>,
     pub cherry_commits: Vec<String>,
@@ -200,6 +203,9 @@ pub struct DialogState {
     pub tag_msg: String,
     pub tag_push: bool,
     pub tag_type: TagType,
+    /// The repository the Tag dialog creates in. The commit menu passes the
+    /// clicked commit's root; the palette leaves it to the dialog's selector.
+    pub tag_root: Option<RootId>,
     pub tag_target: String,
     pub tag_target_picker_open: bool,
     pub tag_candidates: Option<Vec<Commit>>,
@@ -220,6 +226,11 @@ pub struct DialogState {
     pub wt_branch: String,
     pub rebase_plan: Option<Vec<turbogit_domain::model::RebasePlanEntry>>,
     pub rebase_base: Option<String>,
+    /// The repository and commit the interactive editor was opened for. The
+    /// plan, the Start dispatch, the affected-repos rail and Abort all read
+    /// this pair, never a workspace-wide focus.
+    pub rebase_edit_root: Option<RootId>,
+    pub rebase_edit_commit: Option<CommitId>,
     pub rebase_tab: RebaseEditorTab,
     pub rebase_selected: usize,
     pub rebase_cautions: Vec<turbogit_services::history_editor::RebaseCaution>,
@@ -452,6 +463,7 @@ pub enum PendingConfirm {
         path: PathBuf,
     },
     RevertCommit {
+        root: RootId,
         commit: String,
     },
     DeleteShelf {
@@ -769,9 +781,9 @@ pub struct UiState {
     pub branches_scope_picker_open: bool,
     pub log_branch_filter: String,
     pub log_roots: crate::log_filters::RootFilter,
-    pub log_selected_file: Option<PathBuf>,
+    pub log_selected_file: Option<(RootId, PathBuf)>,
     pub log_file_filter: String,
-    pub log_path_scope: Option<PathBuf>,
+    pub log_path_scope: Option<(RootId, PathBuf)>,
     pub log_ref_scope: Option<String>,
     pub log_ref_folds: crate::log_filters::RefFolds,
     pub log_author_filter: Option<String>,
@@ -779,7 +791,9 @@ pub struct UiState {
     pub log_author_input: String,
     pub log_branch_input: String,
     pub log_path_input: String,
-    pub selected_commit: Option<CommitId>,
+    /// The selected commit and the repository it belongs to. The pair is the
+    /// identity: two roots may hold the same SHA, and the Log lists both.
+    pub selected_commit: Option<(RootId, CommitId)>,
     pub log_scroll_to: Option<CommitId>,
     pub log_hidden_jump: Option<(RootId, CommitId)>,
     pub pending_reselect: Option<PendingReselect>,
@@ -1339,7 +1353,7 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
         let branch = self.ui.log_ref_scope.clone();
-        let path = self.ui.log_path_scope.clone();
+        let path = self.ui.log_path_scope.as_ref().map(|(_, path)| path.clone());
         let query = self.ui.log_filter.trim();
         let pickaxe = (!query.is_empty()).then(|| query.to_owned());
         let structured = author.is_some() || since.is_some() || until.is_some();
@@ -1374,7 +1388,7 @@ impl AppState {
                     LogScope::Search(query.clone()),
                 ));
             }
-            if let Some(path) = &self.ui.log_path_scope {
+            if let Some((_, path)) = &self.ui.log_path_scope {
                 self.caches
                     .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Path(path.clone())));
             }
@@ -2090,10 +2104,7 @@ impl AppState {
         }
     }
 
-    pub fn cherry_pick_to(&mut self, commit: String, target: String) {
-        let Some(root) = self.selected_root.clone() else {
-            return;
-        };
+    pub fn cherry_pick_to(&mut self, root: RootId, commit: CommitId, target: String) {
         let settings = self.settings.clone();
         self.dispatch(Operation::custom(
             format!("Cherry-pick {} to {target}", short_sha(&commit)),
@@ -2121,10 +2132,7 @@ impl AppState {
             })
     }
 
-    pub fn open_cherry_across(&mut self) {
-        let Some(source) = self.selected_root.clone() else {
-            return;
-        };
+    pub fn open_cherry_across(&mut self, source: RootId) {
         let mut candidates = self.cherry_source_log(&source);
         candidates.reverse();
         let selection = self.ui.repo_selection.clone();
@@ -2220,7 +2228,8 @@ impl AppState {
             &window,
             &pending.anchor,
             &pending.fate,
-        );
+        )
+        .map(|cid| (pending.root.clone(), cid));
         self.ui.log_selected_file = None;
         self.ui.log_commit_menu = None;
     }
@@ -2269,6 +2278,32 @@ impl AppState {
         self.ui.dialog = Some(Dialog::RewritePreflight);
     }
 
+    /// Open the interactive rebase editor for one commit. The plan is built
+    /// here, from the pair the menu action supplied, so the editor never has to
+    /// guess a repository or a commit at paint time.
+    pub fn open_interactive_rebase(&mut self, root: &RootId, commit: &str) {
+        let Some(base) = self.commit_base_ref(root, commit) else {
+            return;
+        };
+        let Some(plan) = self.rebase_plan(root, &base) else {
+            return;
+        };
+        let cautions = self.rebase_cautions(root, &plan);
+        let todo = turbogit_services::history_editor::render_todo(&plan);
+        let dlg = &mut self.ui.dlg;
+        dlg.rebase_edit_root = Some(root.clone());
+        dlg.rebase_edit_commit = Some(commit.to_owned());
+        dlg.rebase_base = Some(base);
+        dlg.rebase_cautions = cautions;
+        dlg.rebase_todo = todo;
+        dlg.rebase_todo_error = None;
+        dlg.rebase_selected = 0;
+        dlg.rebase_drag_from = None;
+        dlg.rebase_tab = RebaseEditorTab::default();
+        dlg.rebase_plan = Some(plan);
+        self.ui.dialog = Some(Dialog::InteractiveRebase);
+    }
+
     pub fn open_reword_editor(&mut self, root: &RootId, commit: &str) {
         let Some(found) = self
             .caches
@@ -2308,8 +2343,9 @@ impl AppState {
         }
     }
 
-    pub fn open_tag_dialog(&mut self, target: Option<&str>) {
+    pub fn open_tag_dialog(&mut self, root: Option<RootId>, target: Option<&str>) {
         let dlg = &mut self.ui.dlg;
+        dlg.tag_root = root;
         dlg.tag_type = TagType::Annotated;
         dlg.tag_target_picker_open = false;
         dlg.tag_candidates = None;
@@ -3082,19 +3118,13 @@ impl AppState {
         )
     }
 
-    pub fn merge_cascade_siblings(&self) -> Vec<RootId> {
-        let Some(focused) = self.selected_root.clone() else {
-            return Vec::new();
-        };
-        turbogit_services::integrate_service::cascade_siblings(&self.multi.roots, &focused)
+    pub fn merge_cascade_siblings(&self, root: &RootId) -> Vec<RootId> {
+        turbogit_services::integrate_service::cascade_siblings(&self.multi.roots, root)
     }
 
-    pub fn open_merge_cascade_plan(&mut self) {
-        let Some(focused) = self.selected_root.clone() else {
-            return;
-        };
+    pub fn open_merge_cascade_plan(&mut self, root: &RootId) {
         let siblings =
-            turbogit_services::integrate_service::cascade_siblings(&self.multi.roots, &focused);
+            turbogit_services::integrate_service::cascade_siblings(&self.multi.roots, root);
         if siblings.is_empty() {
             return;
         }
@@ -3111,15 +3141,12 @@ impl AppState {
         )
     }
 
-    pub fn rebase_affected_siblings(&self) -> Vec<RootId> {
-        let Some(focused) = self.selected_root.clone() else {
-            return Vec::new();
-        };
-        turbogit_services::integrate_service::rebase_affected(&self.multi.roots, &focused)
+    pub fn rebase_affected_siblings(&self, root: &RootId) -> Vec<RootId> {
+        turbogit_services::integrate_service::rebase_affected(&self.multi.roots, root)
     }
 
-    pub fn open_rebase_affected_list(&mut self) {
-        let siblings = self.rebase_affected_siblings();
+    pub fn open_rebase_affected_list(&mut self, root: &RootId) {
+        let siblings = self.rebase_affected_siblings(root);
         if siblings.is_empty() {
             return;
         }
@@ -3127,10 +3154,7 @@ impl AppState {
         self.ui.dialog = None;
     }
 
-    pub fn rebase_branch_is_protected(&self) -> bool {
-        let Some(id) = &self.selected_root else {
-            return false;
-        };
+    pub fn rebase_branch_is_protected(&self, id: &RootId) -> bool {
         let Some(root) = self.multi.by_id(id) else {
             return false;
         };
@@ -3259,7 +3283,8 @@ impl AppState {
         ));
     }
 
-    pub fn open_merge_into(&mut self, _id: &RootId, name: &str) {
+    pub fn open_merge_into(&mut self, id: &RootId, name: &str) {
+        self.ui.dlg.merge_root = Some(id.clone());
         self.ui.dlg.merge_target = name.to_string();
         self.ui.dlg.merge_source_picker_open = false;
         self.ui.dlg.merge_preview = None;

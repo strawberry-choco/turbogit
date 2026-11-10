@@ -269,7 +269,12 @@ fn clicking_a_parent_link_scrolls_that_parents_row_into_view() {
         .click();
     settle(&mut harness);
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(hash_of(&seed.repo, &subject).as_str()),
         "the row click selected the commit the test clicked"
     );
@@ -280,7 +285,12 @@ fn clicking_a_parent_link_scrolls_that_parents_row_into_view() {
     settle(&mut harness);
 
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(hash_of(&seed.repo, &parent).as_str()),
         "the link selected the parent"
     );
@@ -343,7 +353,12 @@ fn clicking_a_blame_row_brings_that_commit_into_view_in_the_log() {
         "clicking a blame row closes the view, so the log is what the user sees next"
     );
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(hash_of(&seed.repo, &oldest).as_str()),
         "the blame row selected its commit"
     );
@@ -385,7 +400,12 @@ fn choosing_a_verb_on_the_commit_menu_leaves_that_commit_visible() {
         "choosing a verb closes the menu"
     );
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(hash_of(&seed.repo, &target).as_str()),
         "the verb acted on the commit its menu was opened on"
     );
@@ -431,7 +451,12 @@ fn selecting_a_commit_already_in_view_does_not_yank_the_list() {
     settle(&mut harness);
 
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(hash_of(&seed.repo, &subject_at(parent)).as_str()),
         "the link selected the parent"
     );

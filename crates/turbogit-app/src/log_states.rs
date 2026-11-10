@@ -138,8 +138,8 @@ pub fn commit_list(state: &AppState, window_empty: bool) -> LogState {
     if let Some(key) = state.log_filter_key() {
         return combined_list(state, &key, window_empty);
     }
-    if let Some(path) = &state.ui.log_path_scope {
-        return path_scope(state, path);
+    if let Some((root, path)) = &state.ui.log_path_scope {
+        return path_scope(state, root, path);
     }
     if window_empty {
         let roots = crate::log_display::listing_roots(state);
@@ -237,10 +237,7 @@ pub fn filtering(state: &AppState) -> LogState {
     LogState::Ready
 }
 
-fn path_scope(state: &AppState, path: &std::path::Path) -> LogState {
-    let Some(root) = state.selected_root.clone() else {
-        return LogState::Ready;
-    };
+fn path_scope(state: &AppState, root: &RootId, path: &std::path::Path) -> LogState {
     let scope = LogScope::Path(path.to_path_buf());
     if let Some(message) = state
         .caches
@@ -248,7 +245,7 @@ fn path_scope(state: &AppState, path: &std::path::Path) -> LogState {
     {
         return LogState::FileHistoryFailed(message.to_owned());
     }
-    match state.caches.path_log(&root, path) {
+    match state.caches.path_log(root, path) {
         None => LogState::LoadingCommits,
         Some([]) => LogState::FileHistory,
         Some(_) => LogState::Ready,
@@ -324,9 +321,5 @@ pub fn failed_changes_read(state: &AppState) -> Option<LogRead> {
 }
 
 fn selection(state: &AppState) -> Option<(RootId, CommitId)> {
-    state
-        .selected_root
-        .as_ref()
-        .zip(state.ui.selected_commit.as_ref())
-        .map(|(root, cid)| (root.clone(), cid.clone()))
+    state.ui.selected_commit.clone()
 }

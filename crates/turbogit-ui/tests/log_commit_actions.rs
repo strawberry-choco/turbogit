@@ -570,14 +570,14 @@ fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
         .clone()
         .expect("a selection after the rewrite");
     assert_eq!(
-        selected, reworded,
+        selected.1, reworded,
         "the selection followed the row to its new hash, through the shared rule"
     );
     let held = harness
         .state()
         .caches
         .log(&root)
-        .is_some_and(|cs| cs.iter().any(|c| c.id == selected));
+        .is_some_and(|cs| cs.iter().any(|c| c.id == selected.1));
     assert!(
         held,
         "and it names a commit the refreshed log actually holds"
@@ -613,9 +613,9 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
         .selected_commit
         .clone()
         .expect("a selection after the rewrite");
-    assert_ne!(selected, target, "the dropped commit is not the selection");
+    assert_ne!(selected.1, target, "the dropped commit is not the selection");
     assert_eq!(
-        selected, tip_after,
+        selected.1, tip_after,
         "the selection is the commit that took the dropped commit's place"
     );
     assert!(
@@ -623,7 +623,7 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
             .state()
             .caches
             .log(&root)
-            .is_some_and(|cs| cs.iter().any(|c| c.id == selected)),
+            .is_some_and(|cs| cs.iter().any(|c| c.id == selected.1)),
         "and it names a commit the refreshed log actually holds"
     );
     assert_painted(&harness, "feature-3.txt");
@@ -646,7 +646,12 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         .click();
     settle_quiet(&mut harness);
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(target.as_str()),
         "the row under the edit is the commit being reworded"
     );
@@ -711,7 +716,12 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         "and the commit still says what it said"
     );
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(target.as_str()),
         "the selection stays on the commit the developer was looking at"
     );
@@ -759,7 +769,12 @@ fn cancelling_the_drop_preflight_changes_nothing() {
         "and no backup ref was written for a rewrite that never ran"
     );
     assert_eq!(
-        harness.state().ui.selected_commit.as_deref(),
+        harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .map(|(_, id)| id.as_str()),
         Some(target.as_str()),
         "the selection is still the commit the developer was looking at"
     );

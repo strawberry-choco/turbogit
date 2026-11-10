@@ -51,7 +51,7 @@ fn view_plan_scopes_the_cascade_preflight_to_the_sibling_repos() {
     state.selected_root = Some(rid(&focused));
     state.ui.dlg.merge_target = "feature".to_string();
 
-    state.open_merge_cascade_plan();
+    state.open_merge_cascade_plan(&rid(&focused));
 
     assert_eq!(state.ui.bulk_op, Some(BulkOp::Merge));
     assert_eq!(
@@ -69,7 +69,7 @@ fn confirmed_merge_cascade_merges_the_source_branch_into_the_siblings() {
     state.ui.dlg.merge_target = "feature".to_string();
     state.ui.dlg.merge_strategy = MergeStrategy::Commit;
 
-    state.open_merge_cascade_plan();
+    state.open_merge_cascade_plan(&rid(&focused));
     let plan = BulkPlan {
         op: BulkOp::Merge,
         roots: state.ui.repo_selection.iter().cloned().collect(),
