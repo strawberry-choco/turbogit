@@ -147,9 +147,13 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 }
 
 /// The rows are built by the app now, not by the paint, so a test that sets the
-/// dialog field directly gets an empty table.
+/// dialog field directly gets an empty table. The dialog is opened for the first
+/// root, the caller-supplied-root case: that row is consented and no other is.
 fn open_push_dialog(h: &mut Harness<'_, AppState>) {
-    h.state_mut().open_push();
+    match h.state().multi.roots.first().map(|root| root.id.clone()) {
+        Some(root) => h.state_mut().open_push_for_roots(&[root]),
+        None => h.state_mut().open_push(),
+    }
     h.run();
 }
 
@@ -232,6 +236,9 @@ fn consenting_both_rows_pushes_both_remotes() {
     ));
     open_push_dialog(&mut h);
 
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Include beta")
+        .click();
+    h.run();
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "beta")
         .click();
     h.run();
@@ -270,7 +277,10 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
     open_push_dialog(&mut h);
 
     // beta's remote is gone, and an unconsented row is never pushed, so the
-    // failure this test is about only exists once beta is consented too.
+    // failure this test is about only exists once beta is in scope and consented.
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Include beta")
+        .click();
+    h.run();
     h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "beta")
         .click();
     h.run();

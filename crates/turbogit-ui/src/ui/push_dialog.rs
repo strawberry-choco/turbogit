@@ -31,6 +31,8 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         .default_height(32.0)
         .max_height(max_height)
         .show(&ctx, |ui| {
+            state.ui.dlg.push.scope = Some(state.ui.dlg.repo_scope.clone());
+            super::dialogs::repo_scope_band(ui, state);
             panes(ui, state, generation);
             consent_line(ui, state);
             options_band(ui, state);

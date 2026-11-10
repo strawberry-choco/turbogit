@@ -10,7 +10,7 @@ use test_support::RecordingExecutor;
 use test_support::git_seed::{commit as seed_commit, git};
 use test_support::harness::{KITTEST_DEFAULT_BOX, filled_rects, shell_harness_over_unstyled};
 use test_support::wait_until;
-use turbogit_app::state::{AppState, Dialog};
+use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, TagSpec, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
@@ -61,9 +61,38 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 /// settle (the window re-frames for several frames after opening, so clicks
 /// must wait for stable coordinates).
 fn open_tag(h: &mut Harness<'_, AppState>, root: &Path) {
-    h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
-    h.state_mut().ui.dialog = Some(Dialog::Tag);
+    h.state_mut()
+        .open_tag_dialog(Some(RootId(root.to_path_buf().into())), None);
     settle(h);
+}
+
+#[test]
+fn the_repo_selector_seeds_the_openers_scope() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let one = project.join("one");
+    let two = project.join("two");
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    git(&one, &["init", "-q", "-b", "main"]);
+    git(&two, &["init", "-q", "-b", "main"]);
+    let mut state = AppState::for_roots(&project, &[one.clone(), two.clone()]);
+    let one_id = RootId(one.clone().into());
+    let two_id = RootId(two.clone().into());
+
+    state.open_tag_dialog(Some(one_id.clone()), None);
+    assert_eq!(
+        state.ui.dlg.repo_scope,
+        vec![one_id.clone()],
+        "a row opener seeds the row's repository"
+    );
+
+    state.open_tag_dialog(None, None);
+    assert_eq!(
+        state.ui.dlg.repo_scope,
+        vec![one_id, two_id],
+        "a palette opener seeds every registered root"
+    );
 }
 
 fn settle(h: &mut Harness<'_, AppState>) {

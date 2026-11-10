@@ -117,16 +117,11 @@ fn feature_ahead_repo(project: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
-fn only_the_current_row_is_consented_on_open() {
+fn an_open_without_a_caller_root_consents_no_row() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let first = ahead_repo(tmp.path(), "first");
     let second = ahead_repo(tmp.path(), "second");
-    let mut state = AppState::for_roots(tmp.path(), &[first.clone(), second.clone()]);
-    assert_eq!(
-        state.selected_root.as_ref(),
-        Some(&RootId(first.clone().into())),
-        "the fixture points the app at its first root"
-    );
+    let mut state = AppState::for_roots(tmp.path(), &[first, second]);
 
     state.open_push();
     let rows = &state.ui.dlg.push.rows;
@@ -135,13 +130,11 @@ fn only_the_current_row_is_consented_on_open() {
         vec!["first".to_string(), "second".to_string()],
         "one row per registered root, in registration order"
     );
-    assert!(rows[0].consented, "the row the app points at opens ticked");
     assert!(
-        !rows[1].consented,
-        "no other root is ticked by an open: the batch-everything default is gone"
+        rows.iter().all(|row| !row.consented),
+        "no caller root means no consent: the batch-everything default is gone"
     );
-    assert!(rows[0].expanded, "a ticked row reveals what it is ticking");
-    assert!(!rows[1].expanded);
+    assert!(rows.iter().all(|row| !row.expanded));
     assert_eq!(
         rows[0]
             .commits
@@ -150,6 +143,36 @@ fn only_the_current_row_is_consented_on_open() {
             .collect::<Vec<&str>>(),
         vec!["ahead work"],
         "the listed commits are HEAD's outgoing range joined against the log"
+    );
+}
+
+#[test]
+fn the_selector_scopes_a_consented_row_out_of_the_payload() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let first = ahead_repo(tmp.path(), "first");
+    let second = ahead_repo(tmp.path(), "second");
+    let mut state = AppState::for_roots(tmp.path(), &[first.clone(), second.clone()]);
+    let first_id = RootId(first.into());
+    let second_id = RootId(second.into());
+    state.open_push_for_roots(&[first_id.clone(), second_id.clone()]);
+    assert_eq!(state.ui.dlg.push.payload().targets.len(), 2);
+
+    state.ui.dlg.push.scope = Some(vec![first_id.clone()]);
+    let scoped = state.ui.dlg.push.payload();
+    assert_eq!(
+        scoped
+            .targets
+            .iter()
+            .map(|target| target.root.clone())
+            .collect::<Vec<_>>(),
+        vec![first_id],
+        "a consented row outside the selector's scope is not pushed"
+    );
+
+    state.ui.dlg.push.scope = Some(Vec::new());
+    assert!(
+        state.ui.dlg.push.payload().is_empty(),
+        "an empty selection is nothing in play, not everything"
     );
 }
 

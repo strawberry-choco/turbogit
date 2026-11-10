@@ -56,24 +56,105 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
         .open(&mut open)
         .resizable(false)
         .default_height(32.0)
-        .show(&ctx, |ui| match dialog {
-            Dialog::NewBranch => new_branch(ui, state),
-            Dialog::Merge => merge(ui, state),
-            Dialog::Rebase => rebase(ui, state),
-            Dialog::Tag => tag(ui, state),
-            Dialog::Shelve => shelve(ui, state),
-            Dialog::ImportPatches => import_patches(ui, state),
-            Dialog::Stash => stash(ui, state),
-            Dialog::NewWorktree => super::worktrees::new_worktree_dialog(ui, state),
-            Dialog::CherryPickTarget => cherry_pick_target(ui, state),
-            Dialog::RenameBranch => rename_branch(ui, state),
-            Dialog::BranchNotFullyMerged => branch_not_fully_merged(ui, state),
-            Dialog::CompareBranches => compare_branches(ui, state),
-            _ => {}
+        .show(&ctx, |ui| {
+            if dialog_has_repo_axis(dialog) {
+                repo_scope_band(ui, state);
+            }
+            match dialog {
+                Dialog::NewBranch => new_branch(ui, state),
+                Dialog::Merge => merge(ui, state),
+                Dialog::Rebase => rebase(ui, state),
+                Dialog::Tag => tag(ui, state),
+                Dialog::Shelve => shelve(ui, state),
+                Dialog::ImportPatches => import_patches(ui, state),
+                Dialog::Stash => stash(ui, state),
+                Dialog::NewWorktree => super::worktrees::new_worktree_dialog(ui, state),
+                Dialog::CherryPickTarget => cherry_pick_target(ui, state),
+                Dialog::RenameBranch => rename_branch(ui, state),
+                Dialog::BranchNotFullyMerged => branch_not_fully_merged(ui, state),
+                Dialog::CompareBranches => compare_branches(ui, state),
+                _ => {}
+            }
         });
     if !open {
         state.ui.dialog = None;
     }
+}
+
+fn dialog_has_repo_axis(dialog: Dialog) -> bool {
+    matches!(
+        dialog,
+        Dialog::NewBranch
+            | Dialog::Merge
+            | Dialog::Rebase
+            | Dialog::Tag
+            | Dialog::Shelve
+            | Dialog::ImportPatches
+            | Dialog::Stash
+            | Dialog::NewWorktree
+    )
+}
+
+/// The one repo selector every repository-scoped dialog shares: a checkbox per
+/// registered root with select-all and deselect-all. It edits the dialog's
+/// scope only; the dialog's actions read that scope and nothing global.
+pub(crate) fn repo_scope_band(ui: &mut Ui, state: &mut AppState) {
+    let roots: Vec<(RootId, String)> = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| (root.id.clone(), root.id.name()))
+        .collect();
+    group_title(ui, "REPOSITORIES");
+    ui.horizontal(|ui| {
+        if widgets::compact_button(ui, "Select all").clicked() {
+            state.ui.dlg.repo_scope = roots.iter().map(|(id, _)| id.clone()).collect();
+        }
+        if widgets::compact_button(ui, "Deselect all").clicked() {
+            state.ui.dlg.repo_scope.clear();
+        }
+        ui.label(
+            RichText::new(format!(
+                "{} of {} selected",
+                state.ui.dlg.repo_scope.len(),
+                roots.len()
+            ))
+            .color(Palette::INK_3),
+        );
+    });
+    for (id, name) in &roots {
+        let mut on = state.ui.dlg.repo_scope.contains(id);
+        if ui.checkbox(&mut on, format!("Include {name}")).changed() {
+            if on {
+                state.ui.dlg.repo_scope.push(id.clone());
+            } else {
+                state.ui.dlg.repo_scope.retain(|root| root != id);
+            }
+            let order: Vec<RootId> = roots.iter().map(|(id, _)| id.clone()).collect();
+            state
+                .ui
+                .dlg
+                .repo_scope
+                .sort_by_key(|root| order.iter().position(|o| o == root).unwrap_or(usize::MAX));
+        }
+    }
+    if let Some(results) = state.ui.dlg.repo_scope_results.clone() {
+        for (name, result) in results {
+            match result {
+                Ok(()) => {
+                    ui.colored_label(Palette::STATE_SUCCESS, format!("✓ {name}"));
+                }
+                Err(reason) => {
+                    ui.colored_label(Palette::STATE_ERROR, format!("✗ {name}: {reason}"));
+                }
+            }
+        }
+    }
+    ui.add_space(4.0);
+}
+
+fn scope_roots(state: &AppState) -> &[RootId] {
+    &state.ui.dlg.repo_scope
 }
 
 fn close(state: &mut AppState) {
@@ -272,22 +353,15 @@ fn name_completions(state: &AppState, typed: &str) -> Vec<Prefix> {
 }
 
 fn create_named_branch(state: &mut AppState) {
-    let root = state.ui.dlg.new_branch.root.clone();
     let name = state.ui.dlg.new_branch.name.trim().to_owned();
     let start = state.ui.dlg.new_branch.start.start_point();
     let checkout = state.ui.dlg.new_branch.checkout;
     state.ui.branches_tree.scroll_to = Some(name.clone());
     // `scroll_to` is consumed the frame it resolves, so the reveal has to lift the fold too.
-    if let Some(root) = &root {
-        state.ui.branches_tree.collapsed_repos.remove(root);
-    }
-    if let Some(root) = root {
-        state.dispatch(shell_writes::branch::create(
-            &root,
-            &name,
-            start.as_deref(),
-            checkout,
-        ));
+    for root in scope_roots(state).to_vec() {
+        state.ui.branches_tree.collapsed_repos.remove(&root);
+        let op = shell_writes::branch::create(&root, &name, start.as_deref(), checkout);
+        state.dispatch(op);
     }
     close(state);
 }
@@ -490,7 +564,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
             let can_merge = !target.is_empty();
             let merge_btn = ui.add_enabled(can_merge, egui::Button::new("Merge"));
             if merge_btn.clicked() {
-                let root = root.clone();
+                let roots = scope_roots(state).to_vec();
                 let target = state.ui.dlg.merge_target.clone();
                 let opts = state.merge_dialog_opts();
                 let clean = state.settings.clean_tree_method;
@@ -501,11 +575,11 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                     .as_ref()
                     .map(|p| p.merge_commits)
                     .unwrap_or(0);
-                if let Some(root) = root {
+                for root in roots {
                     state.dispatch(Operation::Merge {
                         root,
-                        target,
-                        opts,
+                        target: target.clone(),
+                        opts: opts.clone(),
                         clean,
                         commits,
                     });
@@ -812,16 +886,20 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                     String::new()
                 });
             if start.clicked() {
-                let root = root.clone();
+                let roots = scope_roots(state).to_vec();
                 let mode = state.ui.dlg.rebase_mode;
                 let opts = state.rebase_dialog_opts();
                 let settings = state.settings.clone();
-                let branch = current.clone().unwrap_or_default();
                 let onto2 = onto.clone();
                 let replay2 = replay.clone();
                 let new_base = state.ui.dlg.rebase_new_base.trim().to_string();
                 let old_base = state.ui.dlg.rebase_old_base.trim().to_string();
-                if let Some(root) = root {
+                for root in roots {
+                    let branch = state
+                        .multi
+                        .by_id(&root)
+                        .and_then(|r| r.current_branch.clone())
+                        .unwrap_or_default();
                     let op = if state.ui.dlg.rebase_onto_enabled {
                         Operation::rebase_with_onto(
                             &root, &branch, &new_base, &old_base, &opts, &settings,
@@ -830,7 +908,11 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                         match mode {
                             turbogit_domain::model::RebaseMode::Interactive => {
                                 Operation::rebase_interactive(
-                                    &root, &branch, replay2, &settings, false,
+                                    &root,
+                                    &branch,
+                                    replay2.clone(),
+                                    &settings,
+                                    false,
                                 )
                             }
                             turbogit_domain::model::RebaseMode::Standard => {
@@ -1142,7 +1224,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
             })
             .inner;
         if create.clicked() {
-            let root = root.clone();
+            let roots = scope_roots(state).to_vec();
             let spec = turbogit_domain::model::TagSpec {
                 name: state.ui.dlg.tag_name.trim().to_string(),
                 target: (!state.ui.dlg.tag_target.is_empty())
@@ -1156,8 +1238,9 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                 sign: annotated && state.ui.dlg.tag_sign,
             };
             let push = state.ui.dlg.tag_push;
-            if let Some(root) = root {
-                state.dispatch(shell_writes::tag::create(&root, &spec, push));
+            for root in roots {
+                let op = shell_writes::tag::create(&root, &spec, push);
+                state.dispatch(op);
             }
             close(state);
         }
@@ -1193,24 +1276,22 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
         }
         if ui.button("Shelve selected").clicked() {
             let name = state.ui.dlg.shelve_name.clone();
-            let Some(root) = state.ui.dlg.shelve_root.clone() else {
-                close(state);
-                return;
-            };
-            let mut changes = Vec::new();
-            if let Some(repo) = state.multi.by_id(&root) {
-                for c in &repo.status.changes {
-                    if state.ui.selected.contains(&repo.canonical_key(c)) {
-                        changes.push(c.clone());
+            let roots = scope_roots(state).to_vec();
+            for root in roots {
+                let mut changes = Vec::new();
+                if let Some(repo) = state.multi.by_id(&root) {
+                    for c in &repo.status.changes {
+                        if state.ui.selected.contains(&repo.canonical_key(c)) {
+                            changes.push(c.clone());
+                        }
                     }
                 }
+                let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
+                if state.add_shelf(shelf).is_err() {
+                    continue;
+                }
+                state.dispatch(Operation::shelve(root, Vec::new(), name.clone()));
             }
-            let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
-            if state.add_shelf(shelf).is_err() {
-                close(state);
-                return;
-            }
-            state.dispatch(Operation::shelve(root, Vec::new(), name));
             close(state);
         }
     });
@@ -1240,14 +1321,21 @@ fn import_patches(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Import to shelf").clicked() {
             let path = std::path::PathBuf::from(state.ui.dlg.import_patch_path.trim());
             let name = state.ui.dlg.import_patch_name.trim().to_string();
-            match state.import_patch_file_to_shelf(&path, &name) {
-                Ok(_) => {
+            let roots = scope_roots(state).to_vec();
+            let mut error = None;
+            for root in roots {
+                if let Err(e) = state.import_patch_file_to_shelf(&root, &path, &name) {
+                    error = Some(e.to_string());
+                }
+            }
+            match error {
+                None => {
                     state.ui.dlg.import_patch_path.clear();
                     state.ui.dlg.import_patch_name.clear();
                     state.ui.dlg.import_patch_error = None;
                     close(state);
                 }
-                Err(e) => state.ui.dlg.import_patch_error = Some(e.to_string()),
+                Some(e) => state.ui.dlg.import_patch_error = Some(e),
             }
         }
     });
@@ -1262,7 +1350,7 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
         if ui.button("Pop latest").clicked() {
-            if let Some(root) = state.selected_root.clone() {
+            for root in scope_roots(state).to_vec() {
                 state.dispatch(shell_writes::stash::pop_latest(&root));
             }
             close(state);
@@ -1270,7 +1358,7 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Stash").clicked() {
             let msg = state.ui.dlg.stash_msg.clone();
             let keep = state.ui.dlg.stash_keep;
-            if let Some(root) = state.selected_root.clone() {
+            for root in scope_roots(state).to_vec() {
                 state.dispatch(shell_writes::stash::push(&root, &msg, keep));
             }
             close(state);

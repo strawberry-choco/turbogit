@@ -67,9 +67,8 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
-fn open_merge(h: &mut Harness<'_, AppState>, root: &Path) {
-    h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
-    h.state_mut().ui.dialog = Some(Dialog::Merge);
+fn open_merge(h: &mut Harness<'_, AppState>, _root: &Path) {
+    h.state_mut().open_dialog(Dialog::Merge, None);
     h.run();
 }
 

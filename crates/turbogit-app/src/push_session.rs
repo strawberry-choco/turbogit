@@ -206,6 +206,10 @@ pub struct PushSession {
     pub generation: u64,
     pub rows: Vec<PushRow>,
     pub focus: Option<Focus>,
+    /// The dialog's repo selector scope. `None` is every row, which is what a
+    /// directly constructed session means; the Push dialog sets it from the
+    /// shared selector each frame.
+    pub scope: Option<Vec<RootId>>,
     pub editing_all: bool,
     pub preview: Option<PushPreview>,
     pub force: bool,
@@ -220,12 +224,20 @@ impl PushSession {
             generation,
             rows,
             focus,
+            scope: None,
             editing_all: false,
             preview: None,
             force: false,
             tags: PushTags::default(),
             no_verify: false,
         }
+    }
+
+    /// Whether the selector has this row in play.
+    pub fn in_scope(&self, id: &RootId) -> bool {
+        self.scope
+            .as_ref()
+            .is_none_or(|scope| scope.contains(id))
     }
 
     /// The only path from row state to git.
@@ -236,7 +248,11 @@ impl PushSession {
             no_verify: self.no_verify,
             ..PushPlan::default()
         };
-        for row in self.rows.iter().filter(|row| row.consented) {
+        for row in self
+            .rows
+            .iter()
+            .filter(|row| row.consented && self.in_scope(&row.id))
+        {
             match row.obstacle {
                 Some(obstacle) if obstacle.blocks_push() => {
                     plan.blocked.push((row.id.clone(), obstacle));
@@ -255,7 +271,7 @@ impl PushSession {
     pub fn stale_rows(&self, ahead: &impl Fn(&RootId) -> Option<usize>) -> Vec<RootId> {
         self.rows
             .iter()
-            .filter(|row| row.consented)
+            .filter(|row| row.consented && self.in_scope(&row.id))
             .filter(|row| matches!(ahead(&row.id), Some(count) if count != row.listed_total))
             .map(|row| row.id.clone())
             .collect()

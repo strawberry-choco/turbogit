@@ -107,11 +107,11 @@ fn an_imported_row_lists_only_under_the_root_it_was_parked_in() {
     let docs_id = state.multi.roots[1].id.clone();
     state.selected_root = Some(lib_id.clone());
     state
-        .import_patch_file_to_shelf(&patch_file(project.path()), "in the lib")
+        .import_patch_file_to_shelf(&lib_id, &patch_file(project.path()), "in the lib")
         .unwrap();
     state.selected_root = Some(docs_id.clone());
     state
-        .import_patch_file_to_shelf(&patch_file(project.path()), "in the docs")
+        .import_patch_file_to_shelf(&docs_id, &patch_file(project.path()), "in the docs")
         .unwrap();
 
     assert_eq!(names(&state.shelves_for(&lib_id)), vec!["in the lib"]);

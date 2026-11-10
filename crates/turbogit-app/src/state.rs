@@ -92,6 +92,12 @@ pub enum PatchSource {
 
 #[derive(Default)]
 pub struct DialogState {
+    /// The dialog's repository scope: every registered root, narrowed by the
+    /// caller that opened it or by the selector's checkboxes. Seeded on open,
+    /// never read from a workspace-wide focus.
+    pub repo_scope: Vec<RootId>,
+    /// Per-root outcomes for an action that ran synchronously in a dialog.
+    pub repo_scope_results: Option<Vec<(String, Result<(), String>)>>,
     /// The row model the Push dialog is built from: one row per registered
     /// root, replaced whole on open.
     pub push: crate::push_session::PushSession,
@@ -1070,6 +1076,24 @@ impl AppState {
         let ui = crate::persistence::UiPersist::capture(&self.ui);
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
+
+    /// Seed a dialog's repository scope. A caller that supplies roots (a row,
+    /// a toolbar action about one repo) seeds those; a caller that supplies
+    /// none seeds every registered root.
+    pub fn seed_dialog_scope(&mut self, roots: Option<&[RootId]>) {
+        self.ui.dlg.repo_scope = match roots {
+            Some(roots) => roots.to_vec(),
+            None => self.multi.roots.iter().map(|root| root.id.clone()).collect(),
+        };
+        self.ui.dlg.repo_scope_results = None;
+    }
+
+    /// Open a dialog that has a repository axis, seeding its selector and
+    /// clearing any per-root results from the last opening.
+    pub fn open_dialog(&mut self, dialog: Dialog, roots: Option<&[RootId]>) {
+        self.seed_dialog_scope(roots);
+        self.ui.dialog = Some(dialog);
+    }
     pub fn rescan(&mut self) {
         self.caches.invalidate_all_worktrees();
         self.worktree.clear();
@@ -1552,9 +1576,11 @@ impl AppState {
     /// taken here, once: they are the promise the button then has to keep, so a
     /// later read that found more commits would push ones nobody ticked.
     pub fn open_push(&mut self) {
-        let consent: std::collections::HashSet<RootId> =
-            self.selected_root.iter().cloned().collect();
-        self.open_push_seeded(&consent, None, crate::push_session::Focus::AllRoots);
+        self.open_push_seeded(
+            &std::collections::HashSet::new(),
+            None,
+            crate::push_session::Focus::AllRoots,
+        );
     }
 
     /// Open the Push dialog for exactly the roots an action acted on, with
@@ -1578,6 +1604,17 @@ impl AppState {
         let rows = self.push_rows(consent, branch);
         let generation = self.ui.dlg.push.generation + 1;
         self.ui.dlg.push = crate::push_session::PushSession::open(generation, rows, Some(focus));
+        let scope: Vec<RootId> = if consent.is_empty() {
+            self.multi.roots.iter().map(|root| root.id.clone()).collect()
+        } else {
+            self.multi
+                .roots
+                .iter()
+                .filter(|root| consent.contains(&root.id))
+                .map(|root| root.id.clone())
+                .collect()
+        };
+        self.seed_dialog_scope(Some(&scope));
         self.ui.dialog = Some(Dialog::Push);
     }
 
@@ -1886,6 +1923,7 @@ impl AppState {
     }
 
     pub fn open_shelve_dialog(&mut self, root: Option<RootId>) {
+        self.seed_dialog_scope(root.as_ref().map(std::slice::from_ref));
         self.ui.dlg.shelve_root = root;
         self.ui.dialog = Some(Dialog::Shelve);
     }
@@ -2052,12 +2090,10 @@ impl AppState {
 
     pub fn import_patch_file_to_shelf(
         &mut self,
+        root: &RootId,
         path: &std::path::Path,
         name: &str,
     ) -> TgResult<Shelf> {
-        let root = self.selected_root.clone().ok_or_else(|| {
-            TgError::Other("a shelf row needs a repository to belong to".to_string())
-        })?;
         let text = std::fs::read_to_string(path)?;
         let fallback = path
             .file_stem()
@@ -2068,7 +2104,7 @@ impl AppState {
         } else {
             name.trim()
         };
-        self.import_patch_to_shelf(&root, name, &text)
+        self.import_patch_to_shelf(root, name, &text)
     }
 
     pub fn choose_import_patch_file(&mut self) {
@@ -2168,6 +2204,8 @@ impl AppState {
         dlg.cherry_focus = None;
         dlg.cherry_preview = None;
         dlg.cherry_forecast = None;
+        self.ui.dlg.repo_scope = dlg.cherry_targets.clone();
+        self.ui.dlg.repo_scope_results = None;
         self.cherry_reforecast();
     }
 
@@ -2205,6 +2243,8 @@ impl AppState {
             NewBranchBase::Commit(_) | NewBranchBase::Head => current.clone(),
         });
         self.ui.dlg.new_branch = NewBranchSession::open(generation, root, prefill, start, checkout);
+        let scope = self.ui.dlg.new_branch.root.clone();
+        self.seed_dialog_scope(scope.as_ref().map(std::slice::from_ref));
         self.ui.dialog = Some(Dialog::NewBranch);
     }
 
@@ -2289,6 +2329,7 @@ impl AppState {
             plan,
             cautions,
         });
+        self.seed_dialog_scope(Some(std::slice::from_ref(root)));
         self.ui.dialog = Some(Dialog::RewritePreflight);
     }
 
@@ -2315,6 +2356,7 @@ impl AppState {
         dlg.rebase_drag_from = None;
         dlg.rebase_tab = RebaseEditorTab::default();
         dlg.rebase_plan = Some(plan);
+        self.seed_dialog_scope(Some(std::slice::from_ref(root)));
         self.ui.dialog = Some(Dialog::InteractiveRebase);
     }
 
@@ -2336,6 +2378,7 @@ impl AppState {
             commit: commit.to_owned(),
         });
         dlg.reword_message = found.message.clone();
+        self.seed_dialog_scope(Some(std::slice::from_ref(root)));
         self.ui.dialog = Some(Dialog::Reword);
     }
 
@@ -2358,6 +2401,7 @@ impl AppState {
     }
 
     pub fn open_tag_dialog(&mut self, root: Option<RootId>, target: Option<&str>) {
+        self.seed_dialog_scope(root.as_ref().map(std::slice::from_ref));
         let dlg = &mut self.ui.dlg;
         dlg.tag_root = root;
         dlg.tag_type = TagType::Annotated;
@@ -3197,6 +3241,7 @@ impl AppState {
         self.ui.dlg.rename_branch_new = String::new();
         self.ui.dlg.rename_branch_upstream = tracking;
         self.ui.dlg.rename_branch_unset_upstream = false;
+        self.seed_dialog_scope(Some(std::slice::from_ref(id)));
         self.ui.dialog = Some(Dialog::RenameBranch);
         self.ui.branches_popup = false;
     }
@@ -3307,6 +3352,7 @@ impl AppState {
     }
 
     pub fn open_merge_into(&mut self, id: &RootId, name: &str) {
+        self.seed_dialog_scope(Some(std::slice::from_ref(id)));
         self.ui.dlg.merge_root = Some(id.clone());
         self.ui.dlg.merge_target = name.to_string();
         self.ui.dlg.merge_source_picker_open = false;
