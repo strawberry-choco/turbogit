@@ -63,10 +63,10 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 fn open_editor(h: &mut Harness<'_, AppState>, root: &Path) {
     let log = git(root, &["log", "main..HEAD", "--format=%H"]);
     let oldest = log.lines().last().expect("a commit past main").trim();
-    h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
-    h.state_mut().ui.selected_commit =
-        Some((RootId(root.to_path_buf().into()), oldest.to_string()));
-    h.state_mut().ui.dialog = Some(Dialog::InteractiveRebase);
+    let root_id = RootId(root.to_path_buf().into());
+    h.state_mut().selected_root = Some(root_id.clone());
+    h.state_mut().ui.selected_commit = Some((root_id.clone(), oldest.to_string()));
+    h.state_mut().open_interactive_rebase(&root_id, oldest);
     h.run();
 }
 

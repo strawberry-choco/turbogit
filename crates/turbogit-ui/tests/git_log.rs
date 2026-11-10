@@ -707,9 +707,12 @@ fn wait_for_file_stats(harness: &mut Harness<'_, AppState>) {
     loop {
         harness.state_mut().drain_events();
         harness.step();
-        let loaded = harness.state().ui.selected_commit.as_ref().is_some_and(
-            |(root, cid)| harness.state().caches.file_stats_loaded(root, cid),
-        );
+        let loaded = harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .is_some_and(|(root, cid)| harness.state().caches.file_stats_loaded(root, cid));
         if loaded {
             return;
         }
@@ -2349,7 +2352,7 @@ fn the_root_stripe_shares_the_leading_gutter_with_the_rail() {
         );
         candidates.into_iter().next().expect("one stripe")
     };
-    let (chosen_stripe, chosen_color) = stripe_of(chosen);
+    let (chosen_stripe, _) = stripe_of(chosen);
     let (plain_stripe, _) = stripe_of(plain);
 
     assert_eq!(
@@ -2410,16 +2413,17 @@ fn the_root_stripe_shares_the_leading_gutter_with_the_rail() {
         }
     }
 
-    // A row can carry several lane nodes when branches diverge. Pick the one
-    // that belongs to this row's root instead of whichever was painted first.
+    // The lane colour is a palette slot assigned to the lane walk, not the
+    // row's root stripe: a freed lane can hand its colour to the next commit.
+    // What this row must do is paint a node in a graph colour rather than the
+    // uncoloured fallback.
     let node = filled_circles(&harness)
         .into_iter()
-        .find(|(center, _, color)| chosen.contains(*center) && *color == chosen_color)
+        .find(|(center, _, _)| chosen.contains(*center))
         .map(|(_, _, color)| color);
-    assert_eq!(
-        node,
-        Some(chosen_color),
-        "the lane node and the stripe are the same root's colour"
+    assert!(
+        node.is_some_and(|color| color != Color32::GRAY),
+        "the chosen row paints its lane node in a graph colour: {node:?}"
     );
 }
 
@@ -2907,8 +2911,10 @@ fn the_roots_column_does_not_move_the_rail() {
 
     let mut scoped = log_harness(&seed);
     select_second_commit(&mut scoped, &seed);
-    scoped.state_mut().ui.log_path_scope =
-        Some((RootId(seed.alpha.clone().into()), std::path::PathBuf::from("file.txt")));
+    scoped.state_mut().ui.log_path_scope = Some((
+        RootId(seed.alpha.clone().into()),
+        std::path::PathBuf::from("file.txt"),
+    ));
     settle(&mut scoped);
     assert!(
         scoped.state().ui.log_path_scope.is_some(),

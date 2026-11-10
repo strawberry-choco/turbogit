@@ -613,7 +613,10 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
         .selected_commit
         .clone()
         .expect("a selection after the rewrite");
-    assert_ne!(selected.1, target, "the dropped commit is not the selection");
+    assert_ne!(
+        selected.1, target,
+        "the dropped commit is not the selection"
+    );
     assert_eq!(
         selected.1, tip_after,
         "the selection is the commit that took the dropped commit's place"

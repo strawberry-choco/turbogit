@@ -337,7 +337,12 @@ fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {
 }
 
 fn ensure_worktree_data(state: &mut AppState) {
-    let ids: Vec<_> = state.multi.roots.iter().map(|root| root.id.clone()).collect();
+    let ids: Vec<_> = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
     for id in ids {
         if state.caches.worktrees(&id).is_none() {
             state.fetch_worktrees(id.clone());

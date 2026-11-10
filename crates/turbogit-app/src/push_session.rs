@@ -235,9 +235,7 @@ impl PushSession {
 
     /// Whether the selector has this row in play.
     pub fn in_scope(&self, id: &RootId) -> bool {
-        self.scope
-            .as_ref()
-            .is_none_or(|scope| scope.contains(id))
+        self.scope.as_ref().is_none_or(|scope| scope.contains(id))
     }
 
     /// The only path from row state to git.

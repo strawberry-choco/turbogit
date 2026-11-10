@@ -166,7 +166,17 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
         !state.multi.roots.is_empty(),
         "repo root must be discovered"
     );
-    shell_harness_over(state, egui::vec2(1008.0, 900.0))
+    let mut harness = shell_harness_over(state, egui::vec2(1008.0, 900.0));
+    // D4: the Changes groups start collapsed; these tests click file rows.
+    let ids: Vec<_> = harness
+        .state()
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    harness.state_mut().ui.changes_expanded.extend(ids);
+    harness
 }
 
 #[test]

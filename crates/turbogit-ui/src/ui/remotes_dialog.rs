@@ -214,8 +214,7 @@ fn remote_row(
                         Some((id.clone(), name.clone(), RemoteRowAction::Rename));
                 }
                 if widgets::compact_button(ui, "Edit URL").clicked() {
-                    state.ui.dlg.remotes_edit_fetch =
-                        remote.fetch_url.clone().unwrap_or_default();
+                    state.ui.dlg.remotes_edit_fetch = remote.fetch_url.clone().unwrap_or_default();
                     state.ui.dlg.remotes_edit_push = remote.push_url.clone().unwrap_or_default();
                     state.ui.dlg.remotes_row_action =
                         Some((id.clone(), name.clone(), RemoteRowAction::EditUrl));

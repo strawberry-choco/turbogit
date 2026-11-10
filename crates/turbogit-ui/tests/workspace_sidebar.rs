@@ -570,8 +570,8 @@ fn folder_header_toggles_collapse_and_expand() {
 
     h.get_by_label("oss").click();
     settle(&mut h);
-    assert_not_painted(&h, "lib");
-    assert_not_painted(&h, "cli");
+    assert_sidebar_repo_dropped(&h, "lib");
+    assert_sidebar_repo_dropped(&h, "cli");
     assert!(h.state().ui.sidebar_collapsed.contains("oss"));
 
     h.get_by_label("oss").click();
@@ -619,8 +619,8 @@ fn collapse_state_survives_an_app_restart() {
     let mut h2 = harness(relaunched);
     settle(&mut h2);
     assert!(h2.state().ui.sidebar_collapsed.contains("oss"));
-    assert_not_painted(&h2, "lib");
-    assert_not_painted(&h2, "cli");
+    assert_sidebar_repo_dropped(&h2, "lib");
+    assert_sidebar_repo_dropped(&h2, "cli");
 }
 
 #[test]
@@ -655,7 +655,7 @@ fn filter_input_narrows_the_tree_live_and_recollapses() {
     settle(&mut h);
     assert_painted(&h, "alpha");
     assert_painted(&h, "ui");
-    assert_not_painted(&h, "lib");
+    assert_sidebar_repo_dropped(&h, "lib");
 
     h.state_mut().ui.sidebar_filter.clear();
     settle(&mut h);

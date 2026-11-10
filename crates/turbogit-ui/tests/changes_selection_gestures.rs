@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use test_support::git_seed::{repo_with_conflict, repo_with_one_commit};
-use test_support::harness::{click_with_modifiers, shell_harness_over_unstyled};
+use test_support::harness::{
+    click_with_modifiers, expand_every_repo_group, shell_harness_over_unstyled,
+};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, RootId};
 
@@ -19,6 +21,7 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
+    expand_every_repo_group(&mut h);
     h
 }
 
@@ -174,7 +177,6 @@ fn a_shift_range_crosses_two_repository_groups() {
     add_worktree_file(&lib, "b1.txt");
 
     let mut h = harness(app_state(&[alpha.clone(), lib.clone()]));
-    click_row(&mut h, "Expand all groups");
     click_row(&mut h, "a2.txt");
     shift_click(&mut h, "b1.txt");
 
@@ -201,7 +203,6 @@ fn a_shift_range_that_spans_the_conflicts_group_leaves_the_conflicted_path_out()
     add_worktree_file(&other, "y.txt");
 
     let mut h = harness(app_state(&[solo.clone(), other.clone()]));
-    click_row(&mut h, "Expand all groups");
 
     click_row(&mut h, "C conf.txt");
     assert!(

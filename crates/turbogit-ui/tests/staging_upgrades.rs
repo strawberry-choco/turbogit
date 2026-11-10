@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, galley_origin, painted_galleys, painted_text,
-    shell_harness_over_unstyled,
+    assert_not_painted, assert_painted, expand_every_repo_group, galley_origin, painted_galleys,
+    painted_text, shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::AppState;
@@ -38,6 +38,7 @@ fn harness(roots: &[PathBuf]) -> Harness<'static, AppState> {
     let state = AppState::for_roots(&dir, roots);
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
+    expand_every_repo_group(&mut h);
     h
 }
 

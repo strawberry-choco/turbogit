@@ -4,7 +4,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use test_support::git_seed::git;
 use test_support::harness::{
-    click_with_modifiers, painted_galleys, painted_ink, painted_text, shell_harness_over_unstyled,
+    click_with_modifiers, expand_every_repo_group, painted_galleys, painted_ink, painted_text,
+    shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::AppState;
@@ -49,6 +50,7 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
+    expand_every_repo_group(&mut h);
     h
 }
 

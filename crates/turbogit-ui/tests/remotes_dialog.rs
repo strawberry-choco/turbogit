@@ -406,7 +406,11 @@ fn add_remote_runs_in_every_repository_in_scope() {
             .count()
             >= 2
     });
-    assert!(dispatched, "expected two AddRemote calls, got {:?}", exec.recorded());
+    assert!(
+        dispatched,
+        "expected two AddRemote calls, got {:?}",
+        exec.recorded()
+    );
 
     pump_until(&mut h, "both repos gain the remote", |s| {
         s.multi

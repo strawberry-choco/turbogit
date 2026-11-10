@@ -5,7 +5,8 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
     assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item,
-    click_with_modifiers, right_click_row, settle, shell_harness_over_unstyled,
+    click_with_modifiers, expand_every_repo_group, right_click_row, settle,
+    shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::{AppState, PendingConfirm};
@@ -179,6 +180,7 @@ fn changes_harness(roots: &[PathBuf]) -> Harness<'static, AppState> {
         }),
         "the working tree the menu answers for is on disk and read"
     );
+    expand_every_repo_group(&mut harness);
     harness
 }
 

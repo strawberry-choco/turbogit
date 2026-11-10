@@ -7,10 +7,9 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use crate::ui::widgets::PaneColumn;
 use crate::ui::widgets::TabItem;
-use egui::containers::menu::{MenuConfig, SubMenuButton};
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, PopupCloseBehavior,
-    Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, Pos2, Rect, RichText,
+    Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
 use turbogit_app::root_caches::Affected;
@@ -64,6 +63,7 @@ enum RowAction {
         path: PathBuf,
     },
     ToggleGroup(turbogit_domain::model::RootId),
+    ToggleCommit(turbogit_domain::model::RootId),
     Select {
         key: PathBuf,
         root: RootId,
@@ -147,6 +147,13 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot
                     state.ui.changes_expanded.insert(id);
                 }
             }
+            RowAction::ToggleCommit(id) => {
+                if state.ui.commit_repo_unchecks.contains(&id) {
+                    state.ui.commit_repo_unchecks.remove(&id);
+                } else {
+                    state.ui.commit_repo_unchecks.insert(id);
+                }
+            }
         }
     }
 }
@@ -207,8 +214,41 @@ fn discard_selected_changes(state: &mut AppState, root: &RootId) {
     });
 }
 
+/// The Changes header's Rollback: discard the selected files in every
+/// repository that owns them, so a cross-repo selection is not narrowed to one
+/// repo. One root asks with the existing discard prompt; several ask with the
+/// per-root list.
+fn discard_selected_in_every_root(state: &mut AppState) {
+    let rows: Vec<(turbogit_domain::model::RootId, Vec<Change>)> = state
+        .multi
+        .roots
+        .iter()
+        .filter_map(|root| {
+            let changes: Vec<Change> = selected_changes(state, &root.id)
+                .into_iter()
+                .filter(|c| c.status != ChangeStatus::Unversioned)
+                .collect();
+            (!changes.is_empty()).then(|| (root.id.clone(), changes))
+        })
+        .collect();
+    match rows.len() {
+        0 => state.ui.toast = Some(Toast::warning("Select files to discard.")),
+        1 => {
+            let (root, changes) = rows.into_iter().next().expect("one row");
+            state.ui.confirm = Some(PendingConfirm::Discard { root, changes });
+        }
+        _ => state.ui.confirm = Some(PendingConfirm::DiscardAcross { rows }),
+    }
+}
+
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    if let Some(root_id) = state.selected_root.clone() {
+    let ids: Vec<_> = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    for root_id in ids {
         state.ensure_hunk_stats(&root_id);
     }
     if let Some(root_id) = state.ui.preview_change.as_ref().map(|c| c.root.clone()) {
@@ -480,10 +520,10 @@ fn stash_row(ui: &mut Ui, state: &mut AppState, stash: &turbogit_domain::model::
 
 fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
     let conflicted = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .is_some_and(|r| !r.status.conflicted.is_empty());
+        .multi
+        .roots
+        .iter()
+        .any(|r| !r.status.conflicted.is_empty());
     if conflicted {
         widgets::card(ui, widgets::CardFrame::default(), |ui| {
             changes_card_body(ui, state, false);
@@ -557,19 +597,6 @@ fn changes_card_body(ui: &mut Ui, state: &mut AppState, fills: bool) {
 fn changes_card(ui: &mut Ui, state: &mut AppState, fills: bool) {
     changes_card_header(ui, state);
 
-    let Some(root_id) = state.selected_root.clone() else {
-        ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
-        return;
-    };
-    if state.multi.by_id(&root_id).is_none() {
-        return;
-    }
-
-    if state.ui.changes_focus != state.selected_root {
-        state.ui.changes_focus = state.selected_root.clone();
-        state.ui.changes_expanded.clear();
-    }
-
     let (buckets, no_match) = filter_buckets(state, change_buckets(state));
     let empty_text = if no_match.is_empty() {
         "Nothing to commit, working tree is clean."
@@ -606,17 +633,20 @@ fn changes_tree(
         .auto_shrink(!fills)
         .max_height(max_h)
         .show(ui, |ui| {
-            let mut painted = false;
+            let filtering = !state.ui.file_filter.trim().is_empty();
             for root in &state.multi.roots {
                 let root_buckets: Vec<&Bucket> =
                     buckets.iter().filter(|b| b.root.id == root.id).collect();
-                if root_buckets.is_empty() {
+                // D4: the unfiltered list is the repo list, so a clean repo
+                // keeps its group header (branch, count 0, commit checkbox).
+                // A filter is a query over changes, not over repositories, so
+                // it narrows the list back to roots that matched.
+                if filtering && root_buckets.is_empty() {
                     continue;
                 }
-                painted = true;
                 repo_group(ui, state, root, &root_buckets, actions, order);
             }
-            if !painted {
+            if buckets.is_empty() {
                 widgets::empty_state(ui, empty_text);
             }
         });
@@ -840,8 +870,7 @@ fn repo_group(
     actions: &mut Vec<RowAction>,
     order: &mut Vec<RowSlot>,
 ) {
-    let focused = state.selected_root.as_ref() == Some(&root.id);
-    let expanded = focused || state.ui.changes_expanded.contains(&root.id);
+    let expanded = state.ui.changes_expanded.contains(&root.id);
     let name = root.id.name();
     let branch = root
         .current_branch
@@ -858,12 +887,15 @@ fn repo_group(
             meta: Some(&branch),
             count,
             expanded: Some(expanded),
-            focused,
+            focused: false,
             lead: Some(Icon::FOLDER_GIT),
         },
     );
-    if response.clicked() && !focused {
+    if response.clicked() {
         actions.push(RowAction::ToggleGroup(root.id.clone()));
+    }
+    if commit_checkbox(ui, state, root, response.rect) {
+        actions.push(RowAction::ToggleCommit(root.id.clone()));
     }
 
     if expanded {
@@ -873,6 +905,54 @@ fn repo_group(
             }
         });
     }
+}
+
+/// The per-repository commit checkbox on its group header. A repository with
+/// nothing staged is still listed, disabled: the group is the repo list, and a
+/// row that vanished until it had work would move the list under the reader.
+fn commit_checkbox(ui: &mut Ui, state: &AppState, root: &Root, header: Rect) -> bool {
+    let has_staged = root.status.changes.iter().any(|c| c.staged);
+    let checked = has_staged && !state.ui.commit_repo_unchecks.contains(&root.id);
+    let rect = Rect::from_center_size(
+        Pos2::new(header.right() - GROUP_COUNT_SLOT - 14.0, header.center().y),
+        Vec2::splat(13.0),
+    );
+    let response = ui.interact(
+        rect,
+        ui.auto_id_with(("repo_commit_check", &root.id)),
+        if has_staged {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Checkbox,
+            has_staged,
+            format!("Commit {}", root.id.name()),
+        )
+    });
+    let painter = ui.painter().clone();
+    if checked {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::CHIP_RADIUS),
+            Palette::BRAND,
+        );
+        icons::centered_icon(ui, Icon::CHECK, rect.center(), 10.0, Palette::BRAND_INK);
+    } else {
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(crate::theme::CHIP_RADIUS),
+            egui::Stroke::new(1.0, Palette::LINE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if response.clicked() {
+        return true;
+    }
+    false
 }
 
 fn indent_guide(ui: &Ui, block: Rect) {
@@ -1397,17 +1477,13 @@ fn changes_card_header(ui: &mut Ui, state: &mut AppState) {
         let rollback = widgets::icon_button(ui, Icon::UNDO);
         rollback.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Rollback"));
         if rollback.clicked() {
-            match state.selected_root.clone() {
-                Some(root) => discard_selected_changes(state, &root),
-                None => state.ui.toast = Some(Toast::warning("Select files to discard.")),
-            }
+            discard_selected_in_every_root(state);
         }
 
         let all_expanded = state
             .multi
             .roots
             .iter()
-            .filter(|r| state.selected_root.as_ref() != Some(&r.id))
             .all(|r| state.ui.changes_expanded.contains(&r.id));
         let (icon, label) = if all_expanded {
             (Icon::CHEVRON_UP, "Collapse all groups")
@@ -1421,9 +1497,7 @@ fn changes_card_header(ui: &mut Ui, state: &mut AppState) {
                 state.ui.changes_expanded.clear();
             } else {
                 for r in &state.multi.roots {
-                    if state.selected_root.as_ref() != Some(&r.id) {
-                        state.ui.changes_expanded.insert(r.id.clone());
-                    }
+                    state.ui.changes_expanded.insert(r.id.clone());
                 }
             }
         }
@@ -1633,36 +1707,9 @@ fn commit_options_kebab_at(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, COMMIT_OPTIONS_LABEL));
     widgets::focus_ring(ui, &response);
 
-    let repos: Vec<(RootId, String)> = state
-        .multi
-        .roots
-        .iter()
-        .filter(|r| r.status.changes.iter().any(|c| c.staged))
-        .map(|r| (r.id.clone(), r.path.display_name_or("?")))
-        .collect();
-
     Popup::menu(&response).show(|menu| {
         menu.checkbox(&mut state.ui.commit_no_verify, COMMIT_NO_VERIFY_LABEL)
             .on_hover_text(COMMIT_NO_VERIFY_HINT);
-        menu.separator();
-        SubMenuButton::new(COMMIT_MULTI_LABEL)
-            .config(MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside))
-            .ui(menu, |ui| {
-                if repos.is_empty() {
-                    ui.label(COMMIT_MULTI_EMPTY);
-                    return;
-                }
-                for (id, name) in &repos {
-                    let mut checked = !state.ui.commit_repo_unchecks.contains(id);
-                    if ui.checkbox(&mut checked, name).changed() {
-                        if checked {
-                            state.ui.commit_repo_unchecks.remove(id);
-                        } else {
-                            state.ui.commit_repo_unchecks.insert(id.clone());
-                        }
-                    }
-                }
-            });
     });
 }
 
@@ -1670,8 +1717,6 @@ const COMMIT_OPTIONS_LABEL: &str = "Commit card options";
 const COMMIT_NO_VERIFY_LABEL: &str = "Do not run git commit hooks";
 const COMMIT_NO_VERIFY_HINT: &str =
     "Commits with --no-verify. Unchecks itself after a successful commit.";
-const COMMIT_MULTI_LABEL: &str = "Commit on multiple repos";
-const COMMIT_MULTI_EMPTY: &str = "No repos have staged changes";
 
 fn amend_checkbox_at(ui: &mut Ui, rect: Rect, amend: &mut bool) -> egui::Response {
     let painter = ui.painter().clone();
@@ -1781,13 +1826,13 @@ fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
             .on_hover_text("Shelve selected changes")
             .clicked()
         {
-            state.open_shelve_dialog(state.selected_root.clone());
+            state.open_shelve_dialog(None);
         }
         if widgets::ghost_button(ui, None, "Stash\u{2026}")
             .on_hover_text("Stash all changes")
             .clicked()
         {
-            state.ui.dialog = Some(Dialog::Stash);
+            state.open_dialog(Dialog::Stash, None);
         }
     });
 }

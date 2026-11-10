@@ -289,7 +289,7 @@ fn worktree_mutation_refills_only_the_affected_root() {
         assert_eq!(list[0].dirty, Some(true));
     };
     let wt = tmp.path().join("wt-feature");
-    state.add_worktree(wt.clone(), "feature".into());
+    state.add_worktree(root_a.clone(), wt.clone(), "feature".into());
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
@@ -362,7 +362,7 @@ fn add_worktree_works_end_to_end() {
     let wt = tmp.path().join("wt-feature");
     state.fetch_worktrees(root.clone());
     wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
-    state.add_worktree(wt.clone(), "feature".to_string());
+    state.add_worktree(root.clone(), wt.clone(), "feature".to_string());
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
@@ -391,7 +391,10 @@ fn remove_worktree_works_end_to_end() {
 
     state.fetch_worktrees(root.clone());
     wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
-    state.run_confirmed(turbogit_app::state::PendingConfirm::RemoveWorktree { path: wt.clone() });
+    state.run_confirmed(turbogit_app::state::PendingConfirm::RemoveWorktree {
+        root: root.clone(),
+        path: wt.clone(),
+    });
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
@@ -675,7 +678,7 @@ fn probes_refill_after_add_while_window_open() {
     });
 
     let wt_new = tmp.path().join("wt-new");
-    state.add_worktree(wt_new.clone(), "feature-new".to_string());
+    state.add_worktree(root.clone(), wt_new.clone(), "feature-new".to_string());
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
@@ -790,7 +793,7 @@ fn update_submodule_works_end_to_end() {
 
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
     let root = RootId(repo.into());
-    state.update_submodule(sub_path.clone(), false);
+    state.update_submodule(root.clone(), sub_path.clone(), false);
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
@@ -812,6 +815,7 @@ fn deinit_submodule_works_end_to_end() {
     let root = RootId(repo.into());
 
     state.run_confirmed(turbogit_app::state::PendingConfirm::DeinitSubmodule {
+        root: root.clone(),
         path: sub_path.clone(),
     });
     wait_for(&mut state, |s| {

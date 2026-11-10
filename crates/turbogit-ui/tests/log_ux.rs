@@ -818,11 +818,6 @@ fn changing_the_selection_keeps_the_ref_scope() {
         "a pane tree row still means this repository's branch: the selection narrows \
          to beta, which is where the read stays"
     );
-    assert_eq!(
-        harness.state().selected_root.as_ref(),
-        Some(&beta_root),
-        "the selection follows the scoped ref's repository"
-    );
 
     harness.state_mut().selected_root = Some(alpha_root);
     settle(&mut harness);

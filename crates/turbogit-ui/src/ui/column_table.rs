@@ -26,11 +26,13 @@ pub(crate) fn column_table_pane<T: Clone>(
     state: &mut AppState,
     spec: PaneTable<'_, T>,
 ) {
-    let roots: Vec<RootId> = state.multi.roots.iter().map(|root| root.id.clone()).collect();
-    let loaded: Vec<Option<Vec<T>>> = roots
+    let roots: Vec<RootId> = state
+        .multi
+        .roots
         .iter()
-        .map(|id| (spec.cached)(state, id))
+        .map(|root| root.id.clone())
         .collect();
+    let loaded: Vec<Option<Vec<T>>> = roots.iter().map(|id| (spec.cached)(state, id)).collect();
     let total: usize = loaded.iter().flatten().map(Vec::len).sum();
     let count = loaded
         .iter()

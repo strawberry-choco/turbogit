@@ -97,6 +97,7 @@ fn two_roots_with_the_same_relative_path_preview_separately() {
     let (alpha, beta) = workspace(project.path());
     let mut h = shell(project.path(), &[alpha, beta]);
 
+    expand_group(&mut h, "alpha");
     expand_group(&mut h, "beta");
     click_row(&mut h, "shared.txt", 1);
 

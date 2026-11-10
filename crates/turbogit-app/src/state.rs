@@ -447,6 +447,11 @@ pub enum PendingConfirm {
         root: RootId,
         changes: Vec<Change>,
     },
+    /// The Changes header's Rollback over a cross-repo selection: every root
+    /// that owns a selected file, and the files it owns.
+    DiscardAcross {
+        rows: Vec<(RootId, Vec<Change>)>,
+    },
     /// The delete confirms carry their `root` because `AppState::selected_root` is
     /// the workspace focus, not the row's repository: the branches tree never writes
     /// it, so a name-only confirm deletes in whichever repo the user last selected,
@@ -763,7 +768,6 @@ pub struct UiState {
     pub recent_messages: Vec<String>,
     pub commit_subtab: CommitSubTab,
     pub changes_expanded: HashSet<RootId>,
-    pub changes_focus: Option<RootId>,
     pub file_filter: String,
     pub focus_file_filter: bool,
     pub tab: Tab,
@@ -1090,7 +1094,12 @@ impl AppState {
     pub fn seed_dialog_scope(&mut self, roots: Option<&[RootId]>) {
         self.ui.dlg.repo_scope = match roots {
             Some(roots) => roots.to_vec(),
-            None => self.multi.roots.iter().map(|root| root.id.clone()).collect(),
+            None => self
+                .multi
+                .roots
+                .iter()
+                .map(|root| root.id.clone())
+                .collect(),
         };
         self.ui.dlg.repo_scope_results = None;
     }
@@ -1385,7 +1394,11 @@ impl AppState {
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
         let branch = self.ui.log_ref_scope.clone();
-        let path = self.ui.log_path_scope.as_ref().map(|(_, path)| path.clone());
+        let path = self
+            .ui
+            .log_path_scope
+            .as_ref()
+            .map(|(_, path)| path.clone());
         let query = self.ui.log_filter.trim();
         let pickaxe = (!query.is_empty()).then(|| query.to_owned());
         let structured = author.is_some() || since.is_some() || until.is_some();
@@ -1613,7 +1626,11 @@ impl AppState {
         let generation = self.ui.dlg.push.generation + 1;
         self.ui.dlg.push = crate::push_session::PushSession::open(generation, rows, Some(focus));
         let scope: Vec<RootId> = if consent.is_empty() {
-            self.multi.roots.iter().map(|root| root.id.clone()).collect()
+            self.multi
+                .roots
+                .iter()
+                .map(|root| root.id.clone())
+                .collect()
         } else {
             self.multi
                 .roots

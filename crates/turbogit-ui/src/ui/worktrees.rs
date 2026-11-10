@@ -77,7 +77,10 @@ fn probe_state(dirty: Option<bool>) -> (&'static str, Color32) {
 pub fn new_worktree_dialog(ui: &mut Ui, state: &mut AppState) {
     let root = state.ui.dlg.repo_scope.first().cloned();
     ui.label(match &root {
-        Some(root) => format!("Create in {} · path relative to that repository:", root.name()),
+        Some(root) => format!(
+            "Create in {} · path relative to that repository:",
+            root.name()
+        ),
         None => "Select a repository above first.".to_string(),
     });
     let path_edit = ui.text_edit_singleline(&mut state.ui.dlg.wt_path);

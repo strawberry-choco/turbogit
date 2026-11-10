@@ -61,6 +61,7 @@ fn app_state_with_recorder(
 fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
+    test_support::harness::expand_every_repo_group(&mut h);
     h
 }
 

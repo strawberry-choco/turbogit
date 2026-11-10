@@ -45,6 +45,26 @@ pub struct Disclosure {
 
 pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
     match c {
+        PendingConfirm::DiscardAcross { rows } => {
+            let total: usize = rows.iter().map(|(_, changes)| changes.len()).sum();
+            let repos: Vec<String> = rows
+                .iter()
+                .map(|(root, changes)| {
+                    format!("{} · {} file(s)", root.name(), changes.len())
+                })
+                .collect();
+            Prompt {
+                rows: vec![
+                    Row::strip(vec![format!(
+                        "Discard changes to {total} file(s) across {} repos? This cannot be undone.",
+                        rows.len()
+                    )]),
+                    Row::strip(repos),
+                ],
+                disclosure: None,
+                buttons: vec![Button::ok(), Button::cancel()],
+            }
+        }
         PendingConfirm::Discard {
             root: _,
             changes,
@@ -202,6 +222,16 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
 /// a verb with its controls, so there is no such pair to arrive.
 pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
     match c {
+        PendingConfirm::DiscardAcross { .. } => match action {
+            ConfirmAction::Confirm => {
+                if let Some(live) = state.ui.confirm.clone() {
+                    run(state, live);
+                    state.ui.confirm = None;
+                }
+            }
+            ConfirmAction::Close => state.ui.confirm = None,
+            _ => {}
+        },
         PendingConfirm::Discard { root, changes } => match action {
             ConfirmAction::ShelveFirst => {
                 let changes_owned = changes.clone();
@@ -293,6 +323,15 @@ pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
 
 pub fn run(state: &mut AppState, c: PendingConfirm) {
     match c {
+        PendingConfirm::DiscardAcross { rows } => {
+            for (root, changes) in rows {
+                state.dispatch(Operation::custom(
+                    "Discard changes",
+                    Affected::Root(root.clone()),
+                    move |v| changes::discard_changes(v, root.as_path(), &changes),
+                ));
+            }
+        }
         PendingConfirm::Discard { root, changes } => {
             state.dispatch(Operation::custom(
                 "Discard changes",

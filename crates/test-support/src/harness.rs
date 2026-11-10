@@ -128,6 +128,21 @@ pub fn repo_shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     (shell_harness_over(state, Vec2::new(1024.0, 768.0)), project)
 }
 
+/// D4: the Changes tree is a repo list whose groups start collapsed. A suite
+/// that drives file rows rather than disclosure opens every group once, after
+/// the harness exists so the registered roots are known.
+pub fn expand_every_repo_group(harness: &mut Harness<'_, AppState>) {
+    let ids: Vec<_> = harness
+        .state()
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    harness.state_mut().ui.changes_expanded.extend(ids);
+    harness.run();
+}
+
 pub fn painted_text<S>(harness: &Harness<'_, S>) -> Vec<String> {
     harness
         .output()

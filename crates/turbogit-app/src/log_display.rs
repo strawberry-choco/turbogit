@@ -22,12 +22,20 @@ pub struct LogInputs {
 impl LogInputs {
     pub fn of(state: &AppState) -> Self {
         Self {
-            path_scope: state.ui.log_path_scope.as_ref().map(|(_, path)| path.clone()),
+            path_scope: state
+                .ui
+                .log_path_scope
+                .as_ref()
+                .map(|(_, path)| path.clone()),
             ref_scope: state.ui.log_ref_scope.clone(),
             filter: state.ui.log_filter.clone(),
             combined: state.log_filter_key(),
             roots: listing_roots(state),
-            scope_root: state.ui.log_path_scope.as_ref().map(|(root, _)| root.clone()),
+            scope_root: state
+                .ui
+                .log_path_scope
+                .as_ref()
+                .map(|(root, _)| root.clone()),
         }
     }
 }

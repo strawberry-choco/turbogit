@@ -2282,9 +2282,10 @@ const STROKE_SITES: [(&str, usize, &str); 8] = [
     ),
     (
         "commit_window.rs",
-        3,
-        "the tri-state partial checkbox's border, the message editor's focus \
-         ring, and the commit/rollback divider rule",
+        4,
+        "the tri-state partial checkbox's border, the repo group's commit \
+         checkbox border, the message editor's focus ring, and the commit/rollback \
+         divider rule",
     ),
     ("sidebar.rs", 1, "the tri-state checkbox's own border"),
     (

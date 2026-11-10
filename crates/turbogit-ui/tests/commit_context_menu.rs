@@ -920,12 +920,10 @@ mod surface {
         wait_for(&mut harness, |s| {
             let root = s.multi.roots.first().map(|r| r.id.clone());
             root.is_some_and(|root| {
-                s.caches
-                    .log(&root)
-                    .is_some_and(|cs| {
-                        cs.iter()
-                            .any(|c| c.message.to_lowercase().starts_with("revert"))
-                    })
+                s.caches.log(&root).is_some_and(|cs| {
+                    cs.iter()
+                        .any(|c| c.message.to_lowercase().starts_with("revert"))
+                })
             })
         });
         let subject = git_with_env(

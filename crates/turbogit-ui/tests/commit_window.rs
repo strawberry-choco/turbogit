@@ -81,13 +81,27 @@ fn change(repo: &Path, rel: &str) -> ChangeRef {
     ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
 }
 
+fn expand_all_groups(state: &mut AppState) {
+    state.ui.changes_expanded = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+}
+
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
         .first()
         .and_then(|r| r.parent())
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    AppState::for_roots(&dir, roots)
+    let mut state = AppState::for_roots(&dir, roots);
+    // D4: a repo group is collapsed unless `changes_expanded` names it. These
+    // tests assert on file rows and headers, not on disclosure, so every group
+    // starts open.
+    expand_all_groups(&mut state);
+    state
 }
 
 fn harness(state: AppState) -> Harness<'static, AppState> {
@@ -309,6 +323,27 @@ fn stage_through_checkbox(h: &mut Harness<'_, AppState>, repo: &Path, name: &str
     assert!(
         wait_until(15_000, || staged_contains(repo, name)),
         "the checkbox must have staged {name}"
+    );
+    h.run();
+}
+
+/// Two expanded groups can carry the same file name, so the row is addressed
+/// as "the first `Stage {name}` below this group's header".
+fn stage_through_checkbox_in(h: &mut Harness<'_, AppState>, group: &str, repo: &Path, name: &str) {
+    {
+        let label = stage_label_of(name);
+        let header = h.get_by_label(&format!("Toggle {group}")).rect();
+        let node = h
+            .get_all_by_label(&label)
+            .filter(|node| node.rect().top() >= header.bottom())
+            .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .unwrap_or_else(|| panic!("no `{label}` row below the {group} header"));
+        node.click();
+    }
+    h.run();
+    assert!(
+        wait_until(15_000, || staged_contains(repo, name)),
+        "the checkbox must have staged {name} in {group}"
     );
     h.run();
 }
@@ -577,10 +612,8 @@ fn amend_click_with_disagreeing_heads_leaves_the_buffer_empty() {
     std::fs::write(b.path.join("base.txt"), "modified b\n").unwrap();
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-    stage_through_checkbox(&mut h, &a.path, "base.txt");
-    h.get_by_label("Toggle disagree-b").click();
-    h.run();
-    stage_through_checkbox(&mut h, &b.path, "base.txt");
+    stage_through_checkbox_in(&mut h, "disagree-a", &a.path, "base.txt");
+    stage_through_checkbox_in(&mut h, "disagree-b", &b.path, "base.txt");
     assert_eq!(
         h.state().commit_targets().len(),
         2,
@@ -644,10 +677,8 @@ fn amend_click_seeds_two_agreeing_roots_and_unchecking_one_still_seeds() {
     std::fs::write(b.path.join("base.txt"), "modified b\n").unwrap();
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-    stage_through_checkbox(&mut h, &a.path, "base.txt");
-    h.get_by_label("Toggle agree-b").click();
-    h.run();
-    stage_through_checkbox(&mut h, &b.path, "base.txt");
+    stage_through_checkbox_in(&mut h, "agree-a", &a.path, "base.txt");
+    stage_through_checkbox_in(&mut h, "agree-b", &b.path, "base.txt");
 
     h.get_by_label("Amend").click();
     h.run();
@@ -740,6 +771,8 @@ fn commit_and_push_dialog_lists_the_commit_the_chain_just_landed() {
         1,
         "the fixture must register exactly the repository under test"
     );
+    let mut state = state;
+    expand_all_groups(&mut state);
 
     let mut h = harness(state);
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
@@ -776,23 +809,36 @@ fn seed_tracked(repo: &Path, name: &str) {
 }
 
 #[test]
-fn repo_groups_render_collapsible_one_tree_with_focus() {
+fn repo_groups_render_collapsible_one_tree() {
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "repo-a");
     let b = temp_repo(parent.path(), "repo-b");
     seed_tracked(&a.path, "a.txt");
     seed_tracked(&b.path, "b.txt");
 
-    let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    let mut state = app_state(&[a.path.clone(), b.path.clone()]);
+    state.ui.changes_expanded.clear();
+    let mut h = harness(state);
 
     h.get_by_label("Toggle repo-a");
     h.get_by_label("Toggle repo-b");
+    assert!(
+        h.query_by_label("a.txt").is_none() && h.query_by_label("b.txt").is_none(),
+        "every group starts collapsed"
+    );
 
+    h.get_by_label("Toggle repo-a").click();
+    h.run();
     h.get_by_label("a.txt");
     assert!(
         h.query_by_label("b.txt").is_none(),
-        "non-focused repo-b must be collapsed by default"
+        "expanding one group leaves the other collapsed"
     );
+
+    h.get_by_label("Toggle repo-b").click();
+    h.run();
+    h.get_by_label("b.txt");
+    h.get_by_label("a.txt");
 }
 
 #[test]
@@ -804,7 +850,9 @@ fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
     seed_tracked(&b.path, "b.txt");
     let b_id = turbogit_domain::model::RootId(b.path.clone().into());
 
-    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    let mut state = app_state(&[a.path.clone(), b.path.clone()]);
+    state.ui.changes_expanded.clear();
+    let mut h = harness(state);
     assert!(
         h.query_by_label("b.txt").is_none(),
         "repo-b starts collapsed"
@@ -829,7 +877,7 @@ fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
 }
 
 #[test]
-fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
+fn each_group_toggles_without_a_global_focus() {
     let parent = tempfile::tempdir().unwrap();
     let shared = parent.path().join("shared");
     std::fs::create_dir_all(&shared).unwrap();
@@ -838,34 +886,29 @@ fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
     seed_tracked(&a.path, "a.txt");
     seed_tracked(&b.path, "b.txt");
 
-    let mut h = harness(AppState::for_roots(
-        parent.path(),
-        &[a.path.clone(), b.path.clone()],
-    ));
-    assert_eq!(
-        h.state().selected_root,
-        Some(turbogit_domain::model::RootId(a.path.clone().into())),
-        "first registered root starts focused"
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+
+    h.get_by_label("Toggle repo-b").click();
+    h.run();
+    assert!(
+        !h.state()
+            .ui
+            .changes_expanded
+            .contains(&turbogit_domain::model::RootId(b.path.clone().into())),
+        "clicking a group header collapses only that group"
     );
+    h.get_by_label("a.txt");
 
     h.get_by_label("Toggle repo-b").click();
     h.run();
     h.get_by_label("b.txt");
-    h.get_by_label("repo-b").click();
-    h.run();
-
-    assert_eq!(
-        h.state().selected_root,
-        Some(turbogit_domain::model::RootId(b.path.clone().into()))
-    );
-    h.get_by_label("b.txt");
+    h.get_by_label("a.txt");
     assert!(
-        h.query_by_label("a.txt").is_none(),
-        "selecting repo-b must collapse repo-a's group"
-    );
-    assert!(
-        h.state().ui.changes_expanded.is_empty(),
-        "manual expansions reset when the focus moves"
+        h.state()
+            .ui
+            .changes_expanded
+            .contains(&turbogit_domain::model::RootId(b.path.clone().into())),
+        "the other group's expansion is untouched: there is no focus to move"
     );
 }
 
@@ -1388,7 +1431,9 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
     seed_tracked(&a.path, "a.txt");
     seed_tracked(&b.path, "b.txt");
 
-    let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    let mut state = app_state(&[a.path.clone(), b.path.clone()]);
+    state.ui.changes_expanded.clear();
+    let h = harness(state);
 
     let painted = painted_text(&h);
     assert!(
@@ -1596,28 +1641,28 @@ fn expand_collapse_all_toggles_every_repo_group() {
     let b = temp_repo(parent.path(), "repo-b");
     seed_tracked(&a.path, "a.txt");
     seed_tracked(&b.path, "b.txt");
+    let a_id = turbogit_domain::model::RootId(a.path.clone().into());
     let b_id = turbogit_domain::model::RootId(b.path.clone().into());
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+
+    h.get_by_label("Collapse all groups").click();
+    h.run();
     assert!(
-        h.query_by_label("b.txt").is_none(),
-        "repo-b starts collapsed"
+        h.query_by_label("b.txt").is_none() && h.query_by_label("a.txt").is_none(),
+        "collapse-all closes every group"
     );
+    assert!(h.state().ui.changes_expanded.is_empty());
 
     h.get_by_label("Expand all groups").click();
     h.run();
     h.get_by_label("b.txt");
+    h.get_by_label("a.txt");
     assert!(
-        h.state().ui.changes_expanded.contains(&b_id),
-        "expand-all must record every non-focused group"
+        h.state().ui.changes_expanded.contains(&a_id)
+            && h.state().ui.changes_expanded.contains(&b_id),
+        "expand-all must record every group"
     );
-    h.get_by_label("Collapse all groups").click();
-    h.run();
-    assert!(
-        h.query_by_label("b.txt").is_none(),
-        "collapse-all closes every non-focused group"
-    );
-    assert!(h.state().ui.changes_expanded.is_empty());
 }
 
 #[test]
@@ -1646,6 +1691,54 @@ fn rollback_icon_confirms_discard_and_toasts_when_empty() {
         None => panic!("expected a Discard confirm, got none"),
         Some(_) => panic!("expected a Discard confirm, got a different confirm"),
     }
+}
+
+#[test]
+fn rollback_discards_the_selection_across_every_repo_that_owns_it() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "discard-a");
+    let b = temp_repo(parent.path(), "discard-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    h.get_by_label("a.txt").click();
+    h.run();
+    click_with_modifiers(&mut h, "b.txt", egui::Modifiers::COMMAND);
+
+    h.get_by_label("Rollback").click();
+    h.run();
+    match &h.state().ui.confirm {
+        Some(turbogit_app::state::PendingConfirm::DiscardAcross { rows }) => {
+            let names: Vec<String> = rows.iter().map(|(root, _)| root.name()).collect();
+            assert_eq!(
+                names,
+                vec!["discard-a".to_string(), "discard-b".to_string()],
+                "a cross-repo selection must keep both repos in the confirm"
+            );
+            assert!(
+                rows.iter().all(|(_, changes)| changes.len() == 1),
+                "each repo contributes exactly the selected file: {rows:?}"
+            );
+        }
+        None => panic!("expected a DiscardAcross confirm, got none"),
+        Some(_) => panic!("expected a DiscardAcross confirm, got a different confirm"),
+    }
+    assert_painted(&h, "discard-a · 1 file(s)");
+    assert_painted(&h, "discard-b · 1 file(s)");
+
+    h.get_by_label("OK").click();
+    h.run();
+    let reverted = |repo: &Path, name: &str| {
+        std::fs::read_to_string(repo.join(name)).ok().as_deref() == Some("tracked\n")
+    };
+    assert!(
+        wait_until(15_000, || reverted(&a.path, "a.txt")
+            && reverted(&b.path, "b.txt")),
+        "both repos' selected files must be discarded; a={:?} b={:?}",
+        std::fs::read_to_string(a.path.join("a.txt")),
+        std::fs::read_to_string(b.path.join("b.txt")),
+    );
 }
 
 #[test]
@@ -2147,14 +2240,14 @@ fn changes_tree_sits_in_a_card_with_its_toolbar_as_the_header() {
     let title = changes_title_galley(&h).pos;
     let card = card_rect(&h, title);
 
-    let row = galley_origin(&h, "a.txt").expect("the focused repo's file row paints");
+    let row = galley_origin(&h, "a.txt").expect("repo-a's file row paints");
     assert!(
         card.contains(row),
         "the changes tree must sit inside the card {card:?} headed at {title:?}"
     );
 
     for label in [
-        "Expand all groups",
+        "Collapse all groups",
         "Rollback",
         "Refresh changes",
         "Changes header overflow",
@@ -3588,7 +3681,7 @@ fn a_staged_repo_is_a_commit_target_by_default() {
 }
 
 #[test]
-fn commit_options_kebab_offers_the_multi_repo_checklist() {
+fn the_group_header_carries_the_repo_commit_checkbox() {
     let parent = tempfile::tempdir().unwrap();
     let staged = temp_repo(parent.path(), "checklist-staged");
     let clean = temp_repo(parent.path(), "checklist-clean");
@@ -3597,25 +3690,38 @@ fn commit_options_kebab_offers_the_multi_repo_checklist() {
     let mut h = harness(app_state(&[staged.path.clone(), clean.path.clone()]));
     stage_through_checkbox(&mut h, &staged.path, "base.txt");
 
-    h.get_by_label("Commit card options").click();
-    h.run();
-    assert_painted(&h, "Commit on multiple repos");
-
-    let staged_before = h.get_all_by_label("checklist-staged").count();
-    let clean_before = h.get_all_by_label("checklist-clean").count();
-    // The submenu trigger's accessible label carries egui's `⏵` arrow, so it is
-    // addressed by substring.
-    h.get_by_label_contains("Commit on multiple repos").click();
-    h.run();
-    assert_eq!(
-        h.get_all_by_label("checklist-staged").count(),
-        staged_before + 1,
-        "the checklist must add one row for the repo with staged content"
+    let staged_id = RootId(staged.path.clone().into());
+    assert!(
+        !h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
+            .accesskit_node()
+            .is_disabled(),
+        "the staged repository's header checkbox is live"
     );
-    assert_eq!(
-        h.get_all_by_label("checklist-clean").count(),
-        clean_before,
-        "the checklist must not list a repo with nothing staged"
+    let clean_node =
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-clean");
+    assert!(
+        clean_node.accesskit_node().is_disabled(),
+        "a repository with nothing staged still lists, disabled"
+    );
+
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
+        .click();
+    h.run();
+    assert!(
+        h.state().ui.commit_repo_unchecks.contains(&staged_id),
+        "the header checkbox records the uncheck"
+    );
+    assert!(
+        h.state().commit_targets().is_empty(),
+        "and the unchecked repository leaves the commit targets"
+    );
+
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
+        .click();
+    h.run();
+    assert!(
+        !h.state().ui.commit_repo_unchecks.contains(&staged_id),
+        "clicking it again re-checks the repository"
     );
 }
 
@@ -3629,8 +3735,6 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
     stage_through_checkbox(&mut h, &a.path, "a.txt");
-    h.get_by_label("Toggle multi-b").click();
-    h.run();
     stage_through_checkbox(&mut h, &b.path, "b.txt");
 
     assert!(
@@ -3692,7 +3796,7 @@ fn unchecking_the_repo_keeps_it_out_of_the_commit() {
 }
 
 #[test]
-fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
+fn unchecking_a_repo_on_its_group_header_keeps_the_group_expanded() {
     let parent = tempfile::tempdir().unwrap();
     let staged = temp_repo(parent.path(), "checklist-toggle");
     std::fs::write(staged.path.join("base.txt"), "modified\n").unwrap();
@@ -3705,16 +3809,10 @@ fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
         "the staged repo starts as a commit target"
     );
 
-    h.get_by_label("Commit card options").click();
-    h.run();
-    h.get_by_label_contains("Commit on multiple repos").click();
-    h.run();
-
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle")
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-toggle")
         .click();
     h.run();
 
-    let _still_open = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle");
     assert!(
         h.state().ui.commit_repo_unchecks.contains(&id),
         "the toggle must record an explicit uncheck"
@@ -3722,5 +3820,9 @@ fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
     assert!(
         h.state().commit_targets().is_empty(),
         "an unchecked repo is no longer a commit target"
+    );
+    assert!(
+        painted_text(&h).iter().any(|t| t == "base.txt"),
+        "the group stays expanded while its checkbox is toggled"
     );
 }

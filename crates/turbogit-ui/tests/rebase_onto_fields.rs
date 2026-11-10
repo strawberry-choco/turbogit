@@ -53,10 +53,11 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 }
 
 fn open_onto(h: &mut Harness<'_, AppState>, root: &Path) {
-    h.state_mut().selected_root = Some(RootId(root.to_path_buf().into()));
+    let root_id = RootId(root.to_path_buf().into());
+    h.state_mut().selected_root = Some(root_id);
     h.state_mut().ui.dlg.rebase_mode = RebaseMode::Standard;
     h.state_mut().ui.dlg.rebase_onto_enabled = true;
-    h.state_mut().ui.dialog = Some(Dialog::Rebase);
+    h.state_mut().open_dialog(Dialog::Rebase, None);
     h.run();
 }
 
