@@ -358,13 +358,13 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
                     .on_hover_text("Shelve selected changes")
                     .clicked()
                 {
-                    state.open_shelve_dialog(state.selected_root.clone());
+                    state.open_shelve_dialog(None);
                 }
                 if widgets::ghost_button(ui, None, "Import Patches\u{2026}")
-                    .on_hover_text("Park a patch file on this repository's shelf")
+                    .on_hover_text("Park a patch file on a selected repository's shelf")
                     .clicked()
                 {
-                    state.ui.dialog = Some(Dialog::ImportPatches);
+                    state.open_dialog(Dialog::ImportPatches, None);
                 }
                 if widgets::ghost_button(ui, None, "Unshelve\u{2026}")
                     .on_hover_text("Unshelve a shelf from this repository")
@@ -379,11 +379,14 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn stash_pane(ui: &mut Ui, state: &mut AppState) {
-    let cold = state
-        .selected_root
-        .clone()
-        .filter(|id| state.caches.stashes(id).is_none());
-    if let Some(id) = cold {
+    let cold: Vec<_> = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .filter(|id| state.caches.stashes(id).is_none())
+        .collect();
+    for id in cold {
         state.fetch_stashes(id);
     }
     column_table::column_table_pane(
@@ -401,7 +404,7 @@ fn stash_pane(ui: &mut Ui, state: &mut AppState) {
                     .on_hover_text("Stash all changes")
                     .clicked()
                 {
-                    state.ui.dialog = Some(Dialog::Stash);
+                    state.open_dialog(Dialog::Stash, None);
                 }
             },
             row: &mut stash_row,

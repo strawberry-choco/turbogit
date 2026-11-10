@@ -480,7 +480,7 @@ fn acceptance_matrix_screenshots() {
 
     let crepo = conflicted_repo();
     let mut state = AppState::for_roots(crepo.parent().unwrap(), std::slice::from_ref(&crepo));
-    state.ui.conflict_open = Some(PathBuf::from("conf.txt"));
+    state.ui.conflict_open = Some((RootId(crepo.clone().into()), PathBuf::from("conf.txt")));
     let mut h = harness(state);
     settle(&mut h);
     snapshot(&mut h, "07-merge-editor");

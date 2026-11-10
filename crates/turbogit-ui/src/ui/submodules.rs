@@ -54,13 +54,14 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(format!("Deinit {name}")).clicked() {
                 state.ui.confirm = Some(PendingConfirm::DeinitSubmodule {
+                    root: sub.root.clone(),
                     path: sub.path.clone(),
                 });
             }
             let verb = action_verb(sub.state);
             if ui.button(format!("{verb} {name}")).clicked() {
                 let init = sub.state == SubmoduleState::Uninitialized;
-                state.update_submodule(sub.path.clone(), init);
+                state.update_submodule(sub.root.clone(), sub.path.clone(), init);
             }
         });
     });

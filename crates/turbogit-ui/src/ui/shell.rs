@@ -316,17 +316,29 @@ struct Shortcut {
     find: bool,
 }
 fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {
-    let id = state.selected_root.as_ref()?;
-    let n = match tab {
-        Tab::Worktrees => state.caches.worktrees(id)?.len(),
-        Tab::Submodules => state.caches.submodules(id)?.len(),
+    let n: usize = match tab {
+        Tab::Worktrees => state
+            .multi
+            .roots
+            .iter()
+            .filter_map(|root| state.caches.worktrees(&root.id))
+            .map(<[_]>::len)
+            .sum(),
+        Tab::Submodules => state
+            .multi
+            .roots
+            .iter()
+            .filter_map(|root| state.caches.submodules(&root.id))
+            .map(<[_]>::len)
+            .sum(),
         _ => return None,
     };
     (n > 0).then_some(n)
 }
 
 fn ensure_worktree_data(state: &mut AppState) {
-    if let Some(id) = state.selected_root.clone() {
+    let ids: Vec<_> = state.multi.roots.iter().map(|root| root.id.clone()).collect();
+    for id in ids {
         if state.caches.worktrees(&id).is_none() {
             state.fetch_worktrees(id.clone());
         }

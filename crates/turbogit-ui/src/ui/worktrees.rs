@@ -31,7 +31,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 if widgets::compact_primary_button(ui, "Add worktree").clicked() {
                     state.ui.dlg.wt_path.clear();
                     state.ui.dlg.wt_branch.clear();
-                    state.ui.dialog = Some(Dialog::NewWorktree);
+                    state.open_dialog(Dialog::NewWorktree, None);
                 }
             },
             row: &mut worktree_row,
@@ -57,6 +57,7 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
             let remove = components::kit_button(ui, KitButton::Quiet, &format!("Remove {name}"));
             if remove.clicked() {
                 state.ui.confirm = Some(PendingConfirm::RemoveWorktree {
+                    root: wt.root.clone(),
                     path: wt.path.clone(),
                 });
             }
@@ -74,7 +75,11 @@ fn probe_state(dirty: Option<bool>) -> (&'static str, Color32) {
 }
 
 pub fn new_worktree_dialog(ui: &mut Ui, state: &mut AppState) {
-    ui.label("Path (relative to the focused repo):");
+    let root = state.ui.dlg.repo_scope.first().cloned();
+    ui.label(match &root {
+        Some(root) => format!("Create in {} · path relative to that repository:", root.name()),
+        None => "Select a repository above first.".to_string(),
+    });
     let path_edit = ui.text_edit_singleline(&mut state.ui.dlg.wt_path);
     path_edit.widget_info(|| {
         WidgetInfo::labeled(
@@ -97,12 +102,11 @@ pub fn new_worktree_dialog(ui: &mut Ui, state: &mut AppState) {
             let raw = state.ui.dlg.wt_path.trim().to_string();
             let branch = state.ui.dlg.wt_branch.trim().to_string();
             if !raw.is_empty() && !branch.is_empty() {
-                let path = if let Some(root) = state.selected_path() {
-                    resolve_wt_path(&root, &raw)
-                } else {
-                    raw.into()
+                let Some(root) = root.clone() else {
+                    return;
                 };
-                state.add_worktree(path, branch);
+                let path = resolve_wt_path(root.as_path(), &raw);
+                state.add_worktree(root, path, branch);
                 state.ui.dialog = None;
             }
         }

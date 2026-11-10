@@ -538,10 +538,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                         state.ui.dlg.remotes_row_action = None;
                         state.ui.dlg.remotes_apply_results = None;
                         state.ui.dlg.remotes_apply_scope.clear();
-                        if let Some(rid) = state.selected_root.clone() {
-                            state.ui.dlg.remotes_apply_scope.insert(rid);
-                        }
-                        state.ui.dialog = Some(Dialog::ManageRemotes);
+                        state.open_dialog(Dialog::ManageRemotes, None);
                         state.ui.branches_popup = false;
                     }
                 });

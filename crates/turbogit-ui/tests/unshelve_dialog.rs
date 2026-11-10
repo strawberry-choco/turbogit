@@ -69,7 +69,7 @@ fn shelve_one_change(repo: &Path, name: &str) {
     let mut state = app_state(&[repo.to_path_buf()]);
     select_in_commit_list(&mut state, "base.txt");
     state.ui.dlg.shelve_name = name.to_string();
-    state.open_shelve_dialog(state.selected_root.clone());
+    state.open_shelve_dialog(state.multi.roots.first().map(|r| r.id.clone()));
     let mut h = harness(state);
     h.get_by_label("Shelve selected").click();
     h.run();
@@ -115,12 +115,11 @@ fn open_dialog(h: &mut Harness<'static, AppState>) {
 }
 
 #[test]
-fn the_name_field_lists_this_roots_shelves_and_not_another_roots() {
+fn the_name_field_lists_every_roots_shelves() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = temp_repo(parent.path(), "alpha");
     let beta = temp_repo(parent.path(), "beta");
     let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    state.selected_root = state.multi.roots.first().map(|r| r.id.clone());
     state.ui.shelves.push(shelf_record("weather", &alpha));
     state.ui.shelves.push(shelf_record("tides", &beta));
     let mut h = harness(state);
@@ -129,11 +128,15 @@ fn the_name_field_lists_this_roots_shelves_and_not_another_roots() {
 
     assert!(
         painted_in_dialog(&h, "weather"),
-        "the focused root's shelf is a selectable row in the dialog"
+        "one root's shelf is a selectable row in the dialog"
     );
     assert!(
-        !painted_in_dialog(&h, "tides"),
-        "a shelf is per root: another root's row cannot be an unshelve destination here"
+        painted_in_dialog(&h, "tides"),
+        "and another root's shelf is a destination too"
+    );
+    assert!(
+        painted_in_dialog(&h, "ALPHA") && painted_in_dialog(&h, "BETA"),
+        "each repository groups its own shelves"
     );
 }
 
@@ -270,7 +273,7 @@ fn ticking_the_option_and_confirming_destroys_the_shelf_and_gits_copy() {
 }
 
 #[test]
-fn the_dialog_applies_to_the_root_it_opened_on_not_the_one_focused_now() {
+fn the_dialog_applies_a_shelf_to_the_root_that_owns_it() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = temp_repo(parent.path(), "alpha");
     let beta = temp_repo(parent.path(), "beta");
@@ -278,30 +281,22 @@ fn the_dialog_applies_to_the_root_it_opened_on_not_the_one_focused_now() {
     std::fs::write(beta.join("base.txt"), "beta work\n").unwrap();
     git(&beta, &["stash", "push", "-q", "-m", "beta-only"]);
     let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    state.selected_root = Some(RootId(alpha.clone().into()));
     let beta_shelf = shelf_record("tides", &beta);
     state.ui.shelves.push(beta_shelf);
     let mut h = harness(state);
     open_dialog(&mut h);
 
-    h.state_mut().selected_root = Some(RootId(beta.clone().into()));
-    h.run();
-
-    assert!(
-        painted_in_dialog(&h, "weather"),
-        "the dialog keeps listing the shelves of the root it opened on"
-    );
     h.get_by_label("Unshelve").click();
     h.run();
     h.run();
 
     assert!(
         git(&alpha, &["status", "--porcelain"]).contains("base.txt"),
-        "and the work landed in that repository"
+        "the picked shelf's own repository receives the work"
     );
     assert!(
         git(&beta, &["status", "--porcelain"]).is_empty(),
-        "the newly focused tree is untouched"
+        "the other repository is untouched"
     );
     assert_eq!(
         stash_lines(&beta).len(),
@@ -391,7 +386,7 @@ fn a_root_with_nothing_shelved_says_so_and_offers_no_verb() {
     open_dialog(&mut h);
 
     assert!(
-        painted_in_dialog(&h, "Nothing is shelved in this repository"),
+        painted_in_dialog(&h, "Nothing is shelved in the selected repositories"),
         "the empty state names the mechanism and the way out of it"
     );
     assert!(
@@ -432,9 +427,9 @@ fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
         "and arms the same captured default: off"
     );
     assert_eq!(
-        h.state().ui.dlg.unshelve_root,
-        h.state().selected_root,
-        "on the root that was focused when it opened"
+        h.state().ui.dlg.repo_scope.len(),
+        1,
+        "the dialog scopes the one registered repository"
     );
 
     let palette: Vec<&str> = Action::palette_actions()

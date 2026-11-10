@@ -216,6 +216,79 @@ fn pane_header_band(h: &Harness<'_, AppState>, title: &str) -> HeaderBand {
     HeaderBand { title, rule }
 }
 
+#[test]
+fn the_worktree_and_submodule_panes_group_every_root() {
+    let parent = scratch("pane-roots");
+    let alpha = temp_repo(&parent, "alpha");
+    let beta = temp_repo(&parent, "beta");
+
+    let mut worktrees = AppState::for_roots(&parent, &[alpha.clone(), beta.clone()]);
+    let ids: Vec<RootId> = worktrees
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    worktrees.caches.store_worktrees(
+        ids[0].clone(),
+        vec![worktree(
+            &ids[0],
+            parent.join("wt-alpha"),
+            "feature-a",
+            Some(false),
+        )],
+    );
+    worktrees.caches.store_worktrees(
+        ids[1].clone(),
+        vec![worktree(
+            &ids[1],
+            parent.join("wt-beta"),
+            "feature-b",
+            Some(false),
+        )],
+    );
+    worktrees.ui.tab = Tab::Worktrees;
+    let mut h = harness(worktrees);
+    settle(&mut h);
+    for label in ["ALPHA", "BETA", "feature-a", "feature-b"] {
+        assert_painted(&h, label);
+    }
+
+    let mut submodules = AppState::for_roots(&parent, &[alpha, beta]);
+    let ids: Vec<RootId> = submodules
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    submodules.caches.store_submodules(
+        ids[0].clone(),
+        vec![submodule(
+            &ids[0],
+            "sub-a",
+            Some("aaaaaaa"),
+            Some("aaaaaaa"),
+            SubmoduleState::UpToDate,
+        )],
+    );
+    submodules.caches.store_submodules(
+        ids[1].clone(),
+        vec![submodule(
+            &ids[1],
+            "sub-b",
+            Some("bbbbbbb"),
+            Some("bbbbbbb"),
+            SubmoduleState::UpToDate,
+        )],
+    );
+    submodules.ui.tab = Tab::Submodules;
+    let mut h = harness(submodules);
+    settle(&mut h);
+    for label in ["ALPHA", "BETA", "sub-a", "sub-b"] {
+        assert_painted(&h, label);
+    }
+}
+
 fn worktrees_header_harness() -> Harness<'static, AppState> {
     worktrees_pane_harness(
         "wt17-header",

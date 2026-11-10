@@ -246,7 +246,7 @@ pub struct DialogState {
     pub remotes_add_name: String,
     pub remotes_add_fetch: String,
     pub remotes_add_push: String,
-    pub remotes_row_action: Option<(String, RemoteRowAction)>,
+    pub remotes_row_action: Option<(RootId, String, RemoteRowAction)>,
     pub remotes_rename_new: String,
     pub remotes_edit_fetch: String,
     pub remotes_edit_push: String,
@@ -463,9 +463,11 @@ pub enum PendingConfirm {
     InitHere,
     CloneRepo,
     RemoveWorktree {
+        root: RootId,
         path: PathBuf,
     },
     DeinitSubmodule {
+        root: RootId,
         path: PathBuf,
     },
     RevertCommit {
@@ -824,11 +826,16 @@ pub struct UiState {
     pub git_env_check: Option<(String, Result<String, String>)>,
     pub settings_new_pattern: String,
     pub settings_draft: Option<VcsSettings>,
-    pub conflict_open: Option<PathBuf>,
+    /// The conflicted file the merge editor is open for, and the repository it
+    /// belongs to. Apply reads this pair, never a workspace-wide focus.
+    pub conflict_open: Option<(RootId, PathBuf)>,
     pub conflict_segs: Vec<(String, String, bool)>,
     pub conflict_res: Vec<Option<u8>>,
     pub conflict_text: String,
     pub conflict_resolver_open: bool,
+    /// The repository the resolver's selected file belongs to. Apply, Abort and
+    /// Continue read this, never a workspace-wide focus.
+    pub conflict_resolver_root: Option<RootId>,
     pub merge_in_progress: bool,
     pub conflict_resolver_active_idx: usize,
     pub conflict_resolver_auto_advance: bool,
@@ -1276,19 +1283,20 @@ impl AppState {
     }
 
     pub fn ensure_worktree_probes(&mut self) {
-        let Some(id) = self.selected_root.clone() else {
-            return;
-        };
-        let candidates: Vec<PathBuf> = self
-            .caches
-            .worktrees(&id)
-            .unwrap_or(&[])
-            .iter()
-            .filter(|w| w.dirty.is_none())
-            .map(|w| w.path.clone())
-            .collect();
-        self.worktree
-            .ensure_probes(id, candidates, self.executor.clone(), self.tx.clone());
+        for id in self.multi.roots.iter().map(|root| root.id.clone()) {
+            let candidates: Vec<PathBuf> = self
+                .caches
+                .worktrees(&id)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|w| w.dirty.is_none())
+                .map(|w| w.path.clone())
+                .collect();
+            if !candidates.is_empty() {
+                self.worktree
+                    .ensure_probes(id, candidates, self.executor.clone(), self.tx.clone());
+            }
+        }
     }
 
     pub fn fetch_submodules(&mut self, root: RootId) {
@@ -1929,13 +1937,10 @@ impl AppState {
     }
 
     pub fn open_unshelve_dialog(&mut self) {
-        let root = self.selected_root.clone();
-        let shelf = root
-            .as_ref()
-            .and_then(|id| self.shelves_for(id).first().map(|s| s.name.clone()));
+        self.seed_dialog_scope(None);
         let dlg = &mut self.ui.dlg;
-        dlg.unshelve_root = root;
-        dlg.unshelve_shelf = shelf;
+        dlg.unshelve_root = None;
+        dlg.unshelve_shelf = None;
         dlg.unshelve_remove = false;
         self.ui.dialog = Some(Dialog::Unshelve);
     }
@@ -2572,16 +2577,11 @@ impl AppState {
         self.ui.cherry_run = None;
     }
 
-    pub fn add_worktree(&mut self, path: PathBuf, branch: String) {
-        if let Some(root) = self.selected_root.clone() {
-            self.dispatch(Operation::WorktreeAdd { root, path, branch });
-        }
+    pub fn add_worktree(&mut self, root: RootId, path: PathBuf, branch: String) {
+        self.dispatch(Operation::WorktreeAdd { root, path, branch });
     }
 
-    pub fn update_submodule(&mut self, path: PathBuf, init: bool) {
-        let Some(root) = self.selected_root.clone() else {
-            return;
-        };
+    pub fn update_submodule(&mut self, root: RootId, path: PathBuf, init: bool) {
         let label = if init {
             "Update submodule (init)".to_string()
         } else {

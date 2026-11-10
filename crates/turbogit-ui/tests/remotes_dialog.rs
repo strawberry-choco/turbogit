@@ -387,51 +387,37 @@ fn set_upstream_per_branch_dispatches_through_the_engine_seam() {
 }
 
 #[test]
-fn apply_add_across_selection_reports_per_repo_outcomes() {
+fn add_remote_runs_in_every_repository_in_scope() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let alpha = fresh_repo(tmp.path(), "alpha");
     let beta = fresh_repo(tmp.path(), "beta");
     let (state, exec) = app_state_recording(tmp.path(), &[alpha.clone(), beta.clone()]);
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(alpha.clone().into()));
     open_manager(&mut h);
 
     type_into_field(&mut h, "Remote name", "origin");
     type_into_field(&mut h, "Remote fetch URL", "https://fetch.git/repo.git");
-    click_button(&mut h, "beta");
-    click_button(&mut h, "Apply add");
+    click_button(&mut h, "Add remote");
 
     let dispatched = wait_until(5_000, || {
-        exec.recorded().iter().any(|c| {
-            matches!(
-                c,
-                RecordedCall::AddRemote { name, .. } if name == "origin"
-            )
-        })
+        exec.recorded()
+            .iter()
+            .filter(|c| matches!(c, RecordedCall::AddRemote { name, .. } if name == "origin"))
+            .count()
+            >= 2
     });
-    assert!(dispatched, "expected AddRemote, got {:?}", exec.recorded());
+    assert!(dispatched, "expected two AddRemote calls, got {:?}", exec.recorded());
 
-    pump_until(&mut h, "apply outcomes", |s| {
+    pump_until(&mut h, "both repos gain the remote", |s| {
         s.multi
             .roots
             .iter()
             .all(|r| r.remotes.iter().any(|r| r.name == "origin"))
     });
-    assert!(h.query_all_by_label("✓ alpha").next().is_some());
-    assert!(h.query_all_by_label("✓ beta").next().is_some());
-    assert!(
-        h.state()
-            .ui
-            .toast
-            .as_ref()
-            .map(|t| t.message.contains("2 of 2 ok"))
-            .unwrap_or(false),
-        "toast aggregates the per-repo outcomes"
-    );
 }
 
 #[test]
-fn apply_add_reports_a_failing_repo_without_blocking_the_others() {
+fn a_failing_repository_does_not_block_the_other_repositories_add() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let alpha = fresh_repo(tmp.path(), "alpha");
     let beta = fresh_repo(tmp.path(), "beta");
@@ -441,30 +427,20 @@ fn apply_add_reports_a_failing_repo_without_blocking_the_others() {
     );
     let (state, _exec) = app_state_recording(tmp.path(), &[alpha.clone(), beta.clone()]);
     let mut h = harness(state);
-    h.state_mut().selected_root = Some(RootId(alpha.clone().into()));
     open_manager(&mut h);
 
     type_into_field(&mut h, "Remote name", "origin");
     type_into_field(&mut h, "Remote fetch URL", "https://new.git/repo.git");
-    click_button(&mut h, "beta");
-    click_button(&mut h, "Apply add");
+    click_button(&mut h, "Add remote");
 
-    pump_until(&mut h, "mixed apply outcomes", |s| {
-        s.ui.toast
-            .as_ref()
-            .map(|t| t.message.contains("failed: alpha"))
-            .unwrap_or(false)
-    });
-    assert!(
-        h.state()
-            .multi
+    pump_until(&mut h, "beta gains the remote", |s| {
+        s.multi
             .by_id(&RootId(beta.clone().into()))
-            .map(|r| r.remotes.iter().any(|r| r.name == "origin"))
-            .unwrap_or(false)
-    );
-    assert!(h.query_all_by_label("✓ beta").next().is_some());
-    assert!(
-        h.query_all_by_label("✗ alpha").next().is_some(),
-        "the failing repo's outcome row renders"
+            .is_some_and(|r| r.remotes.iter().any(|r| r.name == "origin"))
+    });
+    assert_eq!(
+        git(&alpha, &["config", "--get", "remote.origin.url"]).trim(),
+        "https://old.git/repo.git",
+        "the failing repository keeps its existing remote"
     );
 }

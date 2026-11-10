@@ -161,6 +161,7 @@ pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
     let Some(res) = seed_conflict_state(state, root, path) else {
         return;
     };
+    state.ui.conflict_resolver_root = Some(RootId(root.to_path_buf().into()));
     state.ui.conflict_resolver_undo = res.iter().map(|_| None).collect();
     state.ui.conflict_text = compose(&state.ui.conflict_segs, &res);
     state.ui.conflict_resolver_edited = false;
@@ -172,31 +173,37 @@ pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
 }
 
 pub fn render(ui: &mut Ui, state: &mut AppState) {
-    let id = match &state.selected_root {
-        Some(id) => id.clone(),
-        None => return,
-    };
-    let conflicted: Vec<(PathBuf, Option<ConflictKind>)> = state
+    let conflicted: Vec<(RootId, PathBuf, Option<ConflictKind>)> = state
         .multi
-        .by_id(&id)
-        .map(|r| {
-            r.status
-                .conflicted
-                .iter()
-                .map(|p| (p.clone(), r.status.conflict_kind(p)))
-                .collect()
+        .roots
+        .iter()
+        .flat_map(|root| {
+            root.status.conflicted.iter().map(|path| {
+                (
+                    root.id.clone(),
+                    path.clone(),
+                    root.status.conflict_kind(path),
+                )
+            })
         })
-        .unwrap_or_default();
+        .collect();
     if conflicted.is_empty() && !state.ui.conflict_resolver_open {
         return;
     }
-    let root = state.selected_path();
+    if state.ui.conflict_resolver_root.is_none() {
+        state.ui.conflict_resolver_root = conflicted.first().map(|(root, _, _)| root.clone());
+    }
+    let root = state
+        .ui
+        .conflict_resolver_root
+        .clone()
+        .map(|root| root.as_path().to_path_buf());
     if let Some(r) = &root {
         if matches!(state.holding_operation(r), Some(OwnedOperation::Merge)) {
             state.ui.merge_in_progress = true;
             let root_id = RootId(r.clone().into());
             let conflicted_paths: Vec<PathBuf> =
-                conflicted.iter().map(|(p, _)| p.clone()).collect();
+                conflicted.iter().map(|(_, p, _)| p.clone()).collect();
             if let Some(list) = state.auto_merged_files(&root_id, &conflicted_paths) {
                 state.ui.auto_merged_files = list;
             }
@@ -275,7 +282,7 @@ fn kind_word(kind: ConflictKind) -> &'static str {
 fn render_file_list(
     ui: &mut Ui,
     state: &mut AppState,
-    conflicted: &[(PathBuf, Option<ConflictKind>)],
+    conflicted: &[(RootId, PathBuf, Option<ConflictKind>)],
 ) {
     ui.label(
         RichText::new("CONFLICTED FILES")
@@ -283,19 +290,22 @@ fn render_file_list(
             .color(Palette::INK_2),
     );
     ui.label(RichText::new(format!("{} / {} resolved", 0, conflicted.len())).color(Palette::INK_2));
-    for (path, kind) in conflicted {
+    let mut current_root: Option<&RootId> = None;
+    for (root, path, kind) in conflicted {
+        if current_root != Some(root) {
+            crate::ui::widgets::group_title(ui, &root.name());
+            current_root = Some(root);
+        }
         let label = path.display().to_string();
-        let is_selected = state.ui.conflict_resolver_selected.as_ref() == Some(path);
+        let is_selected = state.ui.conflict_resolver_root.as_ref() == Some(root)
+            && state.ui.conflict_resolver_selected.as_ref() == Some(path);
         let row = match kind {
             Some(kind) => format!("{label} — {}", kind_word(*kind)),
             None => label,
         };
         let resp = ui.selectable_label(is_selected, row);
-        if resp.clicked()
-            && let Some(root) = state.selected_path()
-        {
-            let path = path.clone();
-            open_resolver(state, &root, &path);
+        if resp.clicked() {
+            open_resolver(state, root.as_path(), path);
         }
     }
 
@@ -371,7 +381,7 @@ fn render_bulk_control(ui: &mut Ui, state: &mut AppState) {
 fn render_resolver_body(
     ui: &mut Ui,
     state: &mut AppState,
-    conflicted: &[(PathBuf, Option<ConflictKind>)],
+    conflicted: &[(RootId, PathBuf, Option<ConflictKind>)],
 ) {
     let path_disp = state
         .ui
@@ -542,7 +552,7 @@ fn apply_to_all_remaining(state: &mut AppState) {
 
 fn apply_resolution(state: &mut AppState) {
     let content = state.ui.conflict_text.clone();
-    let r = state.selected_root.clone();
+    let r = state.ui.conflict_resolver_root.clone();
     let p = state.ui.conflict_resolver_selected.clone();
     if let (Some(r), Some(p)) = (r, p) {
         state.dispatch(writes::apply_merge_resolution(&r, &p, &content));
@@ -563,7 +573,8 @@ fn apply_resolution(state: &mut AppState) {
 /// anymore, which is what the header says and what the operation then reports.
 fn held_operation(state: &turbogit_app::state::AppState) -> OwnedOperation {
     state
-        .selected_root
+        .ui
+        .conflict_resolver_root
         .as_ref()
         .and_then(|root| state.holding_operation(root.as_path()))
         .unwrap_or(OwnedOperation::Merge)
@@ -571,7 +582,7 @@ fn held_operation(state: &turbogit_app::state::AppState) -> OwnedOperation {
 
 fn abort_merge(state: &mut AppState) {
     let owner = held_operation(state);
-    if let Some(r) = state.selected_root.clone() {
+    if let Some(r) = state.ui.conflict_resolver_root.clone() {
         state.dispatch(Operation::Resolve {
             root: r,
             owner,
@@ -583,7 +594,7 @@ fn abort_merge(state: &mut AppState) {
 
 fn continue_merge(state: &mut AppState) {
     let owner = held_operation(state);
-    if let Some(r) = state.selected_root.clone() {
+    if let Some(r) = state.ui.conflict_resolver_root.clone() {
         state.dispatch(Operation::Resolve {
             root: r,
             owner,

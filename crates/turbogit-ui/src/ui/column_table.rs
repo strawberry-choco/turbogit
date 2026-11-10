@@ -16,28 +16,31 @@ pub(crate) struct PaneTable<'a, T> {
     pub row: &'a mut dyn FnMut(&mut Ui, &mut AppState, &T),
 }
 
+/// One table, one group per registered root.
+///
+/// The group header names the repository, and loading and empty states are
+/// answered per root rather than once for the pane: a repository whose read has
+/// not settled must not borrow another repository's answer.
 pub(crate) fn column_table_pane<T: Clone>(
     ui: &mut Ui,
     state: &mut AppState,
     spec: PaneTable<'_, T>,
 ) {
-    let root = state.selected_root.clone();
-    let loaded: Option<Vec<T>> = root.as_ref().and_then(|id| (spec.cached)(state, id));
-    let count = loaded.as_ref().map(|rows| rows.len().to_string());
+    let roots: Vec<RootId> = state.multi.roots.iter().map(|root| root.id.clone()).collect();
+    let loaded: Vec<Option<Vec<T>>> = roots
+        .iter()
+        .map(|id| (spec.cached)(state, id))
+        .collect();
+    let total: usize = loaded.iter().flatten().map(Vec::len).sum();
+    let count = loaded
+        .iter()
+        .all(Option::is_some)
+        .then(|| total.to_string());
 
     widgets::pane_header(ui, spec.title, count.as_deref(), |ui| {
         (spec.actions)(ui, state)
     });
     ui.add_space(4.0);
-
-    let Some(id) = root else {
-        return;
-    };
-    let rows = loaded.unwrap_or_default();
-    let answered = (spec.cached)(state, &id).is_some();
-    if !answered {
-        widgets::empty_state(ui, spec.loading);
-    }
 
     widgets::column_header(ui, ui.available_rect_before_wrap(), spec.columns);
     ui.add_space(4.0);
@@ -51,11 +54,18 @@ pub(crate) fn column_table_pane<T: Clone>(
     ScrollArea::vertical()
         .id_salt(format!("pane_table_{}", spec.title.to_lowercase()))
         .show(ui, |ui| {
-            if rows.is_empty() && answered {
-                widgets::empty_state(ui, spec.empty);
-            }
-            for row in &rows {
-                (spec.row)(ui, state, row);
+            for (root, rows) in roots.iter().zip(loaded) {
+                widgets::group_title(ui, &root.name());
+                match rows {
+                    None => widgets::empty_state(ui, spec.loading),
+                    Some(rows) if rows.is_empty() => widgets::empty_state(ui, spec.empty),
+                    Some(rows) => {
+                        for row in &rows {
+                            (spec.row)(ui, state, row);
+                        }
+                    }
+                }
+                ui.add_space(6.0);
             }
         });
 }

@@ -137,14 +137,14 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
             disclosure: None,
             buttons: vec![Button::ok()],
         },
-        PendingConfirm::RemoveWorktree { path } => Prompt::question(
+        PendingConfirm::RemoveWorktree { path, .. } => Prompt::question(
             format!(
                 "Remove worktree '{}'? This cannot be undone.",
                 path.display_name_or("<worktree>")
             ),
             vec![Button::ok(), Button::cancel()],
         ),
-        PendingConfirm::DeinitSubmodule { path } => Prompt::question(
+        PendingConfirm::DeinitSubmodule { path, .. } => Prompt::question(
             format!(
                 "De-init submodule '{}'? Its working copy is removed.",
                 path.display_name_or("<submodule>")
@@ -325,15 +325,10 @@ pub fn run(state: &mut AppState, c: PendingConfirm) {
         PendingConfirm::CheckoutInWorktree { .. } => {}
         PendingConfirm::InitHere => state.init_repo(),
         PendingConfirm::CloneRepo => state.clone_repo(),
-        PendingConfirm::RemoveWorktree { path } => {
-            if let Some(root) = state.selected_root.clone() {
-                state.dispatch(Operation::WorktreeRemove { root, path });
-            }
+        PendingConfirm::RemoveWorktree { root, path } => {
+            state.dispatch(Operation::WorktreeRemove { root, path });
         }
-        PendingConfirm::DeinitSubmodule { path } => {
-            let Some(root) = state.selected_root.clone() else {
-                return;
-            };
+        PendingConfirm::DeinitSubmodule { root, path } => {
             state.dispatch(Operation::custom(
                 "Deinit submodule",
                 Affected::Root(root.clone()),

@@ -72,7 +72,7 @@ pub(crate) fn open_conflict_editor(state: &mut AppState, root: &Path, path: &Pat
         return;
     };
     state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
-    state.ui.conflict_open = Some(path.to_path_buf());
+    state.ui.conflict_open = Some((RootId(root.to_path_buf().into()), path.to_path_buf()));
 }
 
 pub(crate) fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
@@ -117,58 +117,52 @@ fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
 }
 
 pub fn render(ui: &mut Ui, state: &mut AppState) {
-    let id = match &state.selected_root {
-        Some(id) => id.clone(),
-        None => return,
-    };
-    let conflicted = state
+    let conflicted: Vec<(RootId, Vec<std::path::PathBuf>)> = state
         .multi
-        .by_id(&id)
-        .map(|r| r.status.conflicted.clone())
-        .unwrap_or_default();
+        .roots
+        .iter()
+        .filter(|root| !root.status.conflicted.is_empty())
+        .map(|root| (root.id.clone(), root.status.conflicted.clone()))
+        .collect();
     if conflicted.is_empty() {
         return;
     }
 
     ui.separator();
     ui.heading("Conflict resolution");
-    let root = state.selected_root.clone();
-    for path in &conflicted {
-        ui.horizontal(|ui| {
-            ui.label(path.display().to_string());
-            if ui.button("Ours").clicked()
-                && let Some(r) = &root
-            {
-                state.dispatch(writes::accept_ours(r, path));
-            }
-            if ui.button("Theirs").clicked()
-                && let Some(r) = &root
-            {
-                state.dispatch(writes::accept_theirs(r, path));
-            }
-            if ui.button("Merge…").clicked()
-                && let Some(r) = &root
-            {
-                crate::ui::conflicts::open_conflict_editor(state, r.as_path(), path);
-            }
-            if ui.button("Resolve…").clicked() {
-                // Open the redesigned Resolve Conflicts tool window (issue
-                // #22, screen 07): three EQUAL panes with editable Result,
-                // per-conflict undo / take-both / prev-next, auto-merged
-                // file list, and Abort/Continue merge header actions.
-                if let Some(r) = &root {
-                    crate::ui::conflict_resolver::open_resolver(state, r.as_path(), path);
+    for (root, paths) in &conflicted {
+        crate::ui::widgets::group_title(ui, &root.name());
+        for path in paths {
+            ui.horizontal(|ui| {
+                ui.label(path.display().to_string());
+                if ui.button("Ours").clicked() {
+                    state.dispatch(writes::accept_ours(root, path));
                 }
-            }
-        });
+                if ui.button("Theirs").clicked() {
+                    state.dispatch(writes::accept_theirs(root, path));
+                }
+                if ui.button("Merge…").clicked() {
+                    crate::ui::conflicts::open_conflict_editor(state, root.as_path(), path);
+                }
+                if ui.button("Resolve…").clicked() {
+                    // Open the redesigned Resolve Conflicts tool window (issue
+                    // #22, screen 07): three EQUAL panes with editable Result,
+                    // per-conflict undo / take-both / prev-next, auto-merged
+                    // file list, and Abort/Continue merge header actions.
+                    crate::ui::conflict_resolver::open_resolver(state, root.as_path(), path);
+                }
+            });
+        }
+        let status = state.multi.by_id(root).map(|r| r.status.clone());
+        if ui
+            .button(format!("Resolve all simple · {}", root.name()))
+            .clicked()
+            && let Some(status) = status
+        {
+            state.dispatch(writes::resolve_simple(root, &status));
+        }
     }
-    let st = state.multi.by_id(&id).map(|r| r.status.clone());
-    if ui.button("Resolve all simple").clicked()
-        && let (Some(r), Some(status)) = (root.clone(), st.clone())
-    {
-        state.dispatch(writes::resolve_simple(&r, &status));
-    }
-    if let Some(path) = state.ui.conflict_open.clone() {
+    if let Some((root, path)) = state.ui.conflict_open.clone() {
         let ctx = ui.ctx().clone();
         let path_disp = path.display().to_string();
         let mut open = true;
@@ -275,13 +269,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             .clicked()
                         {
                             let content = compose(&segs, &state.ui.conflict_res);
-                            if let Some(r) = &state.selected_root {
-                                state.dispatch(writes::apply_merge_resolution(
-                                    r,
-                                    path.as_path(),
-                                    &content,
-                                ));
-                            }
+                            state.dispatch(writes::apply_merge_resolution(
+                                &root,
+                                path.as_path(),
+                                &content,
+                            ));
                             state.ui.conflict_open = None;
                         }
                         if ui.button("Cancel").clicked() {

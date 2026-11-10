@@ -92,12 +92,11 @@ fn accept_confirm(h: &mut Harness<'static, AppState>) {
 }
 
 #[test]
-fn shelf_pane_lists_this_roots_shelves_and_not_another_roots() {
+fn shelf_pane_lists_every_roots_shelves_grouped_by_repository() {
     let parent = tempfile::tempdir().unwrap();
     let alpha = temp_repo(parent.path(), "alpha");
     let beta = temp_repo(parent.path(), "beta");
     let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    state.selected_root = state.multi.roots.first().map(|r| r.id.clone());
     state.ui.shelves.push(shelf_record("weather", &alpha));
     state.ui.shelves.push(shelf_record("tides", &beta));
     let mut h = harness(state);
@@ -107,12 +106,14 @@ fn shelf_pane_lists_this_roots_shelves_and_not_another_roots() {
     assert_not_painted(&h, "arrives in a later phase");
     assert!(
         painted_in_pane(&h, "weather", "SHELVES"),
-        "the focused root's shelf paints in its own pane"
+        "one root's shelf paints under its group"
     );
     assert!(
-        !painted_in_pane(&h, "tides", "SHELVES"),
-        "a shelf is not global: another root's row must not list here"
+        painted_in_pane(&h, "tides", "SHELVES"),
+        "and another root's shelf paints too: the pane reads every repository"
     );
+    assert!(painted_in_pane(&h, "ALPHA", "SHELVES"));
+    assert!(painted_in_pane(&h, "BETA", "SHELVES"));
 }
 
 #[test]
