@@ -1,4 +1,4 @@
-use egui::{Pos2, Ui};
+use egui::Ui;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
@@ -530,6 +530,10 @@ fn workspace_row_item(ui: &mut Ui, row: &WorkspaceRow) -> Option<WorkspaceMenuAc
     None
 }
 
+pub(crate) fn workspace_picker_menu() -> widgets::MenuId<'static> {
+    widgets::MenuId::new("workspace_picker", "")
+}
+
 pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
     if state.show_welcome() {
         state.ui.workspace_picker_open = false;
@@ -537,12 +541,7 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.workspace_picker_open {
         return;
     }
-    // The palette route has no trigger rect to hang under, so it aims at the
-    // corner of the shell the project button occupies.
-    let anchor = Pos2::new(160.0, 4.0);
-    let menu = widgets::MenuId::new("workspace_picker", "");
-    widgets::menu_host::note_anchor(ui, menu, anchor);
-
+    let menu = workspace_picker_menu();
     let rows = workspace_rows(state);
     let mut dismiss = false;
     let picked =

@@ -113,3 +113,25 @@ so the button records `workspace_picker_open` and the window paints later in
 the same frame, which keeps the palette's keyboard route. D2 and D4–D6 are
 unchanged; D3's anchor is now the tab strip corner the project button occupies,
 still recorded as a position rather than taken from a response.
+
+## Amendment, the anchor comes from the trigger's rect
+
+**Amended (2026-11-11): the fixed tab-strip corner painted the picker over the
+tabs.** The 2026-11-10 amendment moved the project button to the right end of
+the tab strip but left `Pos2::new(160.0, 4.0)` in `workspace_picker`. In a
+1280 px wide harness, the trigger measured `[[1083.9 8.0] - [1192.0 40.0]]`
+and the picker's "CURRENT" caption painted at `[[167.0 11.0] - [214.7 24.0]]`.
+The button route and the palette route both used that one coordinate.
+
+`shell::render` now calls `menu_host::note_anchor_with_pivot` with the project
+button's right-bottom corner on every frame. A `RIGHT_TOP` pivot makes the menu
+grow left from that corner, so the menu stays inside the window. `ui::render`
+draws the shell before `workspace_picker`, so the palette route reads the same
+anchor without a second source. `menu_host::host_menu` keeps `LEFT_TOP` for the
+pointer-anchored menus.
+
+D3 no longer describes the code. The sidebar deletion removed
+`UiState::workspace_picker_anchor`, and the position now lives in egui's frame
+memory under the menu id. D1's reason still holds, since the state flag opens
+the picker and a click on one render's response does not own that decision. The
+picker is a hosted `egui::Area`, not the `egui::Window` D1 names.

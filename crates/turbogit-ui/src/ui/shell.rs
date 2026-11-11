@@ -81,6 +81,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             components::counted(state.multi.roots.len(), "repo", "repos")
                         );
                         let switch = widgets::ghost_button(ui, Some(Icon::FOLDER_GIT), &label);
+                        // The command palette opens this picker without clicking
+                        // the button, so the shell notes the rect every frame.
+                        widgets::menu_host::note_anchor_with_pivot(
+                            ui,
+                            super::popups::workspace_picker_menu(),
+                            Pos2::new(
+                                switch.rect.right(),
+                                switch.rect.bottom() + crate::theme::ITEM_SPACING.y,
+                            ),
+                            egui::Align2::RIGHT_TOP,
+                        );
                         switch.widget_info(|| {
                             WidgetInfo::labeled(WidgetType::Button, true, "Switch project")
                         });

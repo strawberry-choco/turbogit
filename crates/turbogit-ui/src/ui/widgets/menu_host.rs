@@ -1,4 +1,4 @@
-use egui::{Pos2, Rect, Ui};
+use egui::{Align2, Pos2, Rect, Ui};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
@@ -19,6 +19,10 @@ impl<'a> MenuId<'a> {
         egui::Id::new(("tg_menu_anchor", self.salt, self.target))
     }
 
+    fn pivot(self) -> egui::Id {
+        egui::Id::new(("tg_menu_pivot", self.salt, self.target))
+    }
+
     fn painted_last_frame(self) -> egui::Id {
         egui::Id::new(("tg_menu_painted_last_frame", self.salt, self.target))
     }
@@ -33,8 +37,16 @@ pub fn target_of(root: &RootId, name: &str) -> String {
 }
 
 pub fn note_anchor(ui: &Ui, id: MenuId<'_>, pos: Pos2) {
-    ui.ctx()
-        .memory_mut(|m| m.data.insert_temp(id.anchor(), pos));
+    note_anchor_with_pivot(ui, id, pos, Align2::LEFT_TOP);
+}
+
+/// A menu hung from a right-edge trigger has to grow left of its anchor, so the
+/// host needs the pivot as well as the point.
+pub fn note_anchor_with_pivot(ui: &Ui, id: MenuId<'_>, pos: Pos2, pivot: Align2) {
+    ui.ctx().memory_mut(|m| {
+        m.data.insert_temp(id.anchor(), pos);
+        m.data.insert_temp(id.pivot(), pivot);
+    });
 }
 
 /// Paint one hosted menu's frame. Sets `dismiss` when the host decided the menu
@@ -56,6 +68,9 @@ pub fn host_menu<T>(
         *dismiss = true;
         return None;
     };
+    let pivot = ctx
+        .memory(|m| m.data.get_temp::<Align2>(id.pivot()))
+        .unwrap_or(Align2::LEFT_TOP);
 
     // A click outside only dismisses once the menu was visible on the PREVIOUS
     // frame, so the right-click that opened it cannot also close it (egui's own
@@ -68,12 +83,15 @@ pub fn host_menu<T>(
     let ctx = ctx.clone();
     let mut painted = None;
     let mut area_rect = Rect::NOTHING;
-    egui::Area::new(id.area()).fixed_pos(pos).show(&ctx, |ui| {
-        menu_surface(ui).show(ui, |ui| {
-            painted = Some(contents(ui));
+    egui::Area::new(id.area())
+        .pivot(pivot)
+        .fixed_pos(pos)
+        .show(&ctx, |ui| {
+            menu_surface(ui).show(ui, |ui| {
+                painted = Some(contents(ui));
+            });
+            area_rect = ui.min_rect();
         });
-        area_rect = ui.min_rect();
-    });
 
     if was_visible
         && ctx.input(|i| {
