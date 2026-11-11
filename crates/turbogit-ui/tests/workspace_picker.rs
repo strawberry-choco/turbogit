@@ -498,6 +498,64 @@ fn the_project_button_opens_the_picker() {
     assert_painted(&fx.harness, "Attach Workspace Root…");
 }
 
+/// A dropdown hangs under its trigger, not at a fixed screen corner.
+#[track_caller]
+fn assert_hangs_under(harness: &Harness<'_, AppState>, trigger: egui::Rect) {
+    let caption = painted_galleys(harness)
+        .into_iter()
+        .find(|g| g.text == "CURRENT")
+        .expect("the picker paints its Current caption");
+    let row = button(harness, "Open Project…").rect();
+
+    assert!(
+        caption.rect.top() >= trigger.bottom(),
+        "the picker opens below the project button; trigger {trigger:?}, caption {:?}",
+        caption.rect
+    );
+    assert!(
+        row.left() <= trigger.right() && row.right() >= trigger.left(),
+        "the picker sits under the project button; trigger {trigger:?}, row {row:?}"
+    );
+    assert!(
+        (row.right() - trigger.right()).abs() <= 16.0,
+        "the picker's right edge lines up with the button; trigger {trigger:?}, row {row:?}"
+    );
+    assert!(
+        row.right() <= 1280.0,
+        "the picker stays inside the window; row {row:?}"
+    );
+}
+
+#[test]
+fn the_picker_hangs_under_the_project_button() {
+    let scratch = tempfile::tempdir().unwrap();
+    let repo = seed_repo(scratch.path(), "alpha");
+    let mut fx = fixture_at_wide(repo, &[]);
+    settle(&mut fx.harness);
+
+    let trigger = project_button(&fx.harness).rect();
+    click_at(&mut fx.harness, trigger.center());
+
+    assert_hangs_under(&fx.harness, trigger);
+}
+
+#[test]
+fn the_palette_route_hangs_the_picker_under_the_project_button() {
+    let scratch = tempfile::tempdir().unwrap();
+    let repo = seed_repo(scratch.path(), "alpha");
+    let mut fx = fixture_at_wide(repo, &[]);
+    settle(&mut fx.harness);
+
+    let trigger = project_button(&fx.harness).rect();
+    fx.harness.state_mut().ui.command_palette = true;
+    fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
+    settle(&mut fx.harness);
+    button(&fx.harness, "Switch Workspace…").click();
+    settle(&mut fx.harness);
+
+    assert_hangs_under(&fx.harness, trigger);
+}
+
 #[test]
 fn hovering_the_project_button_paints_the_ghost_hover_state() {
     let scratch = tempfile::tempdir().unwrap();
