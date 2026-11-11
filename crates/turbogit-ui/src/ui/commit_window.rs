@@ -64,7 +64,6 @@ enum RowAction {
         path: PathBuf,
     },
     ToggleGroup(turbogit_domain::model::RootId),
-    ToggleCommit(turbogit_domain::model::RootId),
     Select {
         key: PathBuf,
         root: RootId,
@@ -146,13 +145,6 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot
                     state.ui.changes_expanded.remove(&id);
                 } else {
                     state.ui.changes_expanded.insert(id);
-                }
-            }
-            RowAction::ToggleCommit(id) => {
-                if state.ui.commit_repo_unchecks.contains(&id) {
-                    state.ui.commit_repo_unchecks.remove(&id);
-                } else {
-                    state.ui.commit_repo_unchecks.insert(id);
                 }
             }
         }
@@ -843,10 +835,6 @@ struct GroupHeader<'a> {
     expanded: Option<bool>,
     focused: bool,
     lead: Option<Icon>,
-    /// The room at the row's right end that the trailing controls own: the
-    /// count chip every group carries, and the commit checkbox a repository
-    /// group carries beside it. The texts stop before it.
-    trailing_reserve: f32,
 }
 
 /// Paint one group header: the section band, the shared row's hover, the
@@ -936,10 +924,10 @@ fn group_header_row(ui: &mut Ui, id: egui::Id, header: GroupHeader<'_>) -> egui:
     let name_font = crate::theme::chrome_font(crate::theme::TYPE_GROUP_NAME);
     let meta_font = crate::theme::chrome_font(crate::theme::TYPE_CONTROL);
     // The row's two texts share the band between its left inset and the
-    // trailing controls. The branch name keeps a slice of that band, so a long
+    // count chip's slot. The branch name keeps a slice of that band, so a long
     // repository name cannot starve it, and each text elides rather than
     // overrunning the count chip on the right.
-    let text_right = row.right() - header.trailing_reserve;
+    let text_right = row.right() - GROUP_COUNT_SLOT;
     let band = (text_right - name_x).max(0.0);
     let meta_reserve = if header.meta.is_some() {
         GROUP_META_RESERVE.min(band / 2.0)
@@ -1019,14 +1007,10 @@ fn repo_group(
             expanded: Some(expanded),
             focused: false,
             lead: Some(Icon::FOLDER_GIT),
-            trailing_reserve: GROUP_REPO_TRAILING,
         },
     );
     if response.clicked() {
         actions.push(RowAction::ToggleGroup(root.id.clone()));
-    }
-    if commit_checkbox(ui, state, root, response.rect) {
-        actions.push(RowAction::ToggleCommit(root.id.clone()));
     }
 
     if expanded {
@@ -1036,57 +1020,6 @@ fn repo_group(
             }
         });
     }
-}
-
-/// The per-repository commit checkbox on its group header. A repository with
-/// nothing staged is still listed, disabled: the group is the repo list, and a
-/// row that vanished until it had work would move the list under the reader.
-fn commit_checkbox(ui: &mut Ui, state: &AppState, root: &Root, header: Rect) -> bool {
-    let has_staged = root.status.changes.iter().any(|c| c.staged);
-    let checked = has_staged && !state.ui.commit_repo_unchecks.contains(&root.id);
-    let rect = Rect::from_center_size(
-        Pos2::new(
-            header.right() - GROUP_COUNT_SLOT - GROUP_CHECKBOX_GAP,
-            header.center().y,
-        ),
-        Vec2::splat(GROUP_CHECKBOX_SIZE),
-    );
-    let response = ui.interact(
-        rect,
-        ui.auto_id_with(("repo_commit_check", &root.id)),
-        if has_staged {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
-    response.widget_info(|| {
-        WidgetInfo::labeled(
-            WidgetType::Checkbox,
-            has_staged,
-            format!("Commit {}", root.id.name()),
-        )
-    });
-    let painter = ui.painter().clone();
-    if checked {
-        painter.rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::CHIP_RADIUS),
-            Palette::BRAND,
-        );
-        icons::centered_icon(ui, Icon::CHECK, rect.center(), 10.0, Palette::BRAND_INK);
-    } else {
-        painter.rect_stroke(
-            rect,
-            CornerRadius::same(crate::theme::CHIP_RADIUS),
-            egui::Stroke::new(1.0, Palette::LINE),
-            egui::StrokeKind::Inside,
-        );
-    }
-    if response.clicked() {
-        return true;
-    }
-    false
 }
 
 fn indent_guide(ui: &Ui, block: Rect) {
@@ -1121,7 +1054,6 @@ fn group_section(
                 expanded: None,
                 focused: false,
                 lead: None,
-                trailing_reserve: GROUP_COUNT_SLOT,
             },
         );
     }
@@ -1247,16 +1179,6 @@ const GROUP_NAME_X: f32 = 46.0;
 const GROUP_GAP: f32 = 8.0;
 const GROUP_EDGE: f32 = 12.0;
 const GROUP_COUNT_SLOT: f32 = 44.0;
-/// The commit checkbox the repository group's header carries, beside the count
-/// chip: its size, the gap it leaves to the chip's slot, and the clearance
-/// the row's text keeps from it.
-const GROUP_CHECKBOX_SIZE: f32 = 13.0;
-const GROUP_CHECKBOX_GAP: f32 = 14.0;
-const GROUP_CHECKBOX_CLEARANCE: f32 = 6.0;
-/// The room at a repository group's row right end that its trailing controls
-/// own: the count chip's slot and the commit checkbox beside it.
-const GROUP_REPO_TRAILING: f32 =
-    GROUP_COUNT_SLOT + GROUP_CHECKBOX_GAP + GROUP_CHECKBOX_SIZE / 2.0 + GROUP_CHECKBOX_CLEARANCE;
 /// The room the branch name keeps in the row whatever the repository's own
 /// name takes, so a long repository name cannot push the branch out of sight.
 const GROUP_META_RESERVE: f32 = 64.0;

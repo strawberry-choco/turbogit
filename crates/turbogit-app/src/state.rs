@@ -759,7 +759,6 @@ pub struct UiState {
     pub commit_message: String,
     pub amend: bool,
     pub commit_no_verify: bool,
-    pub commit_repo_unchecks: HashSet<RootId>,
     pub selected: HashSet<PathBuf>,
     pub selection_anchor: Option<PathBuf>,
     pub recent_messages: Vec<String>,
@@ -3082,8 +3081,7 @@ impl AppState {
     }
 
     fn is_commit_target(&self, root: &Root) -> bool {
-        !self.ui.commit_repo_unchecks.contains(&root.id)
-            && root.status.changes.iter().any(|c| c.staged)
+        root.status.changes.iter().any(|c| c.staged)
     }
 
     pub fn run_commit_across_roots(

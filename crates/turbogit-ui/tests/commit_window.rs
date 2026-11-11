@@ -350,6 +350,33 @@ fn stage_through_checkbox_in(h: &mut Harness<'_, AppState>, group: &str, repo: &
 
 const COMMIT_ALL_NOTE: &str = "Nothing is staged";
 
+/// The mirror of [`stage_through_checkbox_in`]: two expanded groups can carry
+/// the same file name, so the row is addressed as the first `Unstage {name}`
+/// below that group's header.
+fn unstage_through_checkbox_in(
+    h: &mut Harness<'_, AppState>,
+    group: &str,
+    repo: &Path,
+    name: &str,
+) {
+    {
+        let label = format!("Unstage {name} (staged)");
+        let header = h.get_by_label(&format!("Toggle {group}")).rect();
+        let node = h
+            .get_all_by_label(&label)
+            .filter(|node| node.rect().top() >= header.bottom())
+            .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .unwrap_or_else(|| panic!("no `{label}` row below the {group} header"));
+        node.click();
+    }
+    h.run();
+    assert!(
+        wait_until(15_000, || !staged_contains(repo, name)),
+        "the checkbox must have unstaged {name} in {group}"
+    );
+    h.run();
+}
+
 #[track_caller]
 fn accent_halves(h: &Harness<'_, AppState>) -> Vec<egui::Rect> {
     let button = egui::Rect::from_min_max(
@@ -669,7 +696,7 @@ fn amend_off_edit_on_keeps_the_edit() {
 }
 
 #[test]
-fn amend_click_seeds_two_agreeing_roots_and_unchecking_one_still_seeds() {
+fn amend_click_seeds_two_agreeing_roots_and_one_target_alone_still_seeds() {
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "agree-a");
     let b = temp_repo(parent.path(), "agree-b");
@@ -691,15 +718,11 @@ fn amend_click_seeds_two_agreeing_roots_and_unchecking_one_still_seeds() {
     h.get_by_label("Amend").click();
     h.run();
     h.state_mut().ui.commit_message = String::new();
-    h.state_mut()
-        .ui
-        .commit_repo_unchecks
-        .insert(RootId(b.path.clone().into()));
-    h.run();
+    unstage_through_checkbox_in(&mut h, "agree-b", &b.path, "base.txt");
     assert_eq!(
         h.state().commit_targets().len(),
         1,
-        "agree-b is unchecked, agree-a alone votes"
+        "agree-b holds nothing staged, so agree-a is the only target"
     );
 
     h.get_by_label("Amend").click();
@@ -707,7 +730,7 @@ fn amend_click_seeds_two_agreeing_roots_and_unchecking_one_still_seeds() {
     assert_eq!(
         h.state().ui.commit_message,
         "init",
-        "the one checked repo still seeds on its own"
+        "the one target repo still seeds on its own"
     );
 }
 
@@ -3758,10 +3781,6 @@ fn a_staged_repo_is_a_commit_target_by_default() {
         h.state().commit_targets().is_empty(),
         "nothing is staged, so there are no targets yet"
     );
-    assert!(
-        h.state().ui.commit_repo_unchecks.is_empty(),
-        "and nothing has been unchecked by hand"
-    );
 
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
     let targets: Vec<RootId> = h
@@ -3778,47 +3797,50 @@ fn a_staged_repo_is_a_commit_target_by_default() {
 }
 
 #[test]
-fn the_group_header_carries_the_repo_commit_checkbox() {
+fn the_group_header_carries_the_repo_name_the_branch_and_the_change_count() {
     let parent = tempfile::tempdir().unwrap();
     let staged = temp_repo(parent.path(), "checklist-staged");
     let clean = temp_repo(parent.path(), "checklist-clean");
     std::fs::write(staged.path.join("base.txt"), "modified\n").unwrap();
+    git(
+        &staged.path,
+        &["checkout", "-q", "-b", "feature/staged-branch"],
+    );
 
     let mut h = harness(app_state(&[staged.path.clone(), clean.path.clone()]));
     stage_through_checkbox(&mut h, &staged.path, "base.txt");
 
-    let staged_id = RootId(staged.path.clone().into());
-    assert!(
-        !h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
-            .accesskit_node()
-            .is_disabled(),
-        "the staged repository's header checkbox is live"
-    );
-    let clean_node =
-        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-clean");
-    assert!(
-        clean_node.accesskit_node().is_disabled(),
-        "a repository with nothing staged still lists, disabled"
-    );
+    for repo in [&staged.path, &clean.path] {
+        let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+        let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .trim()
+            .to_string();
+        let header = h.get_by_label(&format!("Toggle {name}")).rect();
+        let painted: Vec<String> = painted_galleys(&h)
+            .into_iter()
+            .filter(|g| header.contains(g.rect.center()))
+            .map(|g| g.text)
+            .collect();
+        assert!(
+            painted.contains(&name.to_owned()),
+            "the group header names its repository: {painted:?}"
+        );
+        assert!(
+            painted.contains(&branch),
+            "the group header names the branch it is on: {painted:?}"
+        );
+    }
 
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
-        .click();
-    h.run();
-    assert!(
-        h.state().ui.commit_repo_unchecks.contains(&staged_id),
-        "the header checkbox records the uncheck"
-    );
-    assert!(
-        h.state().commit_targets().is_empty(),
-        "and the unchecked repository leaves the commit targets"
-    );
-
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-staged")
-        .click();
-    h.run();
-    assert!(
-        !h.state().ui.commit_repo_unchecks.contains(&staged_id),
-        "clicking it again re-checks the repository"
+    // The staged repository's count is the number of changed files, and the
+    // clean repository's is zero.
+    let staged_header = h.get_by_label("Toggle checklist-staged").rect();
+    let staged_count = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| staged_header.contains(g.rect.center()) && g.text == "1")
+        .count();
+    assert_eq!(
+        staged_count, 1,
+        "the staged repository's header counts its one changed file"
     );
 }
 
@@ -3834,10 +3856,6 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
     stage_through_checkbox(&mut h, &a.path, "a.txt");
     stage_through_checkbox(&mut h, &b.path, "b.txt");
 
-    assert!(
-        h.state().ui.commit_repo_unchecks.is_empty(),
-        "nothing has been unchecked by hand"
-    );
     assert_eq!(
         h.state().commit_targets().len(),
         2,
@@ -3867,59 +3885,61 @@ fn primary_commit_commits_every_staged_repo_with_the_same_message() {
 }
 
 #[test]
-fn unchecking_the_repo_keeps_it_out_of_the_commit() {
+fn unstaging_the_repo_keeps_it_out_of_the_commit() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "uncheck-repo");
+    let repo = temp_repo(parent.path(), "unstage-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     stage_through_checkbox(&mut h, &repo.path, "base.txt");
-    let id = RootId(repo.path.clone().into());
-    h.state_mut().ui.commit_repo_unchecks.insert(id);
-    h.state_mut().ui.commit_message = "unchecked subject".into();
+    assert_eq!(
+        h.state().commit_targets().len(),
+        1,
+        "the staged repo is a commit target"
+    );
+
+    h.get_by_label("Unstage base.txt (staged)").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || !staged_contains(&repo.path, "base.txt")),
+        "the file left the index"
+    );
     h.run();
     assert!(
         h.state().commit_targets().is_empty(),
-        "the only staged repo is unchecked, so there are no fan-out targets"
+        "a repo holding nothing staged has no fan-out target"
     );
 
+    h.state_mut().ui.commit_message = "unstaged subject".into();
+    h.run();
     commit_action_button(&h).click();
     h.run();
     assert!(
-        !repo.subjects().contains(&"unchecked subject".to_string()),
-        "an unchecked repo must not commit; got {:?}",
+        !repo.subjects().contains(&"unstaged subject".to_string()),
+        "a repo holding nothing staged must not commit; got {:?}",
         repo.subjects()
     );
 }
 
 #[test]
-fn unchecking_a_repo_on_its_group_header_keeps_the_group_expanded() {
+fn the_group_header_carries_no_commit_checkbox() {
     let parent = tempfile::tempdir().unwrap();
     let staged = temp_repo(parent.path(), "checklist-toggle");
     std::fs::write(staged.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&staged.path)));
     stage_through_checkbox(&mut h, &staged.path, "base.txt");
-    let id = RootId(staged.path.clone().into());
-    assert!(
-        h.state().commit_targets().iter().any(|r| r.id == id),
-        "the staged repo starts as a commit target"
-    );
-
-    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Commit checklist-toggle")
-        .click();
-    h.run();
 
     assert!(
-        h.state().ui.commit_repo_unchecks.contains(&id),
-        "the toggle must record an explicit uncheck"
+        h.query_by_label("Commit checklist-toggle").is_none(),
+        "the group header offers no per-repository commit checkbox: the row is \
+         the group, and a repository joins the commit by holding something staged"
     );
     assert!(
-        h.state().commit_targets().is_empty(),
-        "an unchecked repo is no longer a commit target"
-    );
-    assert!(
-        painted_text(&h).iter().any(|t| t == "base.txt"),
-        "the group stays expanded while its checkbox is toggled"
+        h.get_all_by_role(egui::accesskit::Role::CheckBox)
+            .all(
+                |node| node.accesskit_node().label() != Some("Commit checklist-toggle".to_string())
+            ),
+        "no checkbox in the tree answers to the removed control"
     );
 }
