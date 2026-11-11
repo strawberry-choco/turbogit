@@ -2958,6 +2958,62 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
 }
 
 #[test]
+fn a_long_branch_name_elides_instead_of_running_under_the_changed_files_count() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "long-branch-repo");
+    let long_branch = "feature/remotes/a-very-long-branch-name-here";
+    git(&repo.path, &["checkout", "-q", "-b", long_branch]);
+    seed_tracked(&repo.path, "base.txt");
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+    let row = h.get_by_label("Toggle long-branch-repo").rect();
+
+    // The branch name is the row's metadata, and it is elided rather than
+    // allowed to run under the controls at the row's right end.
+    let branch = painted_galleys(&h)
+        .into_iter()
+        .find(|g| g.text.contains('…') && row.contains(g.rect.center()))
+        .expect("a branch name too long for the row paints an ellipsis");
+    assert!(
+        branch.text.starts_with("feature/") && branch.text.ends_with("here"),
+        "the elided branch keeps its head and tail, so it still names the \
+         branch: {:?}",
+        branch.text
+    );
+
+    // The count chip is the row's right-aligned changed-files count, and the
+    // elision must not have disturbed it.
+    let chip = painted_rects(&h)
+        .into_iter()
+        .find(|(rect, fill, _, radius)| {
+            *fill == Palette::RAISED
+                && (rect.height() - CHIP_HEIGHT).abs() < 0.01
+                && *radius == egui::CornerRadius::same(turbogit_ui::theme::CHIP_RADIUS)
+                && row.contains(rect.center())
+                && rect.left() > row.center().x
+        })
+        .map(|(rect, _, _, _)| rect)
+        .expect("the group header keeps its right-aligned count chip");
+    assert!(
+        chip.right() <= row.right() - 1.0,
+        "the count chip stays at the row's right edge: chip {chip:?} row {row:?}"
+    );
+    assert!(
+        branch.rect.right() < chip.left(),
+        "the elided branch stops before the count chip: branch {:?} chip {chip:?}",
+        branch.rect
+    );
+
+    // The count chip still says how many files changed.
+    assert!(
+        painted_galleys(&h)
+            .iter()
+            .any(|g| g.text == "1" && chip.contains(g.rect.center())),
+        "the count chip still reads the changed-files count"
+    );
+}
+
+#[test]
 fn the_changes_list_reads_on_the_ink_ramp_and_never_the_dim_step() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "list-ink-ramp");
