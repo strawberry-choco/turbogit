@@ -15,7 +15,7 @@ use test_support::srcscan::{self, code_only, code_with_literals};
 use test_support::wcag::contrast;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
-use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
+use turbogit_domain::model::{DateFormat, LogOpts, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{Palette, configure_style, install_fonts};
@@ -244,6 +244,11 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
          body left={body_left}",
         branches.left()
     );
+    assert!(
+        (410.0..=430.0).contains(&branches.width()),
+        "the branches pane must be its doubled ~420px width, got {:.0}px",
+        branches.width()
+    );
 
     let files = files_region(&harness);
     let details = details_region(&harness);
@@ -344,6 +349,75 @@ fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
         before_tag + 1,
         "c1 tooltip reveals its tag"
     );
+}
+
+#[test]
+fn a_ref_label_pill_never_paints_over_the_date_cell() {
+    let seed = seeded_project();
+    let mut state = AppState::new(seed.project.clone());
+    warm_log_and_refs(&mut state);
+    state.ui.tab = Tab::Log;
+    state.settings.date_format = DateFormat::Iso;
+    // The narrowest window the app allows (`src/main.rs`), where the commit
+    // table is at its floor and the graph's reserve is what keeps the DATE
+    // cell off the ref-label pill. A wider window leaves the graph room to
+    // spare and would pass whatever the floor is.
+    const NARROWEST: egui::Vec2 = egui::vec2(1000.0, 800.0);
+    let harness = harness_sized(state, NARROWEST);
+
+    // The window is where the reserve binds, so the branches pane is at its
+    // narrow end rather than its full width. If that stops holding, this
+    // window no longer exercises the reserve and the overlap below proves
+    // nothing, so say so rather than pass quietly.
+    let branches = branches_region(&harness);
+    assert!(
+        branches.width() < 410.0,
+        "the branches pane is {}px wide at the narrowest window, so the graph \
+         has room to spare and this test no longer exercises the reserve: \
+         narrow the window, or the minimum inner size moved",
+        branches.width()
+    );
+
+    let pills = label_pills(&harness);
+    assert!(
+        !pills.is_empty(),
+        "the fixture's rows must carry ref-label pills for the overlap to be possible"
+    );
+    let dates: Vec<PaintedGalley> = painted_galleys(&harness)
+        .into_iter()
+        .filter(|g| g.text.len() == 16 && g.text.contains('-') && g.text.contains(':'))
+        .collect();
+    assert!(
+        !dates.is_empty(),
+        "the ISO date cells must be painted: {:#?}",
+        painted_galleys(&harness)
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    for pill in &pills {
+        let date = dates
+            .iter()
+            .find(|d| d.rect.y_range().contains(pill.center().y))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no date cell on the pill's row: pill {pill:?}, dates {:#?}",
+                    dates
+                        .iter()
+                        .map(|d| (d.text.as_str(), d.pos))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert!(
+            date.pos.x >= pill.right(),
+            "the ref-label pill must not paint under the DATE cell: pill right \
+             {:.1} at {pill:?}, DATE left {:.1} at {:?}",
+            pill.right(),
+            date.pos.x,
+            date.rect
+        );
+    }
 }
 
 #[test]
@@ -551,10 +625,16 @@ fn painted_in_region(harness: &Harness<'_, AppState>, region: Rect) -> Vec<Strin
         .collect()
 }
 
+/// The branches pane's card: the leftmost of the Log view's four cards.
+///
+/// Found by position, not by width: the pane's width is the thing under test
+/// and it varies with the window, so a width probe would only find the card at
+/// the width it was written for.
 fn branches_region(harness: &Harness<'_, AppState>) -> Rect {
     filled_rects(harness)
         .into_iter()
-        .find(|(r, c)| *c == Palette::CONTENT_BG && r.width() >= 200.0 && r.width() <= 220.0)
+        .filter(|(r, c)| *c == Palette::CONTENT_BG && r.height() > 100.0)
+        .min_by(|a, b| a.0.left().total_cmp(&b.0.left()))
         .map(|(r, _)| r)
         .expect("branches pane card not painted")
 }

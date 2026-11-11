@@ -14,9 +14,12 @@ const ROW_H: f32 = 24.0;
 const MAIN_LEN: usize = 150;
 
 fn graph_region(harness: &Harness<'_, AppState>) -> Rect {
+    // The branches pane is the leftmost of the Log view's cards; found by
+    // position because its width is what the layout rule decides.
     let branches = filled_rects(harness)
         .into_iter()
-        .find(|(r, c)| *c == Palette::CONTENT_BG && r.width() >= 200.0 && r.width() <= 220.0)
+        .filter(|(r, c)| *c == Palette::CONTENT_BG && r.height() > 100.0)
+        .min_by(|a, b| a.0.left().total_cmp(&b.0.left()))
         .map(|(r, _)| r)
         .expect("branches pane card not painted");
     let body_right = filled_rects(harness)

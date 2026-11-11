@@ -29,7 +29,8 @@ use turbogit_domain::model::{
     PatchOrigin, RefState, Root, RootId, SignatureState, forward_slash_path,
 };
 
-const BRANCHES_WIDTH: f32 = 210.0;
+const BRANCHES_WIDTH: f32 = 420.0;
+const BRANCHES_MIN_WIDTH: f32 = 140.0;
 const FILES_WIDTH: f32 = 344.0;
 const DETAILS_HEIGHT: f32 = 440.0;
 const LOG_FILE_ROW_HEIGHT: f32 = 40.0;
@@ -40,6 +41,19 @@ const PANE_GAP: f32 = 8.0;
 const PANE_COLUMN_GAP: f32 = 10.0;
 const PANE_CARD_PAD: i8 = 8;
 const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
+
+/// The width the commit table's pane keeps, so the branches pane cannot take
+/// the room its columns need.
+///
+/// The table's columns are fixed offsets from the row's left edge and the
+/// DATE cell is right-aligned to the row's right edge, so below this width
+/// the DATE cell paints over the ref-label pill that sits beside the subject.
+/// Measured at ~333px for one root and ~338px for several (the multi-root
+/// gutter), with the ISO date format being the widest.
+///
+/// A floor, not a guarantee: below the width where the branches pane can
+/// still yield, its own minimum wins and the table goes narrower.
+const GRAPH_MIN_WIDTH: f32 = 348.0;
 
 const STATUS_PILL: widgets::ChipGeometry = widgets::ChipGeometry {
     height: widgets::CHIP_HEIGHT,
@@ -325,8 +339,12 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     ensure_log_data(state);
 
     let avail_w = ui.available_width();
-    let branches_w = BRANCHES_WIDTH.min((avail_w * 0.25).max(140.0));
     let files_w = FILES_WIDTH.min((avail_w * 0.32).max(180.0));
+    // The branches pane takes what the commit table can spare, not a share of
+    // the window: a share caps it at a quarter of the width, so a pane wider
+    // than that never reaches its full size.
+    let branches_w = (avail_w - files_w - 2.0 * PANE_COLUMN_GAP - GRAPH_MIN_WIDTH)
+        .clamp(BRANCHES_MIN_WIDTH, BRANCHES_WIDTH);
 
     Panel::left("log_branches_pane")
         .exact_size(branches_w + PANE_COLUMN_GAP)
