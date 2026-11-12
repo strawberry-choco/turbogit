@@ -1169,7 +1169,6 @@ fn branch_row(
             .sum::<f32>();
 
     let share_x = text_x + (content_right - 8.0 - text_x).max(0.0) * NAME_ZONE_SHARE;
-    let name_w = (share_x - 8.0 - text_x).max(0.0);
 
     let name_right = share_x - 8.0;
     let shows_badges = name_right - badges_w >= text_x;
@@ -1178,8 +1177,19 @@ fn branch_row(
     }
     let badges_right = content_right;
     let badges_x = badges_right - badges_w;
-    let track_x = share_x;
-    let track_w = (badges_x - 8.0 - share_x).max(0.0);
+
+    let upstream = meta.upstream.as_ref().map(|up| up.git_ref());
+    let upstream_w = upstream.as_ref().map_or(0.0, |text| {
+        ui.painter()
+            .layout_no_wrap(text.clone(), data_font(TYPE_CONTROL), Palette::T_MUTED)
+            .size()
+            .x
+    });
+    let upstream_gap = if upstream.is_some() { 8.0 } else { 0.0 };
+    let room = (badges_x - 8.0 - text_x).max(0.0);
+    let name_w = (share_x - 8.0 - text_x)
+        .max(0.0)
+        .min((room - upstream_gap - upstream_w).max(0.0));
 
     let actions_rect = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
@@ -1215,29 +1225,6 @@ fn branch_row(
         }
     });
 
-    if let Some(up) = &meta.upstream
-        && track_w > 8.0
-    {
-        let track_rect = Rect::from_min_max(
-            Pos2::new(track_x, rect.top()),
-            Pos2::new(track_x + track_w, rect.bottom()),
-        );
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(track_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        )
-        .add(
-            egui::Label::new(
-                RichText::new(up.git_ref())
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            )
-            .truncate()
-            .selectable(false),
-        );
-    }
-
     let ink = if is_remote {
         Palette::INK_2
     } else {
@@ -1251,7 +1238,7 @@ fn branch_row(
     );
     let name_rect = Rect::from_min_max(
         Pos2::new(name_x, rect.top()),
-        Pos2::new(share_x - 8.0, rect.bottom()),
+        Pos2::new((badges_x - 8.0).max(name_x), rect.bottom()),
     );
     let mut child = ui.new_child(
         UiBuilder::new()
@@ -1262,6 +1249,18 @@ fn branch_row(
     icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, ink);
     child.add_space(6.0);
     ref_chip_with_ink(&mut child, &name, ink);
+    if let Some(up) = upstream {
+        child.add_space(8.0);
+        child.add(
+            egui::Label::new(
+                RichText::new(up)
+                    .font(data_font(TYPE_CONTROL))
+                    .color(Palette::T_MUTED),
+            )
+            .truncate()
+            .selectable(false),
+        );
+    }
 
     if response.clicked() {
         events.push(TreeEvent::RowClicked {
