@@ -48,7 +48,7 @@ use crate::ui::branches::{branch_matches, matches_query, row_meta};
 use crate::ui::branches_tree::{self, BranchNode, BranchView, RemoteGroup, RepoSection};
 use crate::ui::components::{
     BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_words,
-    badge_words_width, counted, current_row_fill, kit_button, kit_button_width,
+    badge_words_width, counted, current_row_fill, kit_button, kit_button_width, middle_truncate,
     middle_truncate_to_width, paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill,
     row_ink, section_header, state_words, state_words_width, sync_badge, sync_ink,
 };
@@ -59,6 +59,9 @@ use crate::ui::widgets::{self, ref_chip};
 const REPO_HEADER_H: f32 = 30.0;
 
 const NAME_ZONE_SHARE: f32 = 0.5;
+
+// `middle_truncate` counts the ellipsis in its character budget.
+const MIN_TRUNCATED_CHARS: usize = 3;
 
 const HEADER_IDENTITY_SHARE: f32 = 0.45;
 
@@ -1178,18 +1181,28 @@ fn branch_row(
     let badges_right = content_right;
     let badges_x = badges_right - badges_w;
 
-    let upstream = meta.upstream.as_ref().map(|up| up.git_ref());
-    let upstream_w = upstream.as_ref().map_or(0.0, |text| {
+    let room = (badges_x - 8.0 - text_x).max(0.0);
+    let local_full = ref_chip_with_ink_width(ui, label);
+    let local_floor = ref_chip_with_ink_width(ui, &middle_truncate(label, MIN_TRUNCATED_CHARS + 1));
+    let measure_remote = |text: &str| {
         ui.painter()
-            .layout_no_wrap(text.clone(), data_font(TYPE_CONTROL), Palette::T_MUTED)
+            .layout_no_wrap(text.to_owned(), data_font(TYPE_CONTROL), Palette::T_MUTED)
             .size()
             .x
+    };
+    let upstream = meta.upstream.as_ref().map(|up| {
+        let full = up.git_ref();
+        let floor_w = measure_remote(&middle_truncate(&full, MIN_TRUNCATED_CHARS + 1));
+        let local_budget = local_full.min((room - 8.0 - floor_w).max(local_floor));
+        let remote_budget = (room - 8.0 - local_budget).max(floor_w);
+        (
+            middle_truncate_to_width(ui, &full, &data_font(TYPE_CONTROL), remote_budget),
+            local_budget,
+        )
     });
-    let upstream_gap = if upstream.is_some() { 8.0 } else { 0.0 };
-    let room = (badges_x - 8.0 - text_x).max(0.0);
-    let name_w = (share_x - 8.0 - text_x)
-        .max(0.0)
-        .min((room - upstream_gap - upstream_w).max(0.0));
+    let name_w = upstream
+        .as_ref()
+        .map_or(room.max(local_floor), |(_, budget)| *budget);
 
     let actions_rect = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
@@ -1249,7 +1262,7 @@ fn branch_row(
     icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, ink);
     child.add_space(6.0);
     ref_chip_with_ink(&mut child, &name, ink);
-    if let Some(up) = upstream {
+    if let Some((up, _)) = upstream {
         child.add_space(8.0);
         child.add(
             egui::Label::new(
