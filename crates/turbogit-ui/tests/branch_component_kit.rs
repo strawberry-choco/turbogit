@@ -529,8 +529,9 @@ fn a_selected_list_rows_text_origin_equals_an_unselected_rows() {
     let selected_meta = text_in_row(&harness, selected, UPSTREAM);
     let comparison_meta = text_in_row(&harness, comparison, UPSTREAM);
     assert_eq!(
-        selected_meta.pos.x, comparison_meta.pos.x,
-        "a selected row's metadata column does not move either"
+        selected_meta.pos.x - selected_name.rect.right(),
+        comparison_meta.pos.x - comparison_name.rect.right(),
+        "a selected row's metadata keeps the same gap after its name"
     );
 }
 

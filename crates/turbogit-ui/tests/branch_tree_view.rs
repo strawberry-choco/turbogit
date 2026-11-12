@@ -674,7 +674,7 @@ fn remote_group_leaf_strips_the_remote_prefix() {
 }
 
 #[test]
-fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
+fn the_upstream_name_sits_next_to_the_branch_name() {
     let mut fx = Fixture::two_repos();
     fx.tree.show_remotes = false;
     fx.roots = vec![root_with(
@@ -688,14 +688,35 @@ fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    let xs: Vec<f32> = galleys_for(&h, "origin/main")
-        .iter()
-        .map(|g| g.pos.x)
-        .collect();
-    assert_eq!(xs.len(), 2, "both rows track origin/main: {xs:?}");
+    let row = button(&h, "a").rect();
+    let name = galleys_for(&h, "a")
+        .into_iter()
+        .next()
+        .expect("the short name paints");
+    let mut ups = galleys_for(&h, "origin/main");
+    assert_eq!(
+        ups.len(),
+        2,
+        "both rows track origin/main: {:?}",
+        painted_text(&h)
+    );
+    ups.sort_by(|a, b| a.pos.y.total_cmp(&b.pos.y));
+
     assert!(
-        (xs[0] - xs[1]).abs() < 0.5,
-        "the tracking column must not drift with the name's length: {xs:?}"
+        ups[0].pos.x > name.rect.right() && ups[0].pos.x - name.rect.right() < 24.0,
+        "the upstream name follows the branch name chip: chip right {} vs upstream x {}",
+        name.rect.right(),
+        ups[0].pos.x
+    );
+    assert!(
+        ups[0].pos.x < row.left() + row.width() * 0.25,
+        "the upstream name is left aligned, not in the middle of the row: x {} vs row {:?}",
+        ups[0].pos.x,
+        row
+    );
+    assert!(
+        ups[1].pos.x < row.right(),
+        "a long name does not push its upstream out of the row"
     );
 }
 
