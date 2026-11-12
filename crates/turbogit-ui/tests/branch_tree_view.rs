@@ -49,6 +49,12 @@ fn stale_local(name: &str) -> Branch {
     b
 }
 
+fn tracked(name: &str, upstream: &str) -> Branch {
+    let mut b = local(name, false, 1, 0);
+    b.tracking = Upstream::from_git_ref(upstream);
+    b
+}
+
 fn remote(name: &str, remote: &str) -> Branch {
     Branch {
         name: name.to_string(),
@@ -2122,5 +2128,80 @@ fn a_single_repository_band_offers_no_fold() {
         galleys_for(&h, "starred").len(),
         1,
         "a fold a band cannot reach never hides the one repository's rows"
+    );
+}
+
+fn tracked_row_galleys(width: f32, name: &str, upstream: &str) -> Vec<PaintedGalley> {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.roots = vec![root_with("/track", &[tracked(name, upstream)], Some(name))];
+    let mut h = fixture_harness_at(fx, width);
+    settle(&mut h);
+    painted_galleys(&h)
+}
+
+fn ellipsized(galleys: &[PaintedGalley]) -> Vec<&PaintedGalley> {
+    let mut hits: Vec<&PaintedGalley> = galleys.iter().filter(|g| g.text.contains('…')).collect();
+    hits.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+    hits
+}
+
+#[test]
+fn a_tight_row_shows_the_local_name_in_full_and_ellipsizes_the_remote() {
+    let galleys = tracked_row_galleys(300.0, "main", "origin/a-very-long-remote-branch-name");
+    let texts: Vec<&str> = galleys.iter().map(|g| g.text.as_str()).collect();
+    assert!(
+        texts.contains(&"main"),
+        "the local name stays on screen: {texts:?}"
+    );
+    assert!(
+        !texts.contains(&"origin/a-very-long-remote-branch-name"),
+        "the remote name is shortened, not left full: {texts:?}"
+    );
+    let shortened = ellipsized(&galleys);
+    assert_eq!(shortened.len(), 1, "one ellipsized name: {texts:?}");
+    let local_x = galleys.iter().find(|g| g.text == "main").unwrap().pos.x;
+    assert!(
+        shortened[0].pos.x > local_x,
+        "the ellipsis is on the remote name, to the right of the local name"
+    );
+}
+
+#[test]
+fn the_remote_floors_at_three_chars_before_the_local_name_shrinks() {
+    const LOCAL: &str = "a-long-local-branch-name";
+    const REMOTE: &str = "origin/a-long-remote-branch-name";
+
+    let wide = tracked_row_galleys(380.0, LOCAL, REMOTE);
+    assert!(
+        wide.iter().any(|g| g.text == LOCAL),
+        "the local name is still full while the remote shortens: {:?}",
+        wide.iter().map(|g| &g.text).collect::<Vec<_>>()
+    );
+    let wide_shortened = ellipsized(&wide);
+    assert_eq!(wide_shortened.len(), 1, "only the remote is shortened");
+    assert!(
+        wide_shortened[0].text.chars().count() > 4,
+        "the remote has not hit its three-character floor yet: {:?}",
+        wide_shortened[0].text
+    );
+
+    let tight = tracked_row_galleys(300.0, LOCAL, REMOTE);
+    assert!(
+        !tight.iter().any(|g| g.text == LOCAL),
+        "the local name now takes its own ellipsis"
+    );
+    let tight_shortened = ellipsized(&tight);
+    assert_eq!(
+        tight_shortened.len(),
+        2,
+        "both names are shortened: {:?}",
+        tight.iter().map(|g| &g.text).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        tight_shortened[1].text.chars().count(),
+        4,
+        "the remote floor is three characters plus the ellipsis: {:?}",
+        tight_shortened[1].text
     );
 }
