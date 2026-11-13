@@ -70,6 +70,7 @@ const DATE_RIGHT_PAD: f32 = 8.0;
 const PILL_RESERVE: f32 = 30.0;
 const REF_CARD_WIDTH: f32 = 252.0;
 const REF_CARD_HOVER_BRIDGE: f32 = 6.0;
+const SCOPE_LABEL_WIDTH: f32 = 120.0;
 
 const COMMIT_COLUMNS: [widgets::PaneColumn; 5] = [
     widgets::PaneColumn::start("ROOTS", COL_ROOTS),
@@ -624,57 +625,73 @@ fn hidden_jump_band(ui: &mut Ui, state: &mut AppState, root: RootId, cid: Commit
     }
 }
 
+fn scope_label(ui: &Ui, text: &str) -> RichText {
+    let font = FontId::new(TYPE_CONTROL, FontFamily::Proportional);
+    let fitted = components::middle_truncate_to_width(ui, text, &font, SCOPE_LABEL_WIDTH);
+    RichText::new(fitted).font(font).color(Palette::BRAND)
+}
+
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     super::rewrite_undo::banner(ui, state);
     widgets::pane_header(ui, "COMMITS", None, |_ui| {});
-    ui.horizontal(|ui| {
-        widgets::search_input(ui, "Search commits", &mut state.ui.log_filter);
-        if let Some((_, path)) = state.ui.log_path_scope.clone() {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let remove = ui
-                    .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
-                    .on_hover_text("Remove the path filter");
-                remove.widget_info(|| {
-                    WidgetInfo::labeled(WidgetType::Button, true, "Remove path filter")
-                });
-                if remove.clicked() {
-                    state.ui.log_path_scope = None;
-                }
-                ui.label(
-                    RichText::new(format!("Path filter: {}", path.display()))
-                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
-                        .color(Palette::BRAND),
-                );
+    let path_scope = state.ui.log_path_scope.clone();
+    let ref_scope = state.ui.log_ref_scope.clone();
+    if path_scope.is_none() && ref_scope.is_none() {
+        ui.horizontal(|ui| {
+            widgets::search_input(ui, "Search commits", &mut state.ui.log_filter);
+        });
+    } else {
+        // A chip row owns a fixed rect. Its child Ui cannot expand the card,
+        // so a long filter label overflows the row instead of resizing the pane.
+        let available = ui.available_rect_before_wrap();
+        let row = Rect::from_min_size(
+            available.min,
+            Vec2::new(available.width(), crate::theme::GROUP_ROW_HEIGHT),
+        );
+        ui.advance_cursor_after_rect(row);
+        let mut row_ui = ui.new_child(
+            UiBuilder::new()
+                .id_salt("log_scope_header")
+                .max_rect(row)
+                .layout(Layout::right_to_left(Align::Center)),
+        );
+        row_ui.shrink_clip_rect(row);
+        if let Some((_, path)) = path_scope {
+            let remove = row_ui
+                .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
+                .on_hover_text("Remove the path filter");
+            remove.widget_info(|| {
+                WidgetInfo::labeled(WidgetType::Button, true, "Remove path filter")
             });
+            if remove.clicked() {
+                state.ui.log_path_scope = None;
+            }
+            let label = scope_label(&row_ui, &format!("Path filter: {}", path.display()));
+            row_ui.label(label);
         }
-        if let Some(ref_name) = state.ui.log_ref_scope.clone() {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let remove = ui
-                    .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
-                    .on_hover_text("Remove the ref filter");
-                remove.widget_info(|| {
-                    WidgetInfo::labeled(WidgetType::Button, true, "Remove ref filter")
-                });
-                if remove.clicked() {
-                    state.ui.log_ref_scope = None;
+        if let Some(ref_name) = ref_scope {
+            let remove = row_ui
+                .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
+                .on_hover_text("Remove the ref filter");
+            remove
+                .widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Remove ref filter"));
+            if remove.clicked() {
+                state.ui.log_ref_scope = None;
+            }
+            let text = match (
+                state.ui.log_roots.selected(&state.multi.roots).len(),
+                turbogit_app::log_display::listing_roots(state).len(),
+            ) {
+                (selected, carriers) if carriers < selected => {
+                    format!("Ref filter: {ref_name} · {carriers} of {selected} repos")
                 }
-                let text = match (
-                    state.ui.log_roots.selected(&state.multi.roots).len(),
-                    turbogit_app::log_display::listing_roots(state).len(),
-                ) {
-                    (selected, carriers) if carriers < selected => {
-                        format!("Ref filter: {ref_name} · {carriers} of {selected} repos")
-                    }
-                    _ => format!("Ref filter: {ref_name}"),
-                };
-                ui.label(
-                    RichText::new(text)
-                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
-                        .color(Palette::BRAND),
-                );
-            });
+                _ => format!("Ref filter: {ref_name}"),
+            };
+            let label = scope_label(&row_ui, &text);
+            row_ui.label(label);
         }
-    });
+        widgets::search_input(&mut row_ui, "Search commits", &mut state.ui.log_filter);
+    }
 
     let filter_state = log_states::filtering(state);
     if let Some(recovery) = log_state_slot(ui, &filter_state) {

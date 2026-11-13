@@ -27,6 +27,8 @@ const ALL_REPOS: &str = "All repositories";
 
 const BUTTON_PAD_X: f32 = 8.0;
 const CARET_SIZE: f32 = 12.0;
+const BUTTON_MAX_WIDTH: f32 = 224.0;
+const BRANCH_BUTTON_MAX_WIDTH: f32 = 168.0;
 const POPUP_WIDTH: f32 = 240.0;
 const LIST_MAX_HEIGHT: f32 = 200.0;
 const BRANCH_LIST_MAX_HEIGHT: f32 = 320.0;
@@ -87,10 +89,23 @@ pub fn filter_bar(ui: &mut egui::Ui, state: &mut AppState) {
     let date = state.ui.log_date_filter.readback();
     let paths = paths_readback(state);
 
-    filter_dropdown(ui, state, LABEL_BRANCH, branch, SALT_BRANCH, branch_menu);
-    filter_dropdown(ui, state, LABEL_USER, user, SALT_USER, user_menu);
-    filter_dropdown(ui, state, LABEL_DATE, date, SALT_DATE, date_menu);
-    filter_dropdown(ui, state, LABEL_PATHS, paths, SALT_PATHS, paths_menu);
+    // One cap for every trigger, shrunk with the pane so a long ref, user or
+    // path cannot own the row. Branch names are unbounded, so they get a
+    // tighter ceiling; a date readback still fits inside the wider one.
+    let cap = BUTTON_MAX_WIDTH.min((ui.available_width() * 0.75).max(48.0));
+    let branch_cap = cap.min(BRANCH_BUTTON_MAX_WIDTH);
+    filter_dropdown(
+        ui,
+        state,
+        LABEL_BRANCH,
+        branch,
+        SALT_BRANCH,
+        branch_cap,
+        branch_menu,
+    );
+    filter_dropdown(ui, state, LABEL_USER, user, SALT_USER, cap, user_menu);
+    filter_dropdown(ui, state, LABEL_DATE, date, SALT_DATE, cap, date_menu);
+    filter_dropdown(ui, state, LABEL_PATHS, paths, SALT_PATHS, cap, paths_menu);
     clear_button(ui, state);
 }
 
@@ -101,6 +116,7 @@ fn filter_dropdown(
     base: &'static str,
     value: Option<String>,
     salt: &'static str,
+    max_width: f32,
     contents: fn(&mut Ui, &mut AppState) -> bool,
 ) {
     let active = value.is_some();
@@ -109,7 +125,7 @@ fn filter_dropdown(
         None => base.to_owned(),
     };
     let was_open = open_salt(ui) == Some(salt);
-    let response = dropdown_button(ui, salt, &display, active, base);
+    let response = dropdown_button(ui, salt, &display, active, base, max_width);
 
     let mut open = was_open;
     if response.clicked() {
@@ -167,15 +183,17 @@ fn dropdown_button(
     display: &str,
     active: bool,
     base: &'static str,
+    max_width: f32,
 ) -> Response {
     let ink = if active {
         Palette::BRAND_INK
     } else {
         Palette::INK_2
     };
-    let galley = ui
-        .painter()
-        .layout_no_wrap(display.to_owned(), chrome_font(TYPE_CONTROL), ink);
+    let font = chrome_font(TYPE_CONTROL);
+    let budget = max_width - 3.0 * BUTTON_PAD_X - CARET_SIZE;
+    let shown = components::middle_truncate_to_width(ui, display, &font, budget.max(0.0));
+    let galley = ui.painter().layout_no_wrap(shown, font, ink);
     let width = galley.size().x + 3.0 * BUTTON_PAD_X + CARET_SIZE;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, GROUP_ROW_HEIGHT), Sense::hover());
     let response = ui.interact(rect, button_id(salt), Sense::click());
