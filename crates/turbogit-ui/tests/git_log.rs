@@ -479,7 +479,7 @@ fn log_renders_empty_first_and_decorations_appear_once_refs_loaded_lands() {
 }
 
 #[test]
-fn root_stripes_appear_and_roots_filter_narrows_displayed_commits() {
+fn root_stripes_appear_and_the_roots_filter_narrows_commits_not_the_tree() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
@@ -507,21 +507,52 @@ fn root_stripes_appear_and_roots_filter_narrows_displayed_commits() {
         "expected distinct root stripes for two roots, got {stripe_colors:?}"
     );
 
-    harness.get_by_label("Root beta").click();
+    let tree_at_rest = painted_in_region(&harness, branches_region(&harness));
+    assert!(
+        tree_at_rest.iter().any(|text| text == "feature"),
+        "the tree lists alpha's branches: {tree_at_rest:?}"
+    );
+    assert!(
+        tree_at_rest.iter().any(|text| text == "main"),
+        "the tree lists the shared branch: {tree_at_rest:?}"
+    );
+
+    harness.state_mut().ui.log_roots =
+        turbogit_app::log_filters::RootFilter::Only(vec![RootId(seed.alpha.clone().into())]);
     settle(&mut harness);
 
     assert_not_painted(&harness, "beta: root commit");
     assert_painted(&harness, "alpha: second commit");
     assert_eq!(
-        harness.state().ui.log_roots,
-        turbogit_app::log_filters::RootFilter::Only(vec![RootId(seed.alpha.clone().into())]),
-        "unchecking beta ticks exactly alpha; the checkbox rows edit a set"
+        painted_in_region(&harness, branches_region(&harness)),
+        tree_at_rest,
+        "the roots filter narrows the commits pane, not the branch tree"
     );
 
-    harness.get_by_label("All roots").click();
+    harness.state_mut().ui.log_roots = turbogit_app::log_filters::RootFilter::All;
     settle(&mut harness);
     assert_painted(&harness, "beta: root commit");
-    assert!(harness.state().ui.log_roots.is_all());
+    assert_eq!(
+        painted_in_region(&harness, branches_region(&harness)),
+        tree_at_rest,
+        "widening the filter back leaves the tree alone too"
+    );
+
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "feature")
+        .click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.log_ref_scope,
+        Some("feature".to_owned()),
+        "clicking a branch still scopes the commits pane"
+    );
+    assert_not_painted(&harness, "beta: root commit");
+    assert_eq!(
+        painted_in_region(&harness, branches_region(&harness)),
+        tree_at_rest,
+        "a chosen branch narrows commits without changing the tree"
+    );
 }
 
 #[test]
@@ -2508,36 +2539,10 @@ fn the_root_stripe_shares_the_leading_gutter_with_the_rail() {
 }
 
 #[test]
-fn no_row_in_the_log_window_indents_when_it_is_chosen() {
+fn no_changed_file_row_indents_when_it_is_chosen() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_second_commit(&mut harness, &seed);
-
-    let branches = branches_region(&harness);
-    let roots_x = |harness: &Harness<'_, AppState>, label: &str| -> f32 {
-        all_galleys(harness, label)
-            .into_iter()
-            .find(|g| branches.contains(g.pos))
-            .unwrap_or_else(|| panic!("the ROOTS filter paints `{label}`"))
-            .pos
-            .x
-    };
-    let all_roots_at_rest = roots_x(&harness, "All roots");
-    let root_alpha_at_rest = roots_x(&harness, "Root alpha");
-
-    harness.get_by_label("Root alpha").click();
-    settle(&mut harness);
-    assert_eq!(
-        roots_x(&harness, "All roots"),
-        all_roots_at_rest,
-        "losing the selection must not indent the row's label: the rail is paint, \
-         not padding"
-    );
-    assert_eq!(
-        roots_x(&harness, "Root alpha"),
-        root_alpha_at_rest,
-        "and gaining it must not either"
-    );
 
     let files = files_region(&harness);
     let name_in = |harness: &Harness<'_, AppState>, path: &str| -> f32 {
@@ -2711,19 +2716,6 @@ fn the_log_rows_take_their_ink_from_the_shared_ramp() {
         Palette::INK,
         "…on an unchosen row too: selection does not lighten or darken the name"
     );
-
-    for label in ["All roots", "Root alpha"] {
-        let painted = all_galleys(&harness, label)
-            .into_iter()
-            .find(|g| branches_region(&harness).contains(g.pos))
-            .unwrap_or_else(|| panic!("the ROOTS filter paints `{label}`"));
-        assert_eq!(
-            painted.color,
-            Palette::INK,
-            "`{label}` is a row's identity text, so it reads at primary whether or \
-             not the filter is on it — the local inversion used to darken it"
-        );
-    }
 }
 
 #[test]
@@ -2825,9 +2817,7 @@ fn the_roots_column_is_a_labelled_column_of_the_commit_table() {
             .filter(|g| commit_table_region(&harness).contains(g.pos))
             .count(),
         1,
-        "exactly one ROOTS label inside the commit table — a second is a second \
-         header. The other one in this frame is the branches pane's ROOTS *filter* \
-         group title, which is a different surface and legitimately shares the word."
+        "exactly one ROOTS label inside the commit table — a second is a second header"
     );
 }
 
@@ -2877,10 +2867,6 @@ fn the_roots_column_and_the_lane_paint_one_colour_per_root() {
             srcscan::fn_text_code(LOG_SRC, "paint_root_swatch"),
         ),
         ("commit_row", srcscan::fn_text_code(LOG_SRC, "commit_row")),
-        (
-            "roots_filter_section",
-            srcscan::fn_text_code(LOG_SRC, "roots_filter_section"),
-        ),
     ] {
         assert!(
             source.contains("root_color("),

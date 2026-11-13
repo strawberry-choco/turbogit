@@ -963,7 +963,7 @@ fn assert_not_painted(harness: &Harness<'static, AppState>, needle: &str) {
 }
 
 #[test]
-fn the_pane_root_rows_tick_without_overwriting_the_selection() {
+fn the_roots_rows_tick_without_overwriting_the_selection() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = repo_with_one_commit(&project, "alpha");
@@ -974,8 +974,6 @@ fn the_pane_root_rows_tick_without_overwriting_the_selection() {
 
     open_paths_dropdown(&mut harness);
     click_popup_row(&mut harness, ALL_REPOS, "gamma");
-    harness.get_by_label("Paths").click();
-    settle_quiet(&mut harness);
     assert_eq!(
         harness
             .state()
@@ -987,12 +985,11 @@ fn the_pane_root_rows_tick_without_overwriting_the_selection() {
         "alpha and beta ticked by unchecking gamma"
     );
 
-    harness.get_by_label("Root alpha").click();
-    settle_quiet(&mut harness);
+    click_popup_row(&mut harness, ALL_REPOS, "alpha");
     assert_eq!(
         harness.state().ui.log_roots,
         RootFilter::Only(vec![beta_id]),
-        "a pane row toggles ONE member; it does not overwrite the set with itself"
+        "a row toggles ONE member; it does not overwrite the set with itself"
     );
 }
 

@@ -155,7 +155,16 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 
 fn ensure_log_data(state: &mut AppState) {
     state.ensure_ref_evidence();
-    for id in visible_root_ids(state) {
+    // The tree lists every root, so its ref decorations must be read for every
+    // root. Narrowing this loop to the commits pane's selection would make the
+    // tree's badges depend on a filter it does not show.
+    let ref_ids: Vec<RootId> = state
+        .multi
+        .roots
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    for id in ref_ids {
         if !state.caches.refs_loaded(&id) {
             state.fetch_refs(id);
         }
@@ -420,21 +429,22 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
 
     state.ui.log_tree.show_remotes = true;
 
-    let ids = visible_root_ids(state);
-    let visible_roots: Vec<&Root> = ids.iter().filter_map(|id| state.multi.by_id(id)).collect();
+    // The tree always lists every registered root. The roots filter lives in
+    // the commits pane, so a selection there must not change what this tree shows.
+    let tree_roots: Vec<&Root> = state.multi.roots.iter().collect();
     // Every `tags_by_root()` reader must warm first: the cache is on-demand,
     // and an un-warmed map is indistinguishable from a tagless repository.
     let tags_by_root = state.caches.tags_by_root();
     let options = BranchesViewOptions::default();
     let fingerprint = branch_tree_view::branch_view_fingerprint(
-        &visible_roots,
+        &tree_roots,
         tags_by_root,
         &|_| true,
         &options,
         state.caches.evidence_revision(),
     );
     let view = branch_tree_view::cached_branch_view(ui, "log_branch_tree", fingerprint, || {
-        let mut roots: Vec<Root> = visible_roots.iter().map(|root| (*root).clone()).collect();
+        let mut roots: Vec<Root> = tree_roots.iter().map(|root| (*root).clone()).collect();
         let mut deco_by_root: std::collections::HashMap<
             RootId,
             std::collections::HashMap<String, RefState>,
@@ -493,9 +503,6 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
     for event in events {
         apply_log_tree_event(state, event);
     }
-
-    ui.add_space(8.0);
-    roots_filter_section(ui, state);
 }
 
 fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
@@ -536,39 +543,6 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
         TreeEvent::RemoteRevealToggled { .. } => {}
         TreeEvent::FetchRequested { .. } => fetch_scope(state),
         _ => {}
-    }
-}
-
-fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
-    ui.separator();
-    widgets::group_title(ui, "Roots");
-
-    // The `All` row is a command, not a checkbox: a checked box whose click
-    // only re-selects everything breaks the contract the checkbox rows keep.
-    let all_active = state.ui.log_roots.is_all();
-    let (rect, response) = allocate_row(ui);
-    paint_log_row(ui, rect, all_active, response.hovered());
-    let galley = ui
-        .painter()
-        .layout_no_wrap("All roots".to_owned(), body_font(), row_name_ink());
-    ui.painter().galley(
-        Pos2::new(rect.left() + 4.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        row_name_ink(),
-    );
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "All roots"));
-    widgets::focus_ring(ui, &response);
-    if response.clicked() {
-        state.ui.log_roots.select_all();
-    }
-
-    for (idx, root) in state.multi.roots.iter().enumerate() {
-        let label = format!("Root {}", root.id.name());
-        let checked = state.ui.log_roots.carries(&root.id);
-        let response = widgets::check_row(ui, &label, checked, Some(root_color(idx)));
-        if response.clicked() {
-            state.ui.log_roots.toggle(&root.id, &state.multi.roots);
-        }
     }
 }
 

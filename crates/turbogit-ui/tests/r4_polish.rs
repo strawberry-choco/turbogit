@@ -341,10 +341,6 @@ const FOCUS_RINGS: &[FocusRing<'static>] = &[
                 node: Node::Label("file.txt"),
                 what: "focused changed-file row",
             },
-            Focus {
-                node: Node::Label("All roots"),
-                what: "focused roots-filter row",
-            },
         ],
     },
     FocusRing {
