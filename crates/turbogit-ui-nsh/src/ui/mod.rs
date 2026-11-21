@@ -16,6 +16,7 @@ pub mod combobox;
 pub mod data_table;
 pub mod dialog;
 pub mod icon_button;
+pub mod image;
 pub mod input;
 pub mod menu;
 pub mod pane_header;
