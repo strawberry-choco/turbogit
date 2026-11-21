@@ -15,7 +15,7 @@ paths exist on disk.
 | DiffView hosts a staged-line gutter | no — fallback wins | DiffView 0.5.x has line selection on the gutter and annotations under lines, but no per-line app control column; the fallback (`virtual_list` + `canvas` gutter + per-line checkbox) is implemented and proven |
 | Tree and DataTable cover branch, file, worktree, shortcuts surfaces | go | 10k-branch tree and 1k-worktree table render, virtualize, and scroll (lanes 5); grouped file tree renders |
 | Editor covers conflict and patch surfaces | go for N0 | editor with rust language renders; folding, search, and large files to be proven at N5 with the 1k-hunk fixture |
-| Input multiline handles IME, CJK, emoji, undo, paste | go | CJK + emoji round trip through the multiline input (headless unit 4, lane 8); paste proven by `paste` step support and `onPaste` prop; undo native via the platform input |
+| Input multiline handles IME, CJK, emoji, undo, paste | go for N0 | CJK + emoji round trip driven through the multiline input (headless unit 4, lane 8); paste, text selection, and undo verified at the API level (`nsh-testing` `paste` step, `on_paste` prop, platform input) but not yet driven end to end; N1's input lanes drive them. True IME candidate-window composition is untested headlessly |
 | Overlays, focus return, `on_key` cover the keyboard surface | go | menu, context menu (system popup), dialog, alert dialog, popover, command palette, toasts, `on_key("mod+k")` all open and dismiss with Escape; focus returns to the trigger (lane 6) |
 | `Rc<RefCell<AppState>>` bridge avoids re-entrant borrows at 10k rows | go | 10k-row render reads through the handle; pump drains events; no borrow panic across all tests and lanes |
 | Headless at 1280x820 reproduces the kittest flows | go | six cargo tests pass (press, filter, scroll-to-100000, 500-line stage, CJK round trip, mod+k palette) |
@@ -120,7 +120,7 @@ and compiles standalone as a plain path dependency of an outside crate
 6. `bridge_pump_drains_events_into_the_render` — queue two events,
    assert `drained 2 by the pump`. pass
 
-All six pass; `nsh check` passes; the crate has no warnings.
+All six pass; `nsh check` passes; the crate's targets build without warnings (the perf test's unused `Arc` import was removed in the audit round).
 
 ## Live lanes (the ten "Verify, live" boxes)
 
@@ -138,7 +138,7 @@ live in `/tmp/swarm-n0/worker-1/` and the review set in
 | 5 tree+table | `spike-tree-table.png`, `spike-tree-table-2.png` | pass | 10k branch tree and 1k worktree table render, virtualize, scroll |
 | 6 overlays | `spike-overlays.png`, `spike-overlays-2.png` | pass | dialog, popover, alert (discard + cancel answered), Escape dismisses; focus returns |
 | 7 keyboard | `spike-keyboard.png` | pass | arrows move the log selection; mod+k opens the palette; the palette screenshot shows the query |
-| 8 CJK/emoji/path | `spike-cjk.png` | pass | CJK + emoji round trip and the 98-char unbroken path echoed |
+| 8 CJK/emoji/path | `spike-cjk.png` | pass | CJK + emoji round trip and the 94-char unbroken path echoed |
 | 9 resize | `spike-resize.png` | pass | 1024x700, no pane clips |
 | 10 packaged | `spike-packaged.png` | macOS: pass (launch + clean quit); the PNG itself is black — screen capture is blocked on this machine | see gaps; the review video below carries the in-process visuals instead |
 
@@ -159,10 +159,11 @@ cost on the real engine, measured headless in release builds:
   `cargo test --release -p nsh-app-nsh --test spike_perf -- --ignored`.
 
 Fixture. `/tmp/nsh-n0-fixture/repo-100k`: 100000 commits, 499 merges,
-built with `git fast-import` (sha256 of the stream recorded in the
-decision log). The egui baseline clones it per run; the spike's fixture
-is the synthetic 100k-commit model the log screen reads through the
-bridge.
+built with `git fast-import`; the stream was not retained, so the
+fixture's identity on disk is its measured commit and merge counts, not
+a recorded stream hash. The egui baseline clones it per run; the spike's
+fixture is the synthetic 100k-commit model the log screen reads through
+the bridge.
 
 **Baseline first, as the plan orders.** egui trunk, 1280x820, release:
 
@@ -188,8 +189,20 @@ reference Mac. Log: 0.064 ms ≤ 0.43 + 2 and < 16.7 — pass. Diff:
 egui diff pane has no 20k fixture harness on trunk); N3's perf box owns
 that comparison and the 16.7 ms absolute budget is the gate here.
 
-Memory. No numeric gate exists in N0's rule box; both numbers are
-recorded for N1's 1.5x gate to adopt. The fixture asymmetry is
+Run spread, for honesty about the single values above. Independent runs
+of the same probes read spike log p95 0.064-0.155 ms, spike diff p95
+0.100-0.275 ms, egui trunk scroll p95 0.17-0.43 ms (the engine docs
+warn single-run timings swing with the CPU's clock state). The gate
+passes in every combination; N2's gate compares against the minimum of
+several runs, per the nsh performance guide.
+
+Memory. No numeric gate exists in N0's rule box. The ps-sampling run
+read egui 83.5 MB and spike 134.4 MB; the kernel's `/usr/bin/time -l`
+max-RSS over the same runs reads egui 1.11 GB and spike 136 MB. The
+spike side agrees across methods; the egui side is 14x apart, because
+kittest's wgpu allocation lands outside the ps-sampled process. N1 must
+pin one method (the kernel max-RSS reading is the conservative choice)
+before adopting the plan's 1.5x memory gate. The fixture asymmetry is
 deliberate: the spike holds all 100k commits, the 20k diff, the 10k
 branches and the 1k worktrees in memory at once (the bridge's proof),
 while the egui log pages its cache at 50 per batch.
@@ -197,9 +210,10 @@ while the egui log pages its cache at 50 per batch.
 ## Packaging
 
 - **macOS**: `nsh package --target macos` wrote
-  `spikes/nsh/.nsh/out/nsh.app` (ad hoc signed, 184 ms after the runner
-  build). Launched via `open` (pid captured), quit with SIGTERM, and no
-  process remained — launches the fixtures and quits cleanly.
+  `spikes/nsh/.nsh/out/nsh.app` (ad hoc signed). Launched via `open`
+  (pid captured), quit with SIGTERM, and no process remained — launches
+  the fixtures and quits cleanly. The launch was re-verified at the
+  verdict round (process alive under `pgrep`, exited cleanly on quit).
 - **Windows**: `nsh package --target windows` requires cargo-xwin and
   `x86_64-pc-windows-msvc`; both installed (`cargo-xwin 0.23.1`), the
   build was interrupted by the disk/network conditions and did not

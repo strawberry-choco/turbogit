@@ -21,7 +21,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ## Surface coverage
 
-Every module under `crates/turbogit-ui/src/ui` appears at least once. A shared module appears in the foundation row and in each surface row it serves. The inventory is 50 top-level UI modules, 5 diff modules, 2 kit modules, 13 widget modules, 23 dialog variants, 5 shell tabs, and 3 commit sub-tabs. The suite lists are the 84 suites under `crates/turbogit-ui/tests`, plus the root `diff_parity` suite. A suite is ported by behavior, then deleted with its old screen in N7.
+Every module under `crates/turbogit-ui/src/ui` appears at least once. A shared module appears in the foundation row and in each surface row it serves. The inventory, measured on trunk, is 49 top-level UI modules, 5 diff modules, 2 kit modules, 13 widget modules, 23 dialog variants, 5 shell tabs, and 3 commit sub-tabs. The suite lists are the 83 suites under `crates/turbogit-ui/tests` on trunk, plus the root `diff_parity` suite; an 84th suite, `log_commit_pane_width`, exists on the local main ahead of trunk and joins the contract when it lands. A suite is ported by behavior, then deleted with its old screen in N7.
 
 All 23 `Dialog` variants are mapped. N4 owns `Push`, `Merge`, `NewBranch`, `Tag`, `NewWorktree`, `RenameBranch`, `CompareBranches`, `BranchNotFullyMerged`, and `ManageRemotes`. N5 owns `Rebase`, `InteractiveRebase`, `Shelve`, `Stash`, `Unshelve`, `CherryPickTarget`, `CherryPickAcross`, `GetFromBranch`, `ApplyPatch`, `CreatePatchComment`, `PatchFileSettings`, `ImportPatches`, `RewritePreflight`, and `Reword`.
 
@@ -232,7 +232,7 @@ Each live lane runs at the PR head on the reference Mac. Portability lanes repea
 
 **Files.**
 
-- [ ] Create `crates/turbogit-ui-nsh/Cargo.toml` with exact-pinned `nsh-core`, `nsh-base`, `nsh-platform-macos`, `nsh-platform-windows`, and `nsh-platform-linux` at 0.5.0, plus `nsh-engine` and `nsh-testing` as dev-dependencies.
+- [ ] Create `crates/turbogit-ui-nsh/Cargo.toml` with `nsh-core`, `nsh-base`, `nsh-platform-macos`, `nsh-platform-windows`, and `nsh-platform-linux` required at `"0.5.0"` and pinned to the 0.5.x lock the N0 spike produced, plus `nsh-engine` and `nsh-testing` as dev-dependencies.
 - [ ] Create `crates/turbogit-ui-nsh/nsh.json` with `name`, `rust`, `root`, `theme`, and `appearance`.
 - [ ] Create `crates/turbogit-ui-nsh/theme.json` from the token layer.
 - [ ] Create `crates/turbogit-ui-nsh/src/lib.rs`, `src/main.rs`, `src/bridge.rs`, `src/theme.rs`, `src/test_ids.rs`, and `src/ui/**`.
@@ -751,7 +751,7 @@ impl AppHandle {
 - [ ] Make the root binary launch the nsh root and nothing else, preserving the 1280x820 initial size and the 1000x680 minimum.
 - [ ] Remove every egui dependency from the workspace lock and prove it with `cargo tree -i egui`.
 - [ ] Keep the old UI on the annotated tag `egui-final` so a regression can be bisected.
-- [ ] Produce release bundles for all three desktops. macOS gets a signed and notarized `.app`. Windows gets a zipped bundle. Linux gets the AppImage or Flatpak from N0, plus a tarball for Ubuntu 24.04 or later.
+- [ ] Produce release bundles for all three desktops. macOS gets a signed and notarized `.app`. Windows gets a zipped bundle. Linux gets the native tarball N0 chose for Ubuntu 24.04 or later, plus the AppImage or Flatpak carrier N7 decides for older distributions with a pinned runtime.
 - [ ] Update the quality gates in `AGENTS.md` for the nsh loop and the platform prerequisites.
 
 **You see.**
