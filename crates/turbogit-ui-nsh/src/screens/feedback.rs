@@ -214,6 +214,11 @@ fn present_dialog(handle: AppHandle, name: String, prompt: Prompt) -> impl IntoE
         });
     }
     for button in prompt.buttons.iter().rev() {
+        // The dialog's own Cancel carries the prompt's Close action; drawing
+        // the prompt's button too would give the confirm two Cancels.
+        if button.action == ConfirmAction::Close {
+            continue;
+        }
         let button_handle = rows_handle.clone();
         let action = button.action;
         let variant = match action {
