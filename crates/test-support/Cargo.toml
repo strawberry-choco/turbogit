@@ -24,6 +24,22 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.nsh-core]
+workspace = true
+optional = true
+
+[dependencies.nsh-engine]
+workspace = true
+optional = true
+
+[dependencies.nsh-testing]
+workspace = true
+optional = true
+
+[dependencies.turbogit-ui-nsh]
+workspace = true
+optional = true
+
 [dependencies.tempfile]
 workspace = true
 optional = true
@@ -35,6 +51,7 @@ turbogit-engine = { workspace = true }
 [features]
 default = []
 harness = ["dep:egui", "dep:egui_kittest", "dep:turbogit-ui", "dep:turbogit-app", "dep:tempfile"]
+nsh = ["dep:nsh-core", "dep:nsh-engine", "dep:nsh-testing", "dep:turbogit-ui-nsh", "dep:turbogit-app", "dep:tempfile"]
 
 [lints]
 workspace = true
