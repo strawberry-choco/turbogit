@@ -154,7 +154,7 @@ struct InputCore {
 }
 
 impl InputCore {
-    fn build(&self) -> Input {
+    fn build(&self, generation: u64) -> Input {
         let t = theme();
         let (pad_x, pad_y) = match self.size {
             ControlSize::Compact => (
@@ -200,6 +200,7 @@ impl InputCore {
         input
             .placeholder_color(move || if dark() { muted.dark } else { muted.light })
             .text_size(px(text_size_of(self.size)))
+            .key(format!("input:{generation}"))
             .flex_row()
             .items_center()
             .rounded(px(data::CONTROL_RADIUS))
@@ -269,12 +270,9 @@ pub fn input(props: InputProps) -> impl IntoElement {
     let host = match core.remount.clone() {
         Some(generation) => {
             let core = core;
-            view().child(dynamic(move || {
-                generation();
-                core.build()
-            }))
+            view().child(dynamic(move || core.build(generation())))
         }
-        None => view().child(core.build()),
+        None => view().child(core.build(0)),
     };
     host_of(host, test_id, false)
 }
@@ -287,12 +285,11 @@ pub fn text_area(props: InputProps) -> impl IntoElement {
     let host = match core.remount.clone() {
         Some(generation) => {
             let core = core;
-            view().flex_1().child(dynamic(move || {
-                generation();
-                core.build()
-            }))
+            view()
+                .flex_1()
+                .child(dynamic(move || core.build(generation())))
         }
-        None => view().flex_1().child(core.build()),
+        None => view().flex_1().child(core.build(0)),
     };
     host_of(host, test_id, true)
 }

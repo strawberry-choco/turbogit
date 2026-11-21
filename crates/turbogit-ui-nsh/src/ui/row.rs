@@ -36,6 +36,9 @@ fn row_fill(state: RowState) -> AdaptiveColor {
 /// A row's context-menu handler.
 type ContextMenuHandler = Box<dyn Fn(&ContextMenuEvent) + 'static>;
 
+/// A row's press handler, with the event that carries the modifiers.
+type PressEventHandler = Box<dyn Fn(&PressEvent) + 'static>;
+
 /// The props of [`row`].
 pub struct RowProps {
     /// The row's content: its cells, laid out by the caller.
@@ -46,6 +49,9 @@ pub struct RowProps {
     /// Press target: rows that select on press take it; a fact row (a hash
     /// chip's row) takes none and senses hover only.
     pub on_press: Option<Box<dyn Fn() + 'static>>,
+    /// The press listener with its event, for a row that reads the modifier
+    /// keys or the click count (a changes-list selection gesture).
+    pub on_press_event: Option<PressEventHandler>,
     /// The context menu the row opens where a secondary press lands.
     pub on_context_menu: Option<ContextMenuHandler>,
     /// What screen readers say, when the content does not.
@@ -61,6 +67,7 @@ impl RowProps {
             children: Vec::new(),
             state: Rc::new(|| RowState::Default),
             on_press: None,
+            on_press_event: None,
             on_context_menu: None,
             accessibility_label: None,
             accessibility_label_of: None,
@@ -86,6 +93,13 @@ impl RowProps {
 
     pub fn on_press(mut self, on_press: impl Fn() + 'static) -> Self {
         self.on_press = Some(Box::new(on_press));
+        self
+    }
+
+    /// The press listener with its event: the modifier keys and the click
+    /// count a selection gesture reads.
+    pub fn on_press_event(mut self, on_press: impl Fn(&PressEvent) + 'static) -> Self {
+        self.on_press_event = Some(Box::new(on_press));
         self
     }
 
@@ -145,6 +159,7 @@ pub fn row(props: RowProps) -> impl IntoElement {
     for child in props.children {
         content = content.child(child);
     }
+    let pressable = props.on_press.is_some() || props.on_press_event.is_some();
     let mut row = view()
         .flex_col()
         .relative()
@@ -160,8 +175,16 @@ pub fn row(props: RowProps) -> impl IntoElement {
                 .into_element(),
             _ => view().into_element(),
         }));
+    if pressable {
+        // A row that takes a press is a native accessibility element (the
+        // platform host materializes pressed roles, not bare views).
+        row = row.role(AccessibilityRole::Button);
+    }
     if let Some(on_press) = props.on_press {
         row = row.on_press(on_press);
+    }
+    if let Some(on_press_event) = props.on_press_event {
+        row = row.on_press(move |event: &PressEvent| on_press_event(event));
     }
     if let Some(on_context_menu) = props.on_context_menu {
         row = row.on_context_menu(on_context_menu);
