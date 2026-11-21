@@ -1,7 +1,9 @@
 //! The popover over nsh-base's popover(): a trigger-anchored popup for the
 //! pickers that are not menus (the branch picker, the workspace picker).
 
-use nsh_base::popover as base_popover;
+use std::rc::Rc;
+
+use nsh_base::{PopoverEvent, popover as base_popover};
 use nsh_core::prelude::*;
 
 use crate::theme as data;
@@ -16,6 +18,11 @@ pub struct PopoverProps {
     pub width: Option<f32>,
     /// The id UI tests open it by.
     pub test_id: Option<SharedString>,
+    /// The open state, when the app owns it: the trigger and the outside
+    /// press report changes through [`PopoverProps::on_open_change`].
+    pub open: Option<Prop<Option<bool>>>,
+    /// The open state changed from inside the popover.
+    pub on_open_change: Option<Rc<dyn Fn(bool)>>,
 }
 
 impl PopoverProps {
@@ -25,7 +32,19 @@ impl PopoverProps {
             children: Vec::new(),
             width: None,
             test_id: None,
+            open: None,
+            on_open_change: None,
         }
+    }
+
+    pub fn open(mut self, open: Prop<Option<bool>>) -> Self {
+        self.open = Some(open);
+        self
+    }
+
+    pub fn on_open_change(mut self, change: impl Fn(bool) + 'static) -> Self {
+        self.on_open_change = Some(Rc::new(change));
+        self
     }
 
     pub fn child(mut self, child: impl IntoElement) -> Self {
@@ -50,6 +69,16 @@ pub fn popover(props: PopoverProps) -> impl IntoElement {
     let mut popup = base_popover()
         .popup_class("rounded-md border border-border p-3 bg-popover shadow-lg")
         .trigger(props.trigger);
+    if let Some(open) = props.open {
+        popup = popup.open(open);
+    }
+    if let Some(change) = props.on_open_change.clone() {
+        popup = popup.on_open_change(move |event: &PopoverEvent| {
+            if let PopoverEvent::OpenChange(open, _) = event {
+                change(*open);
+            }
+        });
+    }
     let mut content = view().flex_col().gap(px(data::SPACING_Y));
     if let Some(width) = props.width {
         content = content.w(px(width));

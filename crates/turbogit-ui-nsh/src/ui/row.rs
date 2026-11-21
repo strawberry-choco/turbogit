@@ -2,6 +2,8 @@
 //! composite — the row fill plus the leading rail — and ink does not
 //! invert: a selected row's text keeps the color an unselected row's has.
 
+use std::rc::Rc;
+
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
@@ -31,16 +33,25 @@ fn row_fill(state: RowState) -> AdaptiveColor {
     }
 }
 
+/// A row's context-menu handler.
+type ContextMenuHandler = Box<dyn Fn(&ContextMenuEvent) + 'static>;
+
 /// The props of [`row`].
 pub struct RowProps {
     /// The row's content: its cells, laid out by the caller.
     pub children: Vec<AnyElement>,
-    pub state: RowState,
+    /// The state read fresh on every render, so the app's signal drives
+    /// the fill and the rail.
+    pub state: Rc<dyn Fn() -> RowState>,
     /// Press target: rows that select on press take it; a fact row (a hash
     /// chip's row) takes none and senses hover only.
     pub on_press: Option<Box<dyn Fn() + 'static>>,
+    /// The context menu the row opens where a secondary press lands.
+    pub on_context_menu: Option<ContextMenuHandler>,
     /// What screen readers say, when the content does not.
     pub accessibility_label: Option<SharedString>,
+    /// The a11y label read fresh on every render, when it names its row.
+    pub accessibility_label_of: Option<Rc<dyn Fn() -> String>>,
     pub test_id: Option<SharedString>,
 }
 
@@ -48,9 +59,11 @@ impl RowProps {
     pub fn new() -> Self {
         RowProps {
             children: Vec::new(),
-            state: RowState::default(),
+            state: Rc::new(|| RowState::Default),
             on_press: None,
+            on_context_menu: None,
             accessibility_label: None,
+            accessibility_label_of: None,
             test_id: None,
         }
     }
@@ -61,7 +74,13 @@ impl RowProps {
     }
 
     pub fn state(mut self, state: RowState) -> Self {
-        self.state = state;
+        self.state = Rc::new(move || state);
+        self
+    }
+
+    /// The state read fresh on every render.
+    pub fn state_of(mut self, state: impl Fn() -> RowState + 'static) -> Self {
+        self.state = Rc::new(state);
         self
     }
 
@@ -70,8 +89,22 @@ impl RowProps {
         self
     }
 
+    pub fn on_context_menu(
+        mut self,
+        on_context_menu: impl Fn(&ContextMenuEvent) + 'static,
+    ) -> Self {
+        self.on_context_menu = Some(Box::new(on_context_menu));
+        self
+    }
+
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// The a11y label read fresh on every render.
+    pub fn accessibility_label_of(mut self, label: impl Fn() -> String + 'static) -> Self {
+        self.accessibility_label_of = Some(Rc::new(label));
         self
     }
 
@@ -92,15 +125,19 @@ impl Default for RowProps {
 /// every row's text origin.
 pub fn row(props: RowProps) -> impl IntoElement {
     let t = theme();
+    let hover_fill = t.muted;
+    let rail_fill = t.primary;
+    let hover_state = props.state.clone();
+    let rail_state = props.state.clone();
     let mut content = view()
         .flex_row()
         .items_center()
         .min_h(px(data::FILE_ROW_HEIGHT))
         .rounded(px(data::CONTROL_RADIUS))
-        .bg(row_fill(props.state))
-        .hover(|s| {
-            if props.state == RowState::Default {
-                s.bg(t.muted)
+        .bg(move || row_fill((props.state)()))
+        .hover(move |s| {
+            if (hover_state)() == RowState::Default {
+                s.bg(hover_fill)
             } else {
                 s
             }
@@ -108,23 +145,36 @@ pub fn row(props: RowProps) -> impl IntoElement {
     for child in props.children {
         content = content.child(child);
     }
-    let mut row = view().flex_col().child(content);
-    if props.state == RowState::Selected {
-        row = row.child(
-            view()
+    let mut row = view()
+        .flex_col()
+        .relative()
+        .child(content)
+        .child(dynamic(move || match (rail_state)() {
+            RowState::Selected => view()
                 .absolute()
                 .left_0()
                 .top_0()
                 .bottom_0()
                 .w(px(data::RAIL_WIDTH))
-                .bg(t.primary),
-        );
-    }
+                .bg(rail_fill)
+                .into_element(),
+            _ => view().into_element(),
+        }));
     if let Some(on_press) = props.on_press {
         row = row.on_press(on_press);
     }
-    if let Some(label) = props.accessibility_label.clone() {
-        row = row.label(label);
+    if let Some(on_context_menu) = props.on_context_menu {
+        row = row.on_context_menu(on_context_menu);
+    }
+    match props.accessibility_label_of {
+        Some(read) => {
+            row = row.label(move || SharedString::from(read()));
+        }
+        None => {
+            if let Some(label) = props.accessibility_label.clone() {
+                row = row.label(label);
+            }
+        }
     }
     if let Some(id) = props.test_id.clone() {
         row = row.test_id(&id);

@@ -26,6 +26,9 @@ pub enum ButtonVariant {
 pub struct ButtonProps {
     /// The label.
     pub label: SharedString,
+    /// Read fresh on every render, when the label names its row (a recents
+    /// remove control); `label` then holds the mount-time spelling.
+    pub label_of: Option<std::rc::Rc<dyn Fn() -> String>>,
     /// A leading icon glyph, when the button carries one.
     pub icon: Option<SharedString>,
     pub variant: ButtonVariant,
@@ -46,6 +49,7 @@ impl ButtonProps {
     pub fn new(label: impl Into<SharedString>) -> Self {
         ButtonProps {
             label: label.into(),
+            label_of: None,
             icon: None,
             variant: ButtonVariant::default(),
             size: ControlSize::default(),
@@ -55,6 +59,11 @@ impl ButtonProps {
             accessibility_label: None,
             test_id: None,
         }
+    }
+
+    pub fn label_of(mut self, label_of: impl Fn() -> String + 'static) -> Self {
+        self.label_of = Some(std::rc::Rc::new(label_of));
+        self
     }
 
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
@@ -134,15 +143,22 @@ pub fn button(props: ButtonProps) -> impl IntoElement {
     let (fill, ink) = variant_colors(props.variant);
     let (pad_x, pad_y) = (size_pad_x(props.size), size_pad_y(props.size));
     let label = props.label.clone();
+    let label_of = props.label_of.clone();
     let icon = props.icon.clone();
     let a11y = props
         .accessibility_label
         .clone()
         .unwrap_or_else(|| props.label.clone());
+    let a11y_of = props.label_of.clone();
 
     let mut inner = view()
         .role(AccessibilityRole::Button)
-        .optional_label(Some(a11y))
+        .optional_label(move || {
+            a11y_of
+                .as_ref()
+                .map(|read| SharedString::from(read()))
+                .or_else(|| Some(a11y.clone()))
+        })
         .accessibility_state(move || AccessibilityState {
             selected: props.selected,
             ..AccessibilityState::default()
@@ -166,7 +182,10 @@ pub fn button(props: ButtonProps) -> impl IntoElement {
     if let Some(icon) = icon {
         inner = inner.child(text(icon).text_size(px(size_type(props.size))));
     }
-    inner = inner.child(text(move || label.clone()));
+    inner = inner.child(match label_of {
+        Some(read) => text(move || SharedString::from(read())),
+        None => text(move || label.clone()),
+    });
     // The test id names the press target itself, so a selector finds and
     // presses the same view.
     if let Some(id) = props.test_id {

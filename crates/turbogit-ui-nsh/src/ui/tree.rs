@@ -1,6 +1,8 @@
 //! The tree over nsh-base's Tree: the changes list's grouped files, the
 //! branch tree. Rows key by the item's id (root and path, root and branch).
 
+use std::rc::Rc;
+
 use nsh_base::{TreeItem, tree as base_tree};
 use nsh_core::prelude::*;
 
@@ -40,6 +42,9 @@ impl TreeEntryProps {
     }
 }
 
+/// A tree's selection handler, by the entry's id.
+type SelectHandler = Rc<dyn Fn(&str)>;
+
 /// The props of [`tree`].
 pub struct TreeProps {
     pub items: Vec<TreeEntryProps>,
@@ -50,6 +55,8 @@ pub struct TreeProps {
     /// What screen readers call the tree.
     pub accessibility_label: Option<SharedString>,
     pub test_id: Option<SharedString>,
+    /// The row the user selected, by the entry's id.
+    pub on_select: Option<SelectHandler>,
 }
 
 impl TreeProps {
@@ -60,7 +67,13 @@ impl TreeProps {
             default_selected: None,
             accessibility_label: None,
             test_id: None,
+            on_select: None,
         }
+    }
+
+    pub fn on_select(mut self, select: impl Fn(&str) + 'static) -> Self {
+        self.on_select = Some(Rc::new(select));
+        self
     }
 
     pub fn default_expanded(mut self, id: impl Into<SharedString>) -> Self {
@@ -105,6 +118,9 @@ pub fn tree(props: TreeProps) -> impl IntoElement {
     }
     if let Some(label) = props.accessibility_label.clone() {
         inner = inner.accessibility_label(label);
+    }
+    if let Some(select) = props.on_select.clone() {
+        inner = inner.on_selected_change(move |id: &SharedString| select(id));
     }
     let host = view().flex_1().child(inner);
     match props.test_id.clone() {

@@ -113,6 +113,13 @@ pub fn tabs(props: TabsProps) -> impl IntoElement {
                         ..AccessibilityState::default()
                     });
                 if let Some(id) = item.test_id.clone() {
+                    // The press walk looks at the matched view and its
+                    // ancestors, never its children: a test id on the
+                    // wrapper only presses when the wrapper hears presses.
+                    if let Some(on_change) = on_change.as_ref() {
+                        let on_change = on_change.clone();
+                        host = host.on_press(move || on_change(at));
+                    }
                     host = host.test_id(&id);
                 }
                 host.child(tab)

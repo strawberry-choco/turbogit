@@ -9,6 +9,29 @@ use crate::test_ids;
 use crate::theme as data;
 use crate::ui::button::{ButtonProps, ButtonVariant, button};
 
+/// One footer action of a dialog that offers several verbs (a confirm's
+/// `Shelve first` beside its `Discard`).
+#[derive(Clone)]
+pub struct DialogAction {
+    pub label: SharedString,
+    pub variant: ButtonVariant,
+    pub on_press: std::rc::Rc<dyn Fn() + 'static>,
+}
+
+impl DialogAction {
+    pub fn new(
+        label: impl Into<SharedString>,
+        variant: ButtonVariant,
+        on_press: impl Fn() + 'static,
+    ) -> Self {
+        DialogAction {
+            label: label.into(),
+            variant,
+            on_press: std::rc::Rc::new(on_press),
+        }
+    }
+}
+
 /// The props of [`dialog`].
 pub struct DialogProps {
     /// The dialog's name, the selector's key: `rename-branch`.
@@ -23,6 +46,11 @@ pub struct DialogProps {
     pub destructive: bool,
     pub on_action: Option<std::rc::Rc<dyn Fn() + 'static>>,
     pub on_cancel: Option<std::rc::Rc<dyn Fn() + 'static>>,
+    /// Extra footer verbs; non-empty replaces the single action, and the
+    /// cancel moves last so a confirm reads in prompt order.
+    pub actions: Vec<DialogAction>,
+    /// A quiet verb above the footer rule (a confirm's disclosure).
+    pub disclosure: Option<(SharedString, std::rc::Rc<dyn Fn() + 'static>)>,
 }
 
 impl DialogProps {
@@ -35,6 +63,8 @@ impl DialogProps {
             destructive: false,
             on_action: None,
             on_cancel: None,
+            actions: Vec::new(),
+            disclosure: None,
         }
     }
 
@@ -45,6 +75,20 @@ impl DialogProps {
 
     pub fn action(mut self, action: impl Into<SharedString>) -> Self {
         self.action = action.into();
+        self
+    }
+
+    pub fn with_action(mut self, action: DialogAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+
+    pub fn disclosure(
+        mut self,
+        label: impl Into<SharedString>,
+        on_press: impl Fn() + 'static,
+    ) -> Self {
+        self.disclosure = Some((label.into(), std::rc::Rc::new(on_press)));
         self
     }
 
@@ -93,13 +137,31 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
     if let Some(cancel) = cancel.clone() {
         cancel_button = cancel_button.on_press(move || cancel());
     }
-    let mut action_button = ButtonProps::new(action_label).variant(variant);
-    action_button = action_button.test_id(&test_ids::dialog_action(&name));
-    if let Some(confirm) = confirm.clone() {
-        action_button = action_button.on_press(move || confirm());
+    let mut footer = view().flex_row().justify_end().gap(px(data::SPACING_X));
+    if props.actions.is_empty() {
+        let mut action_button = ButtonProps::new(action_label).variant(variant);
+        action_button = action_button.test_id(&test_ids::dialog_action(&name));
+        if let Some(confirm) = confirm.clone() {
+            action_button = action_button.on_press(move || confirm());
+        }
+        footer = footer
+            .child(button(action_button))
+            .child(button(cancel_button));
+    } else {
+        let last = props.actions.len().saturating_sub(1);
+        for (at, action) in props.actions.iter().enumerate() {
+            let mut action_button = ButtonProps::new(action.label.clone()).variant(action.variant);
+            if at == last {
+                action_button = action_button.test_id(&test_ids::dialog_action(&name));
+            }
+            let on_press = action.on_press.clone();
+            action_button = action_button.on_press(move || on_press());
+            footer = footer.child(button(action_button));
+        }
+        footer = footer.child(button(cancel_button));
     }
 
-    let card = view()
+    let mut card = view()
         .mt(px(96.0))
         .self_center()
         .w(px(420.0))
@@ -117,16 +179,13 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.card_foreground),
         )
-        .children(props.children)
-        .child(view().h(px(1.0)).bg(t.border))
-        .child(
-            view()
-                .flex_row()
-                .justify_end()
-                .gap(px(data::SPACING_X))
-                .child(button(cancel_button))
-                .child(button(action_button)),
-        );
+        .children(props.children);
+    if let Some((label, run)) = props.disclosure.clone() {
+        let mut quiet = ButtonProps::new(label).variant(ButtonVariant::Ghost);
+        quiet = quiet.on_press(move || run());
+        card = card.child(button(quiet));
+    }
+    card = card.child(view().h(px(1.0)).bg(t.border)).child(footer);
 
     base_dialog()
         .close_on_escape(true)

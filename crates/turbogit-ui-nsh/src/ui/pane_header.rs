@@ -14,6 +14,9 @@ pub struct PaneHeaderProps {
     pub title: SharedString,
     /// A trailing count, as a chip.
     pub count: Option<SharedString>,
+    /// The count read fresh on every render (a pane header whose count
+    /// follows the selection).
+    pub count_of: Option<std::rc::Rc<dyn Fn() -> String>>,
     /// The right-aligned action slot.
     pub actions: Vec<AnyElement>,
     pub test_id: Option<SharedString>,
@@ -24,6 +27,7 @@ impl PaneHeaderProps {
         PaneHeaderProps {
             title: title.into(),
             count: None,
+            count_of: None,
             actions: Vec::new(),
             test_id: None,
         }
@@ -31,6 +35,11 @@ impl PaneHeaderProps {
 
     pub fn count(mut self, count: impl Into<SharedString>) -> Self {
         self.count = Some(count.into());
+        self
+    }
+
+    pub fn count_of(mut self, count_of: impl Fn() -> String + 'static) -> Self {
+        self.count_of = Some(std::rc::Rc::new(count_of));
         self
     }
 
@@ -62,6 +71,14 @@ pub fn pane_header(props: PaneHeaderProps) -> impl IntoElement {
         );
     if let Some(count) = props.count.clone() {
         row = row.child(chip(ChipProps::new(count).variant(ChipVariant::Raised)));
+    }
+    if let Some(count_of) = props.count_of.clone() {
+        let t = theme();
+        row = row.child(
+            text(move || SharedString::from(count_of()))
+                .text_size(px(data::TYPE_CHIP))
+                .text_color(t.muted_foreground),
+        );
     }
     for action in props.actions {
         row = row.child(action);
