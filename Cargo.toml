@@ -27,6 +27,14 @@ git2 = "0.21.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 jiff = "0.2.35"
 log = "0.4.34"
+nsh-base = "0.5.0"
+nsh-core = "0.5.0"
+# The headless engine and the test runner: the JS stack they pull by default
+# (QuickJS) is dead weight for a Rust root, and the release profile hits a
+# proc-macro load failure with it on (the n0 spike's finding).
+nsh-engine = { version = "0.5.0", default-features = false }
+nsh-testing = { version = "0.5.0", default-features = false }
+env_logger = "0.11"
 nucleo-matcher = "0.3.1"
 rfd = "0.17.2"
 ron = "0.12.2"
@@ -42,6 +50,7 @@ turbogit-engine = { path = "crates/turbogit-engine" }
 turbogit-services = { path = "crates/turbogit-services" }
 turbogit-app = { path = "crates/turbogit-app" }
 turbogit-ui = { path = "crates/turbogit-ui" }
+turbogit-ui-nsh = { path = "crates/turbogit-ui-nsh" }
 test-support = { path = "crates/test-support" }
 
 [workspace.lints.rust]

@@ -1,0 +1,69 @@
+//! The selector vocabulary UI tests drive: one place spells every test id.
+//! Rows key by root and commit, files by root and path, dialogs by name, so
+//! a selector names what it addresses instead of which row happens to be at
+//! an index.
+
+/// A commit row of `root`, keyed by its commit id.
+pub fn commit_row(root: &str, commit: &str) -> String {
+    format!("row:{root}:{commit}")
+}
+
+/// A file row of `root`, keyed by its path.
+pub fn file_row(root: &str, path: &str) -> String {
+    format!("file:{root}:{path}")
+}
+
+/// The dialog named `name` (its title's slug: `rename-branch`).
+pub fn dialog(name: &str) -> String {
+    format!("dialog:{name}")
+}
+
+/// The primary action of the dialog named `name`.
+pub fn dialog_action(name: &str) -> String {
+    format!("dialog:{name}:action")
+}
+
+/// The tab named `name` (Commit, Log, Branches, ...).
+pub fn tab(name: &str) -> String {
+    format!("tab:{name}")
+}
+
+/// A toolbar control named `name`.
+pub fn toolbar(name: &str) -> String {
+    format!("toolbar:{name}")
+}
+
+/// The gallery section titled `name`.
+pub fn gallery_section(name: &str) -> String {
+    format!("gallery:{name}")
+}
+
+/// A gallery demo control named `name`, one per control state.
+pub fn demo(name: &str) -> String {
+    format!("demo:{name}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_key_by_root_and_their_key() {
+        assert_eq!(commit_row("main", "abc123"), "row:main:abc123");
+        assert_eq!(file_row("main", "src/lib.rs"), "file:main:src/lib.rs");
+        assert_ne!(
+            commit_row("main", "abc123"),
+            commit_row("other", "abc123"),
+            "the same commit id in two roots addresses two rows"
+        );
+    }
+
+    #[test]
+    fn dialogs_key_by_name() {
+        assert_eq!(dialog("rename-branch"), "dialog:rename-branch");
+        assert_eq!(
+            dialog_action("rename-branch"),
+            "dialog:rename-branch:action"
+        );
+    }
+}
