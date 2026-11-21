@@ -21,6 +21,7 @@ use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::input::{InputProps, input, text_area};
 use crate::ui::menu::{MenuEntry, MenuProps, context_menu_host, menu};
 use crate::ui::pane_header::{PaneHeaderProps, pane_header};
+use crate::ui::popover::{PopoverProps, popover};
 use crate::ui::progress::{ProgressProps, progress};
 use crate::ui::row::{RowProps, RowState, row};
 use crate::ui::scrollbar::{ScrollbarProps, scrollbar};
@@ -63,6 +64,7 @@ pub fn kitchen_sink(handle: AppHandle, toasts: ToastShared) -> impl IntoElement 
                     .child(section("data-table", "Data table", data_table_section()))
                     .child(section("tree", "Tree", tree_section()))
                     .child(section("menus", "Menus", menu_section()))
+                    .child(section("popover", "Popover", popover_section()))
                     .child(section(
                         "overlays",
                         "Overlays",
@@ -243,6 +245,13 @@ fn inputs_section() -> impl IntoElement {
                     .test_id(&test_ids::demo("input-multiline")),
             )
             .into_element(),
+            text_area(
+                InputProps::new()
+                    .placeholder("Multiline, disabled")
+                    .disabled(true)
+                    .test_id(&test_ids::demo("input-multiline-disabled")),
+            )
+            .into_element(),
             // Uncontrolled: the echo label reads what the typist typed, the
             // input keeps its own value (the bridge rule).
             input(
@@ -308,6 +317,7 @@ fn select_items() -> Vec<SelectItem> {
 fn select_section() -> impl IntoElement {
     let chosen = signal(String::new());
     let combo_chosen = signal(Vec::<SharedString>::new());
+    let combo_multi = signal(Vec::<SharedString>::new());
     view()
         .flex_col()
         .max_w(px(640.0))
@@ -346,6 +356,25 @@ fn select_section() -> impl IntoElement {
                 .test_id(&test_ids::demo("combobox-label"))
                 .text_size(px(data::TYPE_BODY))
                 .into_element(),
+            combobox(
+                ComboboxProps::new(select_items())
+                    .multiple(true)
+                    .placeholder("Pick several")
+                    .on_change(move |values: &Vec<SharedString>| combo_multi.set(values.clone()))
+                    .test_id(&test_ids::demo("combobox-multiple")),
+            )
+            .into_element(),
+            text(move || format!("multi: {}", combo_multi.get().join(", ")))
+                .test_id(&test_ids::demo("combobox-multiple-label"))
+                .text_size(px(data::TYPE_BODY))
+                .into_element(),
+            combobox(
+                ComboboxProps::new(select_items())
+                    .disabled(true)
+                    .placeholder("Disabled")
+                    .test_id(&test_ids::demo("combobox-disabled")),
+            )
+            .into_element(),
         ])
 }
 
@@ -446,24 +475,37 @@ fn tabs_section() -> impl IntoElement {
 }
 
 fn toolbar_section() -> impl IntoElement {
-    toolbar(
-        ToolbarProps::new()
-            .child(button(
-                ButtonProps::new("Fetch")
-                    .variant(ButtonVariant::Secondary)
-                    .test_id(&test_ids::demo("button-fetch")),
-            ))
-            .child(button(
-                ButtonProps::new("Pull")
-                    .variant(ButtonVariant::Secondary)
-                    .test_id(&test_ids::demo("button-pull")),
-            ))
-            .child(button(
-                ButtonProps::new("Push").test_id(&test_ids::demo("button-push")),
-            ))
-            .test_id(&test_ids::toolbar("sync")),
-    )
-    .into_element()
+    view().flex_col().gap(px(data::SPACING_Y)).children([
+        toolbar(
+            ToolbarProps::new()
+                .child(button(
+                    ButtonProps::new("Fetch")
+                        .variant(ButtonVariant::Secondary)
+                        .test_id(&test_ids::demo("button-fetch")),
+                ))
+                .child(button(
+                    ButtonProps::new("Pull")
+                        .variant(ButtonVariant::Secondary)
+                        .test_id(&test_ids::demo("button-pull")),
+                ))
+                .child(button(
+                    ButtonProps::new("Push").test_id(&test_ids::demo("button-push")),
+                ))
+                .test_id(&test_ids::toolbar("sync")),
+        )
+        .into_element(),
+        toolbar(
+            ToolbarProps::new()
+                .disabled(true)
+                .child(button(
+                    ButtonProps::new("Fetch")
+                        .variant(ButtonVariant::Secondary)
+                        .test_id(&test_ids::demo("button-fetch-disabled")),
+                ))
+                .test_id(&test_ids::toolbar("sync-disabled")),
+        )
+        .into_element(),
+    ])
 }
 
 fn pane_header_section() -> impl IntoElement {
@@ -586,6 +628,34 @@ fn menu_section() -> impl IntoElement {
         |_| {},
     );
     row_of([menu.into_element(), context.into_element()])
+}
+
+fn popover_section() -> impl IntoElement {
+    let t = theme();
+    // The trigger view carries the test id: the base popover attaches the
+    // toggle handler to the trigger, so a selector presses the handler's
+    // owner, not the wrapper.
+    let trigger = view()
+        .px_3()
+        .py_1()
+        .rounded(px(data::CONTROL_RADIUS))
+        .bg(t.secondary)
+        .test_id(&test_ids::demo("popover-trigger"))
+        .child(text("Open popover").text_size(px(data::TYPE_BODY)));
+    row_of([popover(
+        PopoverProps::new(trigger)
+            .width(220.0)
+            .child(text("Checkout branch").text_size(px(data::TYPE_BODY)))
+            .child(
+                button(
+                    ButtonProps::new("Checkout")
+                        .variant(ButtonVariant::Secondary)
+                        .test_id(&test_ids::demo("popover-checkout")),
+                )
+                .into_element(),
+            ),
+    )
+    .into_element()])
 }
 
 fn overlays_section(handle: AppHandle, toasts: ToastShared) -> impl IntoElement {

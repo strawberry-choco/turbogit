@@ -80,8 +80,12 @@ kept a separate token from the rail.
 
 ## Controls and their states
 
-Every control takes variant, size, state props, and slots; the test id
-sits on the press target itself (`src/test_ids.rs` spells the vocabulary).
+State props and slots on every control; variant and size props only where
+the control has a real second shape (button, icon button, input and text
+area, select, combobox). Single-density controls carry their density
+through the token layer, not a size prop; when a consumer needs a second
+shape, the prop arrives with that need. The test id sits on the press
+target itself (`src/test_ids.rs` spells the vocabulary).
 
 | Control | States | Slots |
 | --- | --- | --- |
@@ -130,6 +134,18 @@ change; the nsh controls that carry their own motion honor it natively.
 | Tooltip | show, hide | Appears after the delay; hides at once |
 | Progress | determinate | The indicator's width follows the value with no spring |
 | Scrollbar | show, hide | The bar's fade while scrolling, per `ScrollbarMotion` |
+| Icon button | hover, pressed, focus, disabled | The muted band steps with the pointer, the accent at press, the ring with the keyboard focus, no timed transition; disabled dims at once |
+| Input | focus, disabled, read-only, masked | The ring appears with the keyboard focus, no fade; disabled dims at once; read-only and masked change no paint |
+| Text area | focus, disabled | The ring appears with the keyboard focus, no fade; the height follows the text with no animation |
+| Chip | variant, disabled | A fact marker, not a control: the fill switches at once, no hover or press |
+| Toolbar | item focus stop, whole-bar disabled | The roving stop moves with the arrows at once; a disabled bar dims its items at once |
+| Pane header | none of its own | Static chrome: the hairline and the count chip switch at once; its action slot animates as the actions' own controls |
+| Row | hover, selected | The band switches at once; the selected rail appears with the selection, no slide |
+| Card | none | A static surface: its fill and padding never change |
+| Data table | row hover, row selected | The band switches at once, no timed transition |
+| Menu | open, close, item hover or focus | The popup appears and goes at once, no fade; the accent band switches at once |
+| Context menu | open, close | The platform's own popup at the pointer; the app animates nothing |
+| Alert dialog | present, dismiss | The platform presents and dismisses it (NSAlert on macOS); the app animates nothing |
 
 ## What the review judges
 

@@ -43,6 +43,11 @@ test("lane 4: the overlays open and Escape dismisses", async () => {
   await app.waitFor("text:Open dialog");
   await app.press("text:Push toast");
   await app.waitFor("text:toast: pushed");
+  await app.press("id:demo:popover-trigger");
+  await app.waitFor("text:Checkout branch");
+  await app.screenshot("n1-popover.png");
+  await app.keyboard.press("escape");
+  await app.waitFor("text:Open popover");
 });
 
 test("lane 5: typing covers single line, masked, and multiline", async () => {
