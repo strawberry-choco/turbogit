@@ -141,6 +141,17 @@ pub fn launched_over(project: &Path, config: &Path) -> Mounted {
 /// The shell over `for_roots(project, roots)`: exactly the registered
 /// roots, the shape the shell and log suites mount.
 pub fn for_roots(project: &Path, roots: &[PathBuf]) -> Mounted {
+    for_roots_seeded(project, roots, |_| {})
+}
+
+/// [`for_roots`] after `seed` has touched the prepared state: the fixtures
+/// that exist only as app state (a shelf record, a durable selection) start
+/// where the suite puts them, before the root mounts and reads.
+pub fn for_roots_seeded(
+    project: &Path,
+    roots: &[PathBuf],
+    seed: impl FnOnce(&mut AppState) + Send + 'static,
+) -> Mounted {
     let project = project.to_path_buf();
     let roots = roots.to_vec();
     let config = tempfile::tempdir().expect("temp config dir");
@@ -148,6 +159,7 @@ pub fn for_roots(project: &Path, roots: &[PathBuf]) -> Mounted {
     let app = Headless::start(app_config(move || {
         let mut state = AppState::for_roots(&project, &roots);
         state.recents_config_dir = Some(config_for_state.clone());
+        seed(&mut state);
         // `for_roots` registers without the reads a launch fires; the
         // registration's own refresh is what fills status, ahead/behind,
         // and the first log batch, as `AppState::launch_in`'s rescan does.
@@ -335,4 +347,48 @@ pub fn commit_into(repo: &Path, file: &str, message: &str) {
     std::fs::write(repo.join(file), format!("{message}\n")).expect("write file");
     git(repo, &["add", "."]);
     commit(repo, file, &format!("{message}\n"), message);
+}
+
+/// A repository with three committed files, all modified afterwards: the
+/// changes list's shelf of rows.
+pub fn dirty_files_repo(parent: &Path, name: &str) -> PathBuf {
+    let repo = seeded_repo(parent, name);
+    for file in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(repo.join(file), "baseline\n").expect("write baseline");
+    }
+    git(&repo, &["add", "."]);
+    commit(&repo, "a.txt", "baseline\n", "files");
+    for file in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(repo.join(file), "modified\n").expect("write change");
+    }
+    repo
+}
+
+/// The Commit tab over `roots`, with the changes row set settled.
+pub fn commit_tab(project: &Path, roots: &[PathBuf]) -> Mounted {
+    let mut app = for_roots(project, roots);
+    app.first_render().expect("the shell mounts");
+    app.press("id:tab:Commit").expect("the Commit tab");
+    app.wait_for("id:route:changes")
+        .expect("the changes surface");
+    app.wait_for("id:changes:header").expect("the changes card");
+    app
+}
+
+/// Expands the repository group named `name`.
+pub fn open_group(app: &mut Headless, name: &str) {
+    app.press(&format!("id:changes:group:{name}"))
+        .expect("the repository group");
+    app.wait_for(&format!("id:changes:group:{name}"))
+        .expect("the group stays");
+}
+
+/// The staged patch of `repo`, as `git diff --cached` prints it.
+pub fn staged_patch(repo: &Path) -> String {
+    git(repo, &["diff", "--cached"])
+}
+
+/// The working-tree patch of `repo`, as `git diff` prints it.
+pub fn local_patch(repo: &Path) -> String {
+    git(repo, &["diff"])
 }
