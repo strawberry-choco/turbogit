@@ -6,9 +6,11 @@ publish = false
 
 [dependencies]
 turbogit-app = { workspace = true }
+turbogit-domain = { workspace = true }
 nsh-core = { workspace = true }
 nsh-base = { workspace = true }
 env_logger = { workspace = true }
+chrono = { workspace = true }
 
 # The platform backends, at the feature set the n0 spike proved. The editor
 # and shader features are what `nsh-base`'s components need; the rest carry

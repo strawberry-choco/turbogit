@@ -33,6 +33,47 @@ pub fn toolbar(name: &str) -> String {
     format!("toolbar:{name}")
 }
 
+/// The route registered under `id` (`changes`, `branches`), the placeholder
+/// empty state a later phase replaces.
+pub fn route(id: impl std::fmt::Display) -> String {
+    format!("route:{id}")
+}
+
+/// A welcome-surface control named `name` (`clone`, `recent:alpha`).
+pub fn welcome(name: impl std::fmt::Display) -> String {
+    format!("welcome:{name}")
+}
+
+/// A log-surface control named `name` (`filter-branch`, `ref:main`).
+pub fn log(name: impl std::fmt::Display) -> String {
+    format!("log:{name}")
+}
+
+/// A workspace-picker control named `name` (`switch`, `row:alpha`).
+pub fn workspace(name: impl std::fmt::Display) -> String {
+    format!("workspace:{name}")
+}
+
+/// The banner strip.
+pub fn banner() -> String {
+    "banner".to_string()
+}
+
+/// The shell's status bar.
+pub fn status_bar() -> String {
+    "status-bar".to_string()
+}
+
+/// The status bar's busy indicator.
+pub fn status_bar_busy() -> String {
+    "status-bar:busy".to_string()
+}
+
+/// The shell's activity feed, named `name` (`feed`, `feed-clear`).
+pub fn activity(name: impl std::fmt::Display) -> String {
+    format!("activity:{name}")
+}
+
 /// The gallery section titled `name`.
 pub fn gallery_section(name: &str) -> String {
     format!("gallery:{name}")
