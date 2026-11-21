@@ -54,6 +54,41 @@ pub fn workspace(name: impl std::fmt::Display) -> String {
     format!("workspace:{name}")
 }
 
+/// A changes-surface control named `name` (`filter`, `subtab:Shelf`).
+pub fn changes(name: impl std::fmt::Display) -> String {
+    format!("changes:{name}")
+}
+
+/// A changed-file row of `root`, keyed by its repository-relative path.
+pub fn change_row(root: &str, path: &str) -> String {
+    format!("changes:row:{root}:{path}")
+}
+
+/// The changed-file row's staging checkbox.
+pub fn change_check(root: &str, path: &str) -> String {
+    format!("changes:check:{root}:{path}")
+}
+
+/// A diff-viewer control named `name` (`next`, `add:12`, `check:12`).
+pub fn diff(name: impl std::fmt::Display) -> String {
+    format!("diff:{name}")
+}
+
+/// An image or binary pane control named `name`.
+pub fn image(name: impl std::fmt::Display) -> String {
+    format!("image:{name}")
+}
+
+/// A shelf or stash row of `root`, keyed by its name or index.
+pub fn shelf(name: impl std::fmt::Display) -> String {
+    format!("shelf:{name}")
+}
+
+/// A commit-card control named `name` (`message`, `action`, `amend`).
+pub fn commit(name: impl std::fmt::Display) -> String {
+    format!("commit:{name}")
+}
+
 /// The banner strip.
 pub fn banner() -> String {
     "banner".to_string()

@@ -4,11 +4,16 @@
 //! unbuilt route shares, and [`route_for_tab`] is the shell's map from a
 //! tab to its route.
 
+pub mod changes;
+pub mod commit;
+pub mod diff_view;
 pub mod feedback;
 pub mod gallery;
+pub mod image_diff;
 pub mod log;
 pub mod log_graph;
 pub mod picks;
+pub mod shelf;
 pub mod shell;
 pub mod welcome;
 pub mod workspace_picker;

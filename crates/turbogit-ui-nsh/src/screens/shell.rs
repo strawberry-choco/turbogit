@@ -12,6 +12,7 @@ use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{DisplayName, Root, RootId};
 
 use crate::bridge::AppHandle;
+use crate::screens::changes;
 use crate::screens::log;
 use crate::screens::placeholder;
 use crate::screens::route_for_tab;
@@ -86,6 +87,7 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
 
     let content_handle = handle.clone();
     let content = dynamic(move || match switcher.signal().get() {
+        Tab::Commit => changes::changes_screen(content_handle.clone()).into_element(),
         Tab::Log => log::log_screen(content_handle.clone(), switcher.clone()).into_element(),
         other => placeholder(route_for_tab(other)).into_element(),
     });
