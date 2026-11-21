@@ -12,10 +12,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # ubuntu-24.04 is pinned: the nsh Linux backend needs GTK 4.14 and
+        # glibc 2.39, the 24.04 floor (ADR-0035).
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install nsh prerequisites (ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev clang
       - run: cargo check --workspace --all-targets
 
   test:
@@ -23,13 +28,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install git (ubuntu)
+      - name: Install git and nsh prerequisites (ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y git
+        run: sudo apt-get update && sudo apt-get install -y git libgtk-4-dev clang
       - run: cargo test --workspace --all-targets
 
   fmt:
@@ -45,13 +50,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install git (ubuntu)
+      - name: Install git and nsh prerequisites (ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y git
+        run: sudo apt-get update && sudo apt-get install -y git libgtk-4-dev clang
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   commits:

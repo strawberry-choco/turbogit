@@ -1,0 +1,114 @@
+//! The tree over nsh-base's Tree: the changes list's grouped files, the
+//! branch tree. Rows key by the item's id (root and path, root and branch).
+
+use nsh_base::{TreeItem, tree as base_tree};
+use nsh_core::prelude::*;
+
+/// One entry of a tree.
+#[derive(Debug, Clone)]
+pub struct TreeEntryProps {
+    /// The item's id: unique in the tree (root and path, root and branch).
+    pub id: SharedString,
+    /// What the row shows.
+    pub label: SharedString,
+    /// The entries under it; with any, the row expands and collapses.
+    pub children: Vec<TreeEntryProps>,
+}
+
+impl TreeEntryProps {
+    pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+        TreeEntryProps {
+            id: id.into(),
+            label: label.into(),
+            children: Vec::new(),
+        }
+    }
+
+    pub fn child(mut self, child: TreeEntryProps) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    fn into_item(self) -> TreeItem {
+        let mut item = TreeItem::new(self.id, self.label);
+        item.children = self
+            .children
+            .into_iter()
+            .map(TreeEntryProps::into_item)
+            .collect();
+        item
+    }
+}
+
+/// The props of [`tree`].
+pub struct TreeProps {
+    pub items: Vec<TreeEntryProps>,
+    /// The expanded ids at first.
+    pub default_expanded: Vec<SharedString>,
+    /// The selected id at first.
+    pub default_selected: Option<SharedString>,
+    /// What screen readers call the tree.
+    pub accessibility_label: Option<SharedString>,
+    pub test_id: Option<SharedString>,
+}
+
+impl TreeProps {
+    pub fn new(items: Vec<TreeEntryProps>) -> Self {
+        TreeProps {
+            items,
+            default_expanded: Vec::new(),
+            default_selected: None,
+            accessibility_label: None,
+            test_id: None,
+        }
+    }
+
+    pub fn default_expanded(mut self, id: impl Into<SharedString>) -> Self {
+        self.default_expanded.push(id.into());
+        self
+    }
+
+    pub fn default_selected(mut self, id: impl Into<SharedString>) -> Self {
+        self.default_selected = Some(id.into());
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    pub fn test_id(mut self, test_id: &str) -> Self {
+        self.test_id = Some(SharedString::from(test_id.to_string()));
+        self
+    }
+}
+
+/// A tree: rows at the row height the item class carries, the accent band
+/// on the selected row, the muted band under the pointer. The tree element
+/// takes no test id, so the wrapper names the view that carries it.
+pub fn tree(props: TreeProps) -> impl IntoElement {
+    let items: Vec<TreeItem> = props
+        .items
+        .into_iter()
+        .map(TreeEntryProps::into_item)
+        .collect();
+    let mut inner = base_tree()
+        .items(items)
+        .list_class("p-1")
+        .item_class("h-7 flex-row items-center rounded-sm px-2 hover:bg-muted selected:bg-accent");
+    if !props.default_expanded.is_empty() {
+        inner = inner.default_expanded(props.default_expanded.clone());
+    }
+    if let Some(selected) = props.default_selected.clone() {
+        inner = inner.default_selected(selected);
+    }
+    if let Some(label) = props.accessibility_label.clone() {
+        inner = inner.accessibility_label(label);
+    }
+    let host = view().flex_1().child(inner);
+    match props.test_id.clone() {
+        Some(id) => view().flex_1().test_id(&id).child(host),
+        None => view().flex_1().child(host),
+    }
+}
