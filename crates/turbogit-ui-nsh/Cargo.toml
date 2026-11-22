@@ -57,6 +57,9 @@ nsh-engine = { workspace = true }
 nsh-testing = { workspace = true }
 tempfile = { workspace = true }
 test-support = { workspace = true, features = ["nsh"] }
+egui = { workspace = true }
+egui_kittest = { workspace = true }
+turbogit-ui = { workspace = true }
 
 [lints]
 workspace = true

@@ -6752,6 +6752,8 @@ name = "turbogit-ui-nsh"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "egui",
+ "egui_kittest",
  "env_logger",
  "nsh-base",
  "nsh-core",
@@ -6765,6 +6767,7 @@ dependencies = [
  "test-support",
  "turbogit-app",
  "turbogit-domain",
+ "turbogit-ui",
 ]
 
 [[package]]
