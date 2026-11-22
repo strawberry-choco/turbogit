@@ -2,7 +2,9 @@
 //! and resizable columns, row height from the density tokens. The parts the
 //! app styles name the chrome tokens through Tailwind classes.
 
-use nsh_base::{DataTableClasses, DataTableColumn, DataTableRows, data_table as base_table};
+use nsh_base::{
+    DataTableCell, DataTableClasses, DataTableColumn, DataTableRows, data_table as base_table,
+};
 use nsh_core::prelude::*;
 
 use crate::theme as data;
@@ -43,6 +45,9 @@ impl DataTableColumnProps {
     }
 }
 
+/// A cell the app draws.
+pub type CellPaint = std::rc::Rc<dyn Fn(&DataTableCell) -> AnyElement>;
+
 /// The props of [`data_table`].
 pub struct DataTableProps {
     pub columns: Vec<DataTableColumnProps>,
@@ -53,6 +58,8 @@ pub struct DataTableProps {
     /// What screen readers call the table.
     pub accessibility_label: Option<SharedString>,
     pub test_id: Option<SharedString>,
+    /// A cell the app draws: a row action, a state dot.
+    pub render_cell: Option<CellPaint>,
 }
 
 impl DataTableProps {
@@ -63,7 +70,13 @@ impl DataTableProps {
             row_height: data::FILE_ROW_HEIGHT,
             accessibility_label: None,
             test_id: None,
+            render_cell: None,
         }
+    }
+
+    pub fn render_cell(mut self, render: impl Fn(&DataTableCell) -> AnyElement + 'static) -> Self {
+        self.render_cell = Some(std::rc::Rc::new(render));
+        self
     }
 
     pub fn row_height(mut self, row_height: f32) -> Self {
@@ -103,13 +116,18 @@ pub fn data_table(props: DataTableProps) -> impl IntoElement {
         .data(props.data)
         .row_height(px(props.row_height))
         .classes(classes);
-    let mut host = view().flex_1();
+    let inner = match props.render_cell.clone() {
+        Some(render) => inner.render_cell(move |cell: &DataTableCell| render(cell)),
+        None => inner,
+    };
+    let inner = inner.w_full().h_full();
+    let mut host = view().flex_1().w_full();
     if let Some(label) = props.accessibility_label.clone() {
         host = host.label(label);
     }
     let host = host.child(inner);
     match props.test_id.clone() {
-        Some(id) => view().flex_1().test_id(&id).child(host),
-        None => view().flex_1().child(host),
+        Some(id) => view().flex_1().w_full().test_id(&id).child(host),
+        None => view().flex_1().w_full().child(host),
     }
 }
