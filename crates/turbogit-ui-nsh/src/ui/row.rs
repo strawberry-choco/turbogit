@@ -137,7 +137,7 @@ impl Default for RowProps {
 /// A row: the fill from its state, the rail paint on a selected row. The
 /// rail is paint, not layout — reserving its width as padding would shift
 /// every row's text origin.
-pub fn row(props: RowProps) -> impl IntoElement {
+pub fn row(props: RowProps) -> View {
     let t = theme();
     let hover_fill = t.muted;
     let rail_fill = t.primary;

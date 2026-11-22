@@ -59,6 +59,7 @@ tempfile = { workspace = true }
 test-support = { workspace = true, features = ["nsh"] }
 egui = { workspace = true }
 egui_kittest = { workspace = true }
+turbogit-engine = { workspace = true }
 turbogit-ui = { workspace = true }
 
 [lints]

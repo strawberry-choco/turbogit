@@ -54,6 +54,9 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
     let t = theme();
     let activity_expanded = signal(handle.peek(|s| s.ui.activity.expanded));
     let tool_open = signal(None::<&'static str>);
+    // The N5 surfaces have no tab of their own: this band opens their
+    // routes, and a tab press returns to the tab's own surface.
+    let n5_route = signal(None::<String>);
 
     // The worktree and submodule caches fire like the egui shell's did: the
     // Worktrees and Submodules routes read them.
@@ -84,18 +87,61 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         .on_change(move |at| {
             if let Some((value, _)) = TAB_TITLES.get(at) {
                 tab_for_press.select(*value);
+                n5_route.set(None);
             }
         }),
     );
 
     let content_handle = handle.clone();
-    let content = dynamic(move || match switcher.signal().get() {
-        Tab::Commit => changes::changes_screen(content_handle.clone()).into_element(),
-        Tab::Log => log::log_screen(content_handle.clone(), switcher.clone()).into_element(),
-        Tab::Branches => branches::branches_screen(content_handle.clone()).into_element(),
-        Tab::Worktrees => worktrees::worktrees_screen(content_handle.clone()).into_element(),
-        Tab::Submodules => submodules::submodules_screen(content_handle.clone()).into_element(),
+    let content_route = n5_route;
+    let content = dynamic(move || {
+        if let Some(id) = content_route.get() {
+            return crate::screens::route_screen(content_handle.clone(), &id);
+        }
+        match switcher.signal().get() {
+            Tab::Commit => changes::changes_screen(content_handle.clone()).into_element(),
+            Tab::Log => log::log_screen(content_handle.clone(), switcher.clone()).into_element(),
+            Tab::Branches => branches::branches_screen(content_handle.clone()).into_element(),
+            Tab::Worktrees => worktrees::worktrees_screen(content_handle.clone()).into_element(),
+            Tab::Submodules => submodules::submodules_screen(content_handle.clone()).into_element(),
+        }
     });
+
+    let mut n5_band = view()
+        .flex_row()
+        .items_center()
+        .gap(px(data::DENSITY_LIST_GAP))
+        .test_id(&test_ids::toolbar("n5"));
+    for (id, label) in [
+        ("rewrite", "Rewrite"),
+        ("conflicts", "Conflicts"),
+        ("rebase", "Rebase"),
+        ("rebase_editor", "Edit plan"),
+        ("cherry_pick", "Cherry"),
+        ("get_from_branch", "Get from"),
+        ("patches", "Patches"),
+        ("unshelve", "Unshelve…"),
+        ("bulk", "Bulk"),
+    ] {
+        let press_route = n5_route;
+        let band_id = test_ids::toolbar(&format!("n5-{id}"));
+        n5_band = n5_band.child(
+            view()
+                .role(AccessibilityRole::Button)
+                .label(label)
+                .test_id(band_id.as_str())
+                .px(px(data::DENSITY_COMPACT_BUTTON_PAD_X))
+                .py(px(data::DENSITY_COMPACT_BUTTON_PAD_Y))
+                .rounded(px(data::CONTROL_RADIUS))
+                .bg(t.secondary)
+                .child(
+                    text(label)
+                        .text_size(px(data::TYPE_CHIP))
+                        .text_color(t.secondary_foreground),
+                )
+                .on_press(move || press_route.set(Some(id.to_string()))),
+        );
+    }
 
     let activity_handle = handle.clone();
     view()
@@ -110,6 +156,7 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
                 .px(px(data::PANEL_PADDING))
                 .py(px(data::SPACING_Y))
                 .child(strip)
+                .child(n5_band)
                 .child(view().flex_1())
                 .child(icon_button(
                     IconButtonProps::new("⚙", "Open settings")

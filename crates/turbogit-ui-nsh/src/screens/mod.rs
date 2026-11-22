@@ -7,22 +7,31 @@
 pub mod branch_dialogs;
 pub mod branch_picker;
 pub mod branches;
+pub mod bulk;
 pub mod changes;
+pub mod cherry_pick;
 pub mod commit;
+pub mod conflicts;
 pub mod diff_view;
 pub mod divergence;
 pub mod feedback;
 pub mod gallery;
+pub mod get_from_branch;
 pub mod image_diff;
 pub mod log;
 pub mod log_graph;
 pub mod merge;
+pub mod patches;
 pub mod picks;
+pub mod rebase;
+pub mod rebase_editor;
 pub mod remotes;
+pub mod rewrite;
 pub mod shelf;
 pub mod shell;
 pub mod submodules;
 pub mod sync;
+pub mod unshelve;
 pub mod welcome;
 pub mod workspace_picker;
 pub mod worktrees;
@@ -254,8 +263,32 @@ pub fn route_screen(handle: AppHandle, id: &str) -> AnyElement {
         "remotes" => remotes::remotes_screen(handle).into_element(),
         "sync" => sync::sync_screen(handle).into_element(),
         "merge" => merge::merge_screen(handle).into_element(),
+        "rebase" => rebase::rebase_screen(handle).into_element(),
+        "rebase_editor" => rebase_editor::editor_screen(handle).into_element(),
+        "cherry_pick" => cherry_pick::cherry_pick_screen(handle).into_element(),
+        "get_from_branch" => get_from_branch::get_from_branch_screen(handle).into_element(),
+        "patches" => patches::patches_screen(handle).into_element(),
+        "unshelve" => unshelve::unshelve_screen(handle).into_element(),
+        "conflicts" => conflicts::conflicts_screen(handle).into_element(),
+        "rewrite" => rewrite::rewrite_screen(handle).into_element(),
+        "bulk" => bulk::bulk_screen(handle).into_element(),
         other => placeholder(other).into_element(),
     }
+}
+
+/// The N5 dialog and monitor layers, in paint order. Each owns the state
+/// that says it is open; none paints when its state is closed.
+pub fn n5_layers(handle: AppHandle) -> impl IntoElement {
+    view()
+        .child(rebase::layer(handle.clone()))
+        .child(rebase_editor::layer(handle.clone()))
+        .child(cherry_pick::layer(handle.clone()))
+        .child(get_from_branch::layer(handle.clone()))
+        .child(patches::layer(handle.clone()))
+        .child(unshelve::layer(handle.clone()))
+        .child(conflicts::layer(handle.clone()))
+        .child(bulk::layer(handle.clone()))
+        .child(rewrite::layer(handle.clone()))
 }
 
 /// A commit id's short form, the one spelling every row uses.

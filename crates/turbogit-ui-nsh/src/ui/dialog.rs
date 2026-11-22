@@ -51,6 +51,12 @@ pub struct DialogProps {
     pub actions: Vec<DialogAction>,
     /// A quiet verb above the footer rule (a confirm's disclosure).
     pub disclosure: Option<(SharedString, std::rc::Rc<dyn Fn() + 'static>)>,
+    /// The card's width; the default dialog width when unset.
+    pub width: Option<f32>,
+    /// The primary action cannot be pressed.
+    pub action_disabled: bool,
+    /// The primary action is withheld: only the cancel remains.
+    pub hide_action: bool,
 }
 
 impl DialogProps {
@@ -65,6 +71,9 @@ impl DialogProps {
             on_cancel: None,
             actions: Vec::new(),
             disclosure: None,
+            width: None,
+            action_disabled: false,
+            hide_action: false,
         }
     }
 
@@ -94,6 +103,21 @@ impl DialogProps {
 
     pub fn destructive(mut self, destructive: bool) -> Self {
         self.destructive = destructive;
+        self
+    }
+
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub fn action_disabled(mut self, disabled: bool) -> Self {
+        self.action_disabled = disabled;
+        self
+    }
+
+    pub fn hide_action(mut self, hide: bool) -> Self {
+        self.hide_action = hide;
         self
     }
 
@@ -140,13 +164,16 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
     let mut footer = view().flex_row().justify_end().gap(px(data::SPACING_X));
     if props.actions.is_empty() {
         let mut action_button = ButtonProps::new(action_label).variant(variant);
-        action_button = action_button.test_id(&test_ids::dialog_action(&name));
+        action_button = action_button
+            .disabled(props.action_disabled)
+            .test_id(&test_ids::dialog_action(&name));
         if let Some(confirm) = confirm.clone() {
             action_button = action_button.on_press(move || confirm());
         }
-        footer = footer
-            .child(button(action_button))
-            .child(button(cancel_button));
+        if !props.hide_action {
+            footer = footer.child(button(action_button));
+        }
+        footer = footer.child(button(cancel_button));
     } else {
         let last = props.actions.len().saturating_sub(1);
         for (at, action) in props.actions.iter().enumerate() {
@@ -164,7 +191,7 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
     let mut card = view()
         .mt(px(96.0))
         .self_center()
-        .w(px(420.0))
+        .w(px(props.width.unwrap_or(420.0)))
         .flex_col()
         .gap(px(data::SPACING_Y))
         .rounded(px(data::CARD_RADIUS))

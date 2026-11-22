@@ -6767,6 +6767,7 @@ dependencies = [
  "test-support",
  "turbogit-app",
  "turbogit-domain",
+ "turbogit-engine",
  "turbogit-ui",
 ]
 

@@ -145,6 +145,51 @@ pub fn divergence(name: impl std::fmt::Display) -> String {
     format!("divergence:{name}")
 }
 
+/// A Rebase-surface control named `name`.
+pub fn rebase(name: impl std::fmt::Display) -> String {
+    format!("rebase:{name}")
+}
+
+/// An interactive rebase editor control named `name`.
+pub fn rebase_editor(name: impl std::fmt::Display) -> String {
+    format!("rebase-editor:{name}")
+}
+
+/// A Cherry-pick-surface control named `name`.
+pub fn cherry(name: impl std::fmt::Display) -> String {
+    format!("cherry:{name}")
+}
+
+/// A Get-from-branch control named `name`.
+pub fn get_from_branch(name: impl std::fmt::Display) -> String {
+    format!("get:{name}")
+}
+
+/// A Patches-surface control named `name`.
+pub fn patch(name: impl std::fmt::Display) -> String {
+    format!("patch:{name}")
+}
+
+/// An Unshelve-surface control named `name`.
+pub fn unshelve(name: impl std::fmt::Display) -> String {
+    format!("unshelve:{name}")
+}
+
+/// A Conflicts-surface control named `name`.
+pub fn conflicts(name: impl std::fmt::Display) -> String {
+    format!("conflicts:{name}")
+}
+
+/// A Rewrite-surface control named `name`.
+pub fn rewrite(name: impl std::fmt::Display) -> String {
+    format!("rewrite:{name}")
+}
+
+/// A Bulk-surface control named `name`.
+pub fn bulk(name: impl std::fmt::Display) -> String {
+    format!("bulk:{name}")
+}
+
 /// The shell's status bar.
 pub fn status_bar() -> String {
     "status-bar".to_string()
