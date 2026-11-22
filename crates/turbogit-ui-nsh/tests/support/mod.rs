@@ -392,3 +392,71 @@ pub fn staged_patch(repo: &Path) -> String {
 pub fn local_patch(repo: &Path) -> String {
     git(repo, &["diff"])
 }
+
+/// A repository with one commit on `main` and the given local branches at
+/// that commit, plus one tag.
+pub fn branch_repo(parent: &Path, name: &str, branches: &[&str]) -> PathBuf {
+    let repo = seeded_repo(parent, name);
+    for branch in branches {
+        git(&repo, &["branch", *branch, "main"]);
+    }
+    git(&repo, &["tag", "v1.0"]);
+    repo
+}
+
+/// A repository on `main` with `feature` ahead of `main`.
+pub fn repo_with_unmerged_feature(parent: &Path, name: &str) -> PathBuf {
+    let repo = seeded_repo(parent, name);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
+    commit_into(&repo, "feature.txt", "feature work");
+    git(&repo, &["checkout", "-q", "main"]);
+    repo
+}
+
+/// The Branches tab over `roots`, mounted and settled.
+pub fn branches_tab(project: &Path, roots: &[PathBuf]) -> Mounted {
+    let mut app = for_roots(project, roots);
+    app.first_render().expect("the shell mounts");
+    app.press("id:tab:Branches").expect("the Branches tab");
+    app.wait_for("id:route:branches")
+        .expect("the branches surface");
+    app.wait_for("id:branches:tree").expect("the branch tree");
+    app
+}
+
+/// The branch row of `root` named `branch`.
+pub fn branch_sel(root: &str, branch: &str) -> String {
+    format!("id:branches:row:{root}:{branch}")
+}
+
+/// Right-clicks the branch row and asserts the menu opened.
+pub fn open_branch_menu(app: &mut Mounted, root: &str, branch: &str) {
+    app.right_click(&branch_sel(root, branch))
+        .expect("the branch row takes a secondary press");
+    assert!(app.menu().is_some(), "the branch menu opens");
+}
+
+/// The labels the live menu offers, in order.
+pub fn menu_labels(app: &Mounted) -> Vec<String> {
+    app.menu()
+        .expect("a menu is open")
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect()
+}
+
+/// Whether the live menu's item `label` is disabled.
+pub fn menu_disabled(app: &Mounted, label: &str) -> bool {
+    app.menu()
+        .expect("a menu is open")
+        .into_iter()
+        .find(|entry| entry.label == label)
+        .unwrap_or_else(|| panic!("the menu offers {label}"))
+        .disabled
+}
+
+/// Paints the menu's item `label`.
+pub fn press_menu(app: &mut Mounted, label: &str) {
+    app.choose_menu_item(label)
+        .unwrap_or_else(|e| panic!("the menu chooses {label}: {e}"));
+}

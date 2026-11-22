@@ -53,8 +53,8 @@ fn every_tab_press_paints_its_route() {
     app.first_render().unwrap();
     app.wait_for("text:1 total").unwrap();
 
-    // The Log and Commit tabs are built screens; the other three paint their
-    // named placeholder until their phases build them.
+    // The Log, Commit, Branches, Worktrees, and Submodules tabs are built
+    // screens; only the tool windows still name their later phase.
     app.press("id:tab:Log").unwrap();
     app.wait_for("text:Commits").unwrap();
     assert!(app.screen().shows("Branches"), "the log's own pane paints");
@@ -71,16 +71,20 @@ fn every_tab_press_paints_its_route() {
         "the changes route is no longer a placeholder"
     );
 
-    for (slug, route) in [
-        ("Branches", "branches"),
-        ("Worktrees", "worktrees"),
-        ("Submodules", "submodules"),
+    for (slug, route, needle) in [
+        ("Branches", "branches", "id:branches:search"),
+        ("Worktrees", "worktrees", "id:worktree:add"),
+        ("Submodules", "submodules", "id:submodule:header"),
     ] {
         app.press(&format!("id:tab:{slug}")).unwrap();
         app.wait_for(&format!("id:route:{route}")).unwrap();
         assert!(
-            shows_part(&app, "arrives with"),
-            "{slug} paints its named empty state"
+            app.screen().matches(needle).unwrap_or(false),
+            "{slug} paints its built surface"
+        );
+        assert!(
+            !shows_part(&app, "arrives with"),
+            "{slug} is no longer a placeholder"
         );
     }
 }

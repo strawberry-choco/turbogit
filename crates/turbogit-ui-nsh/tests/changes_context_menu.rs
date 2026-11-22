@@ -43,9 +43,9 @@ fn repo(project: &Project, name: &str) -> PathBuf {
     repo
 }
 
-fn app_for(project: &Project, repo: &PathBuf) -> support::Mounted {
+fn app_for(project: &Project, repo: &Path) -> support::Mounted {
     let name = repo.file_name().unwrap().to_string_lossy().to_string();
-    let mut app = commit_tab(project.path(), std::slice::from_ref(repo));
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo.to_path_buf()));
     open_group(&mut app, &name);
     app.wait_for(&format!("id:changes:row:{name}:base.txt"))
         .expect("the file rows paint");

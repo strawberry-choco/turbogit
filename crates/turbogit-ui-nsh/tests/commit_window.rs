@@ -3,7 +3,7 @@
 //! commit and amend paths, the sub-tab strip, the filter, and the clean-tree
 //! sentence.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use support::{Project, commit_tab, dirty_files_repo, open_group, shows_part, staged_patch};
 
@@ -11,8 +11,8 @@ mod support;
 
 use test_support::git_seed::git;
 
-fn app_for(project: &Project, repo: &PathBuf) -> support::Mounted {
-    let mut app = commit_tab(project.path(), std::slice::from_ref(repo));
+fn app_for(project: &Project, repo: &Path) -> support::Mounted {
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo.to_path_buf()));
     open_group(&mut app, "alpha");
     app.wait_for("id:changes:row:alpha:a.txt")
         .expect("the file rows paint");
