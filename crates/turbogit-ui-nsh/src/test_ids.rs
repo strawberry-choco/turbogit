@@ -94,6 +94,57 @@ pub fn banner() -> String {
     "banner".to_string()
 }
 
+/// A Branches-surface control named `name` (`search`, `new`, `scope`).
+pub fn branches(name: impl std::fmt::Display) -> String {
+    format!("branches:{name}")
+}
+
+/// A branch row of `root`, keyed by its full branch name.
+pub fn branch_row(root: &str, branch: &str) -> String {
+    format!("branches:row:{root}:{branch}")
+}
+
+/// A structural row of the branch tree: a repository, group, directory,
+/// remote, or tag band, named by its key.
+pub fn branch_band(root: &str, key: &str) -> String {
+    format!("branches:band:{root}:{key}")
+}
+
+/// A top-bar picker control named `name` (`trigger`, `command`, `new`).
+pub fn picker(name: impl std::fmt::Display) -> String {
+    format!("picker:{name}")
+}
+
+/// A Worktrees-surface control named `name` (`add`, `table`).
+pub fn worktree(name: impl std::fmt::Display) -> String {
+    format!("worktree:{name}")
+}
+
+/// A Submodules-surface control named `name`.
+pub fn submodule(name: impl std::fmt::Display) -> String {
+    format!("submodule:{name}")
+}
+
+/// A Remotes-surface control named `name`.
+pub fn remote(name: impl std::fmt::Display) -> String {
+    format!("remote:{name}")
+}
+
+/// A Sync-surface control named `name` (`push`, `preview`, `rejection`).
+pub fn sync(name: impl std::fmt::Display) -> String {
+    format!("sync:{name}")
+}
+
+/// The Merge dialog's control named `name`.
+pub fn merge(name: impl std::fmt::Display) -> String {
+    format!("merge:{name}")
+}
+
+/// The divergence offer's control named `name`.
+pub fn divergence(name: impl std::fmt::Display) -> String {
+    format!("divergence:{name}")
+}
+
 /// The shell's status bar.
 pub fn status_bar() -> String {
     "status-bar".to_string()

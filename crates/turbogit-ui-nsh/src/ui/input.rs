@@ -20,10 +20,14 @@ pub struct InputProps {
     /// Read at mount instead of `default_value`, so a remount picks up the
     /// text the app rewrote to.
     pub default_value_of: Option<Rc<dyn Fn() -> String>>,
-    /// A generation the input remounts on: the app-rewrite path (the clone
+    /// The generation the input remounts on: the app-rewrite path (the clone
     /// URL resets on success). Between bumps the input stays uncontrolled;
     /// the fresh mount takes `default_value_of`'s current reading.
     pub remount: Option<Rc<dyn Fn() -> u64>>,
+    /// A reactive remount trigger: the app bumps it when it rewrites the text
+    /// (a suggestion press), and the input rebuilds at once with the new
+    /// value instead of waiting for its parent to repaint.
+    pub remount_on: Option<Signal<u64>>,
     /// Shown while empty.
     pub placeholder: Option<SharedString>,
     /// Several lines that grow with the text.
@@ -51,6 +55,7 @@ impl InputProps {
             default_value: SharedString::default(),
             default_value_of: None,
             remount: None,
+            remount_on: None,
             placeholder: None,
             multiline: false,
             readonly: false,
@@ -83,6 +88,11 @@ impl InputProps {
     /// The generation the input remounts on.
     pub fn remount(mut self, generation: impl Fn() -> u64 + 'static) -> Self {
         self.remount = Some(Rc::new(generation));
+        self
+    }
+
+    pub fn remount_on(mut self, signal: Signal<u64>) -> Self {
+        self.remount_on = Some(signal);
         self
     }
 
@@ -142,6 +152,7 @@ struct InputCore {
     default_value: SharedString,
     default_value_of: Option<Rc<dyn Fn() -> String>>,
     remount: Option<Rc<dyn Fn() -> u64>>,
+    remount_on: Option<Signal<u64>>,
     placeholder: Option<SharedString>,
     readonly: bool,
     masked: bool,
@@ -220,6 +231,7 @@ fn core_of(mut props: InputProps, multiline: bool) -> InputCore {
         default_value: props.default_value.clone(),
         default_value_of: props.default_value_of.clone(),
         remount: props.remount.clone(),
+        remount_on: props.remount_on,
         placeholder: props.placeholder.clone(),
         readonly: props.readonly,
         masked: props.masked,
@@ -267,10 +279,16 @@ fn host_of(
 pub fn input(props: InputProps) -> impl IntoElement {
     let test_id = props.test_id.clone();
     let core = core_of(props, false);
+    let trigger = core.remount_on;
     let host = match core.remount.clone() {
         Some(generation) => {
             let core = core;
-            view().child(dynamic(move || core.build(generation())))
+            view().child(dynamic(move || {
+                if let Some(signal) = trigger {
+                    let _ = signal.get();
+                }
+                core.build(generation())
+            }))
         }
         None => view().child(core.build(0)),
     };
@@ -282,12 +300,16 @@ pub fn input(props: InputProps) -> impl IntoElement {
 pub fn text_area(props: InputProps) -> impl IntoElement {
     let test_id = props.test_id.clone();
     let core = core_of(props, true);
+    let trigger = core.remount_on;
     let host = match core.remount.clone() {
         Some(generation) => {
             let core = core;
-            view()
-                .flex_1()
-                .child(dynamic(move || core.build(generation())))
+            view().flex_1().child(dynamic(move || {
+                if let Some(signal) = trigger {
+                    let _ = signal.get();
+                }
+                core.build(generation())
+            }))
         }
         None => view().flex_1().child(core.build(0)),
     };
