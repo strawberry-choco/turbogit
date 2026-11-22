@@ -4,23 +4,33 @@
 //! unbuilt route shares, and [`route_for_tab`] is the shell's map from a
 //! tab to its route.
 
+pub mod branch_dialogs;
+pub mod branch_picker;
+pub mod branches;
 pub mod changes;
 pub mod commit;
 pub mod diff_view;
+pub mod divergence;
 pub mod feedback;
 pub mod gallery;
 pub mod image_diff;
 pub mod log;
 pub mod log_graph;
+pub mod merge;
 pub mod picks;
+pub mod remotes;
 pub mod shelf;
 pub mod shell;
+pub mod submodules;
+pub mod sync;
 pub mod welcome;
 pub mod workspace_picker;
+pub mod worktrees;
 
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
+use crate::bridge::AppHandle;
 use crate::test_ids;
 use crate::theme as data;
 
@@ -227,4 +237,28 @@ pub fn placeholder(id: &str) -> impl IntoElement {
                         .text_color(t.muted_foreground),
                 ),
         )
+}
+
+/// The screen a route id names: the N4 surfaces paint their real screens,
+/// an unbuilt route paints [`placeholder`].
+pub fn route_screen(handle: AppHandle, id: &str) -> AnyElement {
+    match id {
+        "changes" => changes::changes_screen(handle).into_element(),
+        "commit" => commit::commit_screen(handle).into_element(),
+        "branch_picker" => branch_picker::picker_screen(handle).into_element(),
+        "branches" => branches::branches_screen(handle).into_element(),
+        "branch_dialogs" => branch_dialogs::dialogs_screen(handle).into_element(),
+        "divergence" => divergence::divergence_screen(handle).into_element(),
+        "worktrees" => worktrees::worktrees_screen(handle).into_element(),
+        "submodules" => submodules::submodules_screen(handle).into_element(),
+        "remotes" => remotes::remotes_screen(handle).into_element(),
+        "sync" => sync::sync_screen(handle).into_element(),
+        "merge" => merge::merge_screen(handle).into_element(),
+        other => placeholder(other).into_element(),
+    }
+}
+
+/// A commit id's short form, the one spelling every row uses.
+pub fn short(id: &str) -> String {
+    id.chars().take(7).collect()
 }

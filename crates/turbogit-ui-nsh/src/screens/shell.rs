@@ -12,11 +12,14 @@ use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{DisplayName, Root, RootId};
 
 use crate::bridge::AppHandle;
+use crate::screens::branch_picker;
+use crate::screens::branches;
 use crate::screens::changes;
 use crate::screens::log;
 use crate::screens::placeholder;
-use crate::screens::route_for_tab;
+use crate::screens::submodules;
 use crate::screens::workspace_picker;
+use crate::screens::worktrees;
 use crate::test_ids;
 use crate::theme as data;
 use crate::ui::icon_button::{IconButtonProps, icon_button};
@@ -89,7 +92,9 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
     let content = dynamic(move || match switcher.signal().get() {
         Tab::Commit => changes::changes_screen(content_handle.clone()).into_element(),
         Tab::Log => log::log_screen(content_handle.clone(), switcher.clone()).into_element(),
-        other => placeholder(route_for_tab(other)).into_element(),
+        Tab::Branches => branches::branches_screen(content_handle.clone()).into_element(),
+        Tab::Worktrees => worktrees::worktrees_screen(content_handle.clone()).into_element(),
+        Tab::Submodules => submodules::submodules_screen(content_handle.clone()).into_element(),
     });
 
     let activity_handle = handle.clone();
@@ -116,7 +121,8 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
                         .test_id(&test_ids::toolbar("shortcuts"))
                         .on_press(move || tool_open.set(Some("shortcuts"))),
                 ))
-                .child(workspace_picker::picker_trigger(handle.clone())),
+                .child(workspace_picker::picker_trigger(handle.clone()))
+                .child(branch_picker::picker_trigger(handle.clone())),
         )
         .child(content)
         .child(when(

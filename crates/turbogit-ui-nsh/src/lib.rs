@@ -196,6 +196,9 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
     let banner_handle = handle.clone();
     let confirm_handle = handle.clone();
     let diff_handle = handle.clone();
+    let dialog_handle = handle.clone();
+    let divergence_handle = handle.clone();
+    let sync_handle = handle.clone();
     let t = theme();
     view()
         .flex_1()
@@ -217,6 +220,11 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
         .child(banner_layer(banner_handle))
         .child(confirm_layer(confirm_handle))
         .child(crate::screens::diff_view::diff_layer(diff_handle))
+        .child(crate::screens::branch_dialogs::dialog_layer(dialog_handle))
+        .child(crate::screens::divergence::divergence_layer(
+            divergence_handle,
+        ))
+        .child(crate::screens::sync::sync_layer(sync_handle))
         .child(status_bar(handle))
         .child(
             overlay()
