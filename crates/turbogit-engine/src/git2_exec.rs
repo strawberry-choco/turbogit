@@ -1085,8 +1085,7 @@ impl GitExecutor for Git2Executor {
                     }
                     None => repo.signature().map_err(err)?,
                 };
-                repo.tag_annotation_create(&spec.name, &obj, &sig, m)
-                    .map_err(err)?;
+                repo.tag(&spec.name, &obj, &sig, m, false).map_err(err)?;
             }
             None => {
                 repo.tag_lightweight(&spec.name, &obj, false).map_err(err)?;
