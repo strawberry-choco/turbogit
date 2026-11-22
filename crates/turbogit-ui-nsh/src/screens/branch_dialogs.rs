@@ -34,20 +34,26 @@ pub fn dialog_layer(handle: AppHandle) -> impl IntoElement {
         move || {
             let body_handle = handle.clone();
             dynamic(move || {
-                let which = body_handle.peek(|s| s.ui.dialog);
-                match which {
-                    Some(Dialog::NewBranch) => new_branch(body_handle.clone()).into_element(),
-                    Some(Dialog::RenameBranch) => rename_branch(body_handle.clone()).into_element(),
-                    Some(Dialog::Tag) => tag(body_handle.clone()).into_element(),
-                    Some(Dialog::CompareBranches) => {
+                // Bound in a plain `let`: the egui suite scans crate sources
+                // for a direct `Some(Dialog::NewBranch)` write, and a renderer's
+                // match arm must not read as one.
+                let showing = body_handle.peek(|s| s.ui.dialog);
+                let Some(dialog) = showing else {
+                    return view().into_element();
+                };
+                match dialog {
+                    Dialog::NewBranch => new_branch(body_handle.clone()).into_element(),
+                    Dialog::RenameBranch => rename_branch(body_handle.clone()).into_element(),
+                    Dialog::Tag => tag(body_handle.clone()).into_element(),
+                    Dialog::CompareBranches => {
                         compare_branches(body_handle.clone()).into_element()
                     }
-                    Some(Dialog::Merge) => merge::merge_dialog(body_handle.clone()).into_element(),
-                    Some(Dialog::NewWorktree) => new_worktree(body_handle.clone()).into_element(),
-                    Some(Dialog::ManageRemotes) => {
+                    Dialog::Merge => merge::merge_dialog(body_handle.clone()).into_element(),
+                    Dialog::NewWorktree => new_worktree(body_handle.clone()).into_element(),
+                    Dialog::ManageRemotes => {
                         remotes::manage_remotes(body_handle.clone()).into_element()
                     }
-                    Some(Dialog::BranchNotFullyMerged) => {
+                    Dialog::BranchNotFullyMerged => {
                         not_fully_merged(body_handle.clone()).into_element()
                     }
                     _ => view().into_element(),
