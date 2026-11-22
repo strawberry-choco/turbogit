@@ -2611,8 +2611,19 @@ impl AppState {
         self.caches.invalidate_all();
         self.worktree.clear();
         self.rescan();
+        self.reload_shelves(dir);
         self.ui.welcome_visible = false;
         self.record_recent(dir);
+    }
+
+    /// The shelf store belongs to the project, so opening one reads it: a
+    /// launch with a project goes through `with_flat_state`, and a project
+    /// opened from Welcome would otherwise unshelve an empty shelf.
+    fn reload_shelves(&mut self, dir: &Path) {
+        match turbogit_services::shelve_stash::load_shelves(dir) {
+            Ok(shelves) => self.ui.shelves = shelves,
+            Err(e) => self.last_error = Some(e.to_string()),
+        }
     }
 
     pub fn attach_workspace(&mut self, dir: &Path) {
@@ -2635,6 +2646,7 @@ impl AppState {
             }
         }
         self.hide_project_metadata();
+        self.reload_shelves(dir);
         self.ui.welcome_visible = false;
 
         let count = self.multi.roots.len();
