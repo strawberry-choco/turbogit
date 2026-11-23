@@ -1,9 +1,9 @@
 # TurboGit design system (nsh)
 
-The design system for `crates/turbogit-ui-nsh`. It has two token layers: the
-**chrome tokens** in `crates/turbogit-ui-nsh/theme.json`, which
+The design system for `crates/turbogit-ui`. It has two token layers: the
+**chrome tokens** in `crates/turbogit-ui/theme.json`, which
 `nsh_base::theme()` reads (surfaces, ink, the primary, the accent), and the
-**data tokens** in `crates/turbogit-ui-nsh/src/theme.rs` (diff color, file
+**data tokens** in `crates/turbogit-ui/src/theme.rs` (diff color, file
 status, state, repository state, lanes, the type scale, density, radii). A
 call site names a token; it never names a color or a radius. The role
 vocabulary is `docs/design-system-roles.md`'s; the nsh controls serve the

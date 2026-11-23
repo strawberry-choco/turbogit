@@ -2,31 +2,32 @@
 
 **Status:** authoritative role contract for the current UI crate
 
-This document is the boundary contract for `crates/turbogit-ui`. It describes
-what the current modules mean, which surfaces may reuse them, and which
-similar-looking roles must remain separate. It is not a proposal to redesign a
-surface. A caller may adopt a shared component only when its semantic role
-matches; visual similarity is not enough.
+This document is the boundary contract for the nsh presentation crate,
+`crates/turbogit-ui`. It describes what the current modules mean, which surfaces
+may reuse them, and which similar-looking roles must remain separate. It is not
+a proposal to redesign a surface. A caller may adopt a shared component only
+when its semantic role matches; visual similarity is not enough.
 
 The source of truth for this contract is the code in `crates/turbogit-ui/src`.
 The role descriptions below use the implemented module and function names. The
-seven rules design system v2 decided (`ADR-0027`, R1 through R7) are stated in
+live module and function names are the ones in [The nsh owners](#the-nsh-owners);
+the earlier role prose and tables are the vocabulary the nsh port carried over.
+The seven rules design system v2 decided (`ADR-0027`, R1 through R7) are stated in
 full there, each with the alternative it was chosen over; the map below records
 only which thing in the tree **owns** each one, because owning it is what makes
-a rule a rule rather than a per-call-site judgement. The retirements and
-narrowings v2 made are recorded at `ui/widgets/mod.rs:7-23`, and the pane-chrome
-collapse at `ui/widgets/containers.rs:403-411`.
+a rule a rule rather than a per-call-site judgement.
 
 ## Non-negotiable boundaries
 
-1. **`theme` owns shared tokens.** `turbogit_ui::theme` is the sole authority for
-   shared colors, semantic status colors, surface roles, selection roles,
-   typography, spacing, density, radii, and style/font installation. A component
-   may derive a value from a token (for example, `tint_over_bg`) or use a
-   documented theme alias, but it must not introduce a second shared palette,
-   a page-local copy of a shared token, or a literal that claims a new shared
-   role. Screen-specific geometry and explicitly specialized accents remain
-   local only when their ownership is documented.
+1. **`theme` owns shared tokens.** `src/theme.rs` (data roles) and `theme.json`
+   (chrome roles) are the sole authority for shared colors, semantic status
+   colors, surface roles, selection roles, typography, spacing, density, radii,
+   and style/font installation. A component may derive a value from a token (for
+   example, `tint_over_bg`) or use a documented theme alias, but it must not
+   introduce a second shared palette, a page-local copy of a shared token, or a
+   literal that claims a new shared role. Screen-specific geometry and
+   explicitly specialized accents remain local only when their ownership is
+   documented.
 2. **A general widget has no feature policy.** General widgets own layout,
    interaction, accessibility metadata, and token-driven visual decisions. They
    do not call Git, read application state, dispatch operations, or decide
@@ -79,7 +80,7 @@ silently and two ratchets stopped covering it.
 
 | Family | Current owner and path | Boundary | Public or internal |
 | --- | --- | --- | --- |
-| Design tokens and style | `turbogit_ui::theme` | The only authority for shared presentation tokens, semantic mappings, typography, spacing, radii, and egui style/font setup. It does not own component behavior. | Public token and style API. |
+| Design tokens and style | `src/theme.rs`, `theme.json` | The only authority for shared presentation tokens, semantic mappings, typography, spacing, and radii. It does not own component behavior. | Public token API. |
 | Repository-state verdict | `turbogit_ui::theme` (`RepoState::from_root`, its predicates `is_diverged` / `has_drift` / `is_dirty`, and the `DivergenceMeaning` a caller names) | **Which** state a repository is in, the precedence ladder conflict > dirty > diverged > unpulled > unpushed > clean, and the two live meanings of "diverged". Reached through that module's own predicates rather than re-derived, because a surface that answers the question a second way can disagree with a dot one screen away. Same module as the colour row above: the colour is the verdict's paint, and both are read from `theme`. | Public token API. |
 | General widget vocabulary | `turbogit_ui::ui::widgets` (public façade) over private `widgets::{controls, chips, rows, inputs, feedback, containers, text}` modules | Reusable, policy-free controls and presentation primitives. The focused modules own implementation details; the façade explicitly re-exports the established names and signatures. | Public façade; implementation modules are private. |
 | Branch component kit | `turbogit_ui::ui::components` (`KitButton`, `RowState`, branch fills, `section_header`, `pill`, sync helpers, and branch geometry) | Branch-screen grammar: fixed branch geometry, branch rows, sync relationships, current/count pills, collapsible branch sections, and branch actions. It is not a general button or title library. | Public branch-kit path, with a specialized role. |
@@ -690,8 +691,8 @@ production consumer now goes through that sweep rather than waiting for a review
 
 ## The nsh owners
 
-`crates/turbogit-ui-nsh` is the live owner of every role this document
-describes. The egui module names above are the roles' history; the table
+`crates/turbogit-ui` is the live owner of every role this document
+describes. The module and function names above are the roles' history; the table
 below is the path a maintainer edits today. A role with no row here has no
 nsh owner and is a gap, not a shared primitive.
 

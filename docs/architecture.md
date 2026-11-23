@@ -1,9 +1,11 @@
 # TurboGit architecture
 
-TurboGit is a desktop Git client on `eframe`/`egui`, split into one Cargo crate
-per layer. It keeps a strict separation: the **UI layer never calls git
-directly**, all git work goes through an engine seam (`GitExecutor`) executed
-on worker threads, with results delivered back to the UI thread over a channel.
+TurboGit is a desktop Git client whose presentation layer is Native Shell (nsh)
+0.5.x: one Rust app rendered with each desktop's native controls (AppKit,
+Win32/Direct2D, GTK 4). It is split into one Cargo crate per layer and keeps a
+strict separation: the **UI layer never calls git directly**, all git work goes
+through an engine seam (`GitExecutor`) executed on worker threads, with results
+delivered back to the app over a channel.
 
 ## Workspace layout
 
@@ -14,9 +16,9 @@ on worker threads, with results delivered back to the UI thread over a channel.
 | `turbogit-engine` | the adapters, the factory, the fake | domain, engine-api, `git2` |
 | `turbogit-services` | pure domain services over the port | domain, engine-api |
 | `turbogit-app` | `AppState`, worker dispatch, events, caches, persistence, granular | domain, engine-api, engine, services |
-| `turbogit-ui` | `theme` + all of `ui/` | app, domain |
-| `test-support` | headless harness + kittest helpers | domain, engine-api (+ `harness` feature) |
-| `turbogit` (root) | `main.rs`, `app.rs`, the composition root | app, ui, `eframe`, `rfd` |
+| `turbogit-ui` | the nsh presentation crate: `src/ui/` controls, `src/screens/` surfaces, `theme.json`, `src/theme.rs`, the bridge, and `launch` | app, domain, nsh-core, nsh-base, the platform backends |
+| `test-support` | the nsh harness (`nsh` feature), git fixtures, source scans | domain, engine-api (+ `nsh` feature) |
+| `turbogit` (root) | `main.rs`, the composition root | `turbogit-ui` |
 
 Dependencies flow strictly downward:
 
@@ -24,94 +26,67 @@ Dependencies flow strictly downward:
 domain ← engine-api ← {engine, services} ← app ← ui ← root
 ```
 
-The root package carries no domain code, only `main.rs` and the `app.rs`
-eframe shell that composes `AppState` with `turbogit_ui::ui`.
+The root package carries no domain code. `src/main.rs` parses an optional
+project directory and calls `turbogit_ui::launch::launch`; nothing in the root
+manifest depends on a platform backend.
 
 ## High-level diagram
 
 ```mermaid
 flowchart TB
     subgraph Root["Root crate (composition root)"]
-        MAIN["main.rs"]
-        APP["app.rs — TurbogitApp (eframe::App)<br/>owns AppState, pumps events, renders"]
-        MAIN --> APP
+        MAIN["main.rs — passes the project dir to turbogit_ui::launch"]
     end
 
-    subgraph UICrate["turbogit-ui"]
-        THEME["theme.rs — dark-only palette (ADR-0003)"]
-        SHELL["ui/shell.rs — IDE shell<br/>(tab strip / status bar)"]
-        WINDOWS["ui/{welcome,commit_window,log_window,worktrees,submodules}.rs"]
-        DIFF["ui/diff/ — specialized diff component"]
-        SURFACES["ui/{conflicts,push_dialog,remotes_dialog,popups,branch_widget,dialogs,settings_modal}.rs"]
-        WIDGETS["ui/widgets/ — public façade + focused modules"]
-        ICONS["ui/icons.rs — shared icon owner"]
-        SHELL --> WINDOWS & DIFF & SURFACES & WIDGETS & ICONS
+    subgraph UICrate["turbogit-ui (nsh)"]
+        LIB["lib.rs — App, AppRoot, app_shell, layers"]
+        LAUNCH["launch.rs — native backend, 1280x820, 1000x680 min"]
+        BRIDGE["bridge.rs — AppHandle over Rc&lt;RefCell&lt;AppState&gt;&gt;"]
+        THEME["theme.json — chrome tokens<br/>theme.rs — data tokens"]
+        UI["ui/ — buttons, inputs, trees, tables, dialogs, toasts"]
+        SCREENS["screens/ — shell, welcome, log, changes, diff, branches, sync, rewrite, secondary"]
+        LIB --> BRIDGE & THEME & UI & SCREENS
+        LAUNCH --> LIB
     end
 
     subgraph AppCrate["turbogit-app"]
         STATE["state.rs — AppState<br/>owns engine, event channel,<br/>UI ephemeral state, dispatch()"]
         GRANULAR["granular.rs — hunk/line staging protocol"]
-        CACHES["root_caches.rs — RootCaches<br/>(per-root scan caches + Affected op-scope)"]
+        CACHES["root_caches.rs — RootCaches"]
         RECENTS["recents.rs"]
         PERSIST["persistence.rs — .turbogit/ settings & state"]
         EVENTS["events.rs — AppEvent, DecodedImage, FetchedBlob"]
-        DATADATA["diff_data.rs — PaneCache, PaneEntry, PaneSide"]
     end
 
     subgraph ServiceCrate["turbogit-services"]
-        BRANCH["branch_service"]
-        SYNC["sync_service"]
-        HISTORY["history_service / history_editor"]
-        INTEGRATE["integrate_service<br/>(merge / rebase / cherry-pick)"]
-        CHANGES["changes / partial"]
-        DIFFENG["diff_engine"]
-        CONFLICTC["conflict"]
-        SHELVE["shelve_stash"]
-        MULTIROOT["multi_root"]
+        SERVICES["branch, sync, history/editor, integrate,<br/>changes/partial, diff_engine, conflict,<br/>shelve/stash, multi_root"]
     end
 
     subgraph EngineApi["turbogit-engine-api"]
         TRAIT["GitExecutor trait<br/>(the ONLY git boundary)"]
-        ADIR["ApplyDirection"]
     end
 
     subgraph EngineCrate["turbogit-engine"]
         FACTORY["build_executor(settings)"]
-        GIT2["git2_exec::Git2Executor<br/>(in-process libgit2 reads,<br/>CLI fallback for sync/credentials/<br/>reverse-apply/intent-to-add/diff)"]
-        CLI["cli::CliExecutor<br/>(shells out to system git;<br/>all mutating ops)"]
-        FAKE["fake.rs (behind `test-util` feature)"]
+        GIT2["git2_exec::Git2Executor"]
+        CLI["cli::CliExecutor"]
     end
 
     subgraph DomainCrate["turbogit-domain"]
-        MODEL["model.rs — domain types<br/>(RootId, RootStatus, Branch, Commit, …)<br/>everything scoped to a Root"]
+        MODEL["model.rs — domain types"]
         ERROR["error.rs — TgError / TgResult"]
     end
 
-    TESTSUPPORT["test-support<br/>(harness + kittest)"]
-    GIT["system git binary"]
-    LIBGIT2["libgit2 (git2 crate)"]
-
-    APP -->|"drain_events() every frame"| STATE
-    APP -->|render| SHELL
-
-    UICrate -->|"reads state, dispatches ops"| STATE
-    STATE --> CACHES & PERSIST & RECENTS & GRANULAR & DATADATA
+    MAIN --> LAUNCH
+    BRIDGE -->|"pump() / read / update"| STATE
+    SCREENS -->|"reads state, dispatches ops"| STATE
+    STATE --> CACHES & PERSIST & RECENTS & GRANULAR
     GRANULAR --> TRAIT
-
-    ServiceCrate -->|"domain services call"| TRAIT
-    STATE --> ServiceCrate
-
+    SERVICES --> TRAIT
+    STATE --> SERVICES
     TRAIT -.->|implemented by| GIT2
     TRAIT -.->|implemented by| CLI
-    TRAIT -.->|test only| FAKE
     FACTORY --> GIT2 & CLI
-    GIT2 --> LIBGIT2
-    GIT2 -->|fallback| CLI
-    CLI --> GIT
-
-    UICrate -.-> TESTSUPPORT
-    TESTSUPPORT --> APP & SHELL
-
     DomainCrate --> TRAIT
 ```
 
@@ -119,114 +94,71 @@ flowchart TB
 
 `AppState` constructs its own engine: `launch_in` and `for_roots` both go
 through `with_flat_state` (`turbogit-app/src/state.rs`), which reaches
-`turbogit_engine::build_executor` at `state.rs:2071`, as does `rebuild_executor`
-at `state.rs:2230`. `turbogit_engine::resolve_git_version` is read at
-`state.rs:2073` and `state.rs:5150` and re-exported from `lib.rs:9`. So
-`turbogit-app → turbogit-engine` is two real edges rather than the clean
-`app → port` flow the rest of the graph follows; the app's patch parsing is not
-one of them, because that reader lives in `turbogit-engine-api` (ADR-0022).
+`turbogit_engine::build_executor`, as does `rebuild_executor`.
+`turbogit_engine::resolve_git_version` is read at the same sites and re-exported
+from the app's `lib.rs`. So `turbogit-app → turbogit-engine` is two real edges
+rather than the clean `app → port` flow the rest of the graph follows; the
+app's patch parsing is not one of them, because that reader lives in
+`turbogit-engine-api` (ADR-0022).
 
 The textbook fix is injecting `Arc<dyn GitExecutor>` from the composition root.
-It would instead change constructor signatures used by ~20 test call sites, and
+It would instead change constructor signatures used by many test call sites, and
 nothing needs it today: a test that wants another executor swaps one in after
-construction through `AppState::with_executor`, not through a signature. These
-two edges are accepted and treated as the whole impurity, the only places an
-app-side call may reach the adapters.
+construction through `AppState::with_executor`. These two edges are accepted and
+treated as the whole impurity, the only places an app-side call may reach the
+adapters.
 
 **Deferred options (do not schedule):** executor injection into `AppState`;
 splitting `GitExecutor` into capability traits; decomposing UI state out of
-`AppState`. Each is a choice available now that the boundaries exist; none is a
-prerequisite for anything else.
+`AppState`.
 
 ## Layer responsibilities
 
-The diagram above draws **edges only**; what each layer is responsible for is
-the prose below. Neither half is a summary of the other, so an edge missing
-from the diagram is not a claim that the dependency does not exist, and a
-responsibility described here does not imply a new edge.
+### 1. Entry (root: `src/main.rs`)
 
-### 1. Entry (root: `src/main.rs`, `src/app.rs`)
-- `TurbogitApp` implements `eframe::App`. Each frame it:
-  1. Applies dark-only theme tokens (`theme::configure_style`, ADR-0003).
-  2. Drains worker-thread `AppEvent`s from the channel (`state.drain_events()`).
-  3. Renders one full frame via `ui::render`.
-- Launch flow (ADR-0004): a project dir enters the shell directly; no dir lands
-  on the Welcome screen. Wires the native folder-picker seam.
+- Parses an optional project directory from the command line.
+- Calls `turbogit_ui::launch::launch`, which mounts the `AppRoot` component on
+  the native backend with `theme.json` and the dark appearance, at 1280x820
+  with a 1000x680 minimum content size.
+- Launch flow (ADR-0004): `Some(dir)` enters the shell directly; `None` lands on
+  Welcome. `TURBOGIT_CONFIG` points the recents store at a scratch directory.
 
 ### 2. UI (`turbogit-ui`)
-- IntelliJ-style IDE shell composed in `shell::render`: a 32px tab strip,
-  24px status bar, with the activity log panel across the bottom of the central
-  body. There is no topbar and no left sidebar, the tool window starts at the
-  top window edge. Global shortcut dispatch lives here (five frozen shortcuts,
-  ADR-0009).
-- Central body routes between Welcome placeholder and the five tool windows
-  the tab strip offers (Changes, Log, Branches, Worktrees, Submodules).
-  Floating surfaces render on top each frame: Branches popup,
-  VCS operations popup, command palette, dialogs, push dialog, confirm prompts,
-  Settings modal, and toast.
+
+- `src/lib.rs` owns the `App` component (what `nsh run` and `nsh package` mount),
+  the harness-mountable `AppRoot`, the app shell, and the layered dialogs,
+  banners, toasts, and overlays.
+- `src/bridge.rs` owns `AppHandle`: one `Rc<RefCell<AppState>>` plus a revision
+  `Signal`. `read` and `update` keep borrows short; `pump` drains events and
+  ticks the poll cadence from one interval.
+- `src/screens/` owns one screen per surface and the route table. A screen
+  renders inside the shell; dialogs are painted by the shell from the state that
+  says they are open.
+- `src/ui/` owns the general controls. A general control takes no application
+  state and decides no policy.
 - Reads from `AppState`; never calls git directly.
+- The token layers are `theme.json` (chrome) and `src/theme.rs` (data roles).
+  `docs/design-system-roles.md` records which name owns which role.
 
-### 3. UI component boundaries
+### 3. State & App Services (`turbogit-app`)
 
-- **General widget facade:** `turbogit_ui::ui::widgets` is the public compatibility
-  façade. Its private `widgets/` modules have focused ownership: `controls`
-  (states, buttons, focus, and segmented choices), `chips` (geometry and
-  semantic chip/badge wrappers), `rows`, `inputs`, `feedback`, `containers`, and
-  `text` utilities. The established names and signatures are explicitly
-  re-exported by the façade; callers do not import the private modules.
-- **Icons:** `turbogit_ui::ui::icons` remains the separate public owner of icon
-  lookup (`Icon::from_name`, `icon_by_name`) and icon path painting
-  (`paint_icon`), plus the shared centered icon primitives (`icon`,
-  `centered_icon`). Origin-based placement is a separate concern and stays with
-  the private control/feature code that needs it, e.g. the private
-  `widgets::controls::paint_icon_at` and `ui::welcome`'s local helper, each of
-  which delegates the actual painting to `ui::icons` rather than drawing
-  glyph geometry itself. The widget façade does not become a second icon
-  implementation.
-- **Branch component kit:** `turbogit_ui::ui::components` owns branch-specific
-  geometry, rows, sync/current/count facts, collapsible section headers, and
-  branch action buttons. It is a specialized public kit, not the general
-  widget vocabulary.
-- **Internal specialized kit:** crate-private `turbogit_ui::ui::kit` contains
-  `conflict_pane`, the narrow three-pane conflict presentation grammar. It does
-  not parse conflicts, choose a resolution, hold editor state, or dispatch Git.
-- **Branch-tree feature components:** `ui::branch_tree_view`,
-  `ui::branches_tree`, `ui::branches`, and `ui::branch_widget` retain their
-  branch feature vocabulary and view-model/event boundary. They render or
-  report branch events but do not call Git or dispatch operations.
-- **Diff feature component:** `turbogit_ui::ui::diff` is the current directory
-  component (`actions`, `model`, `panes`, and `view`). Diff model, pane,
-  selection, granularity, and rendering semantics remain specialized; they may
-  compose general widgets and shared chip geometry without becoming a general
-  façade.
-- **Compatibility:** the public `ui::widgets`, `ui::components`, `ui::icons`,
-  and existing feature paths remain stable. The façade is the supported import
-  seam, while focused private modules are an implementation detail.
-
-### 4. State & App Services (`turbogit-app`)
 - `state.rs`, `AppState` is the hub: owns the `Arc<dyn GitExecutor>`, the
   multi-root model, canonical settings, the crossbeam event channel, and all
   UI-only ephemeral state. Git work is dispatched as an `Operation` via
   `AppState::dispatch`, which runs it on a worker thread (`Spawned`) under the
   shell or inline (`Inline`) under the headless harness; either way it answers
-  through the same channel, and the pump (`drain_events`) is on `AppState`, so
-  headless test harnesses get production parity. Settlement matches the
-  operation's `OpKind`, never its label text (ADR-0020).
-- `granular.rs`, the stateful staging protocol (`&mut AppState`, hunk/line
-  input resolution, dispatch ordering, completion settlement). Kept in the app
-  layer rather than the services crate because it owns UI-facing state.
-- `events.rs`, `AppEvent`, `DecodedImage`, `FetchedBlob`: the transport from
-  worker threads back to the UI thread.
-- `diff_data.rs`, the plain diff-pane data types (`PaneCache`, `PaneEntry`,
-  `PaneSide`) and the hunk-nav `Dir`/`EDGE_WINDOW` that `ui/diff/` renders.
-  Living beside `AppState` keeps the app crate egui-free.
-- `root_caches.rs`, per-root caches keyed by `RootId`, invalidated by op-scope
-  (`Affected`) so post-op refreshes stay narrow.
+  through the same channel, and the pump (`drain_events`) is on `AppState`.
+  Settlement matches the operation's `OpKind`, never its label text (ADR-0020).
+- `granular.rs`, the stateful staging protocol.
+- `events.rs`, the transport from worker threads back to the app.
+- `root_caches.rs`, per-root caches invalidated by `Affected` op-scope.
 - `persistence.rs`, serializes settings/state under `.turbogit/`.
 - `recents.rs`, the global recent-projects file (ADR-0005).
 
-### 5. Services (`turbogit-services`)
-Pure-ish services over the engine seam; no egui, no `AppState`:
+### 4. Services (`turbogit-services`)
+
+Pure-ish services over the engine seam; no UI types, no `AppState`:
+
 | Module | Responsibility |
 |---|---|
 | `branch_service` | branch create/rename/delete/checkout flows |
@@ -239,36 +171,32 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
 | `shelve_stash` | stash/shelve operations |
 | `multi_root` | root discovery and multi-repo scanning |
 
-### 6. Engine
+### 5. Engine
+
 - **`turbogit-engine-api`**, `GitExecutor` is the **only** thing that talks to
-  git, plus `ApplyDirection` and the port's two value modules: `patch`, the one
-  reader of unified-diff syntax, and `repo_state`, the marker read behind
-  `holding_operation` (ADR-0022). Every method is synchronous, so callers run them
-  on worker threads and the UI never blocks. The port is wide by design; ADR 0022
-  records its size at each reconciliation, since every read raised out of the
-  adapters changes it.
+  git, plus `ApplyDirection` and the port's value modules (`patch`,
+  `repo_state`). Every method is synchronous, so callers run them on worker
+  threads and the UI never blocks.
 - **`turbogit-engine`**, the adapters and the factory:
   - `cli::CliExecutor`, shells out to system `git`; handles **all mutating ops**.
   - `git2_exec::Git2Executor`, in-process libgit2 for supported reads, falling
     back to the CLI for sync/credential ops, reverse patch apply, intent-to-add,
     and diffs libgit2 can't express. `build_executor(settings)` builds the
-    composed pair and nothing else, the engine is not a setting (ADR-0030).
+    composed pair and nothing else (ADR-0030).
   - `fake::FakeExecutor`, test double, exported only behind the `test-util`
-    cargo feature so release builds never compile it.
+    feature.
 
-### 7. Domain (`turbogit-domain`)
-- `model.rs`, domain types (`RootId`, `RootStatus`, `Branch`, `Commit`,
-  `Change`, …). Every mutable git state is scoped to a `Root`; there is no
-  global "the repository". Types are `Clone + Debug + Serialize/Deserialize`.
-- `error.rs`, `TgError` / `TgResult` used across all layers. Carries no `ron`
-  dependency: serialization failures arrive as plain strings from the
-  persistence layer, keeping the leaf crate free of format-specific types.
+### 6. Domain (`turbogit-domain`)
+
+- `model.rs`, domain types. Every mutable git state is scoped to a `Root`.
+- `error.rs`, `TgError` / `TgResult` used across all layers.
 
 ## Threading model
 
 ```mermaid
 sequenceDiagram
-    participant UI as UI thread (eframe frame)
+    participant ENG as nsh engine thread
+    participant UI as AppHandle
     participant ST as AppState
     participant W as Worker thread
     participant E as GitExecutor
@@ -278,68 +206,53 @@ sequenceDiagram
     W->>E: synchronous git call
     E-->>W: TgResult
     W-->>ST: AppEvent via crossbeam channel
-    UI->>ST: drain_events() at frame start
-    ST-->>UI: updated state → ctx.request_repaint()
+    ENG->>UI: interval pump
+    UI->>ST: drain_events()
+    ST-->>UI: updated state → revision signal
 ```
+
+`AppState` stays single-threaded on the nsh engine thread behind
+`Rc<RefCell<_>>`; the revision signal tells nsh what changed.
 
 ## Key architectural decisions
 
 | ADR | Decision |
 |---|---|
 | ADR-0001 | Engine seam: `GitExecutor` trait; libgit2 vs CLI selectable by settings |
-| ADR-0002 | Embed JetBrains Mono rather than system font lookup |
 | ADR-0003 | Dark-only theme tokens |
 | ADR-0004 | Launch flow: dir → shell, none → Welcome |
 | ADR-0005 | Global recent-projects config |
-| ADR-0006 | Batch push covers every root; per-root targeting filters preview only |
-| ADR-0007 | Push dialog keeps explicit remote/branch fields alongside the commit tree |
-| ADR-0008 | Commit sub-tabs render placeholder panes for not-yet-implemented features |
-| ADR-0009 | Five frozen global shortcuts dispatched in the shell |
-| ADR-0010 | Commit window Advanced options is inert chrome in v1 |
-| ADR-0011 | Command palette and VCS popup keep their action sets; palette gains shell actions |
-| ADR-0012 | Branch popup row actions render inert until their flows exist |
-| ADR-0013 | Partial staging filters raw diff text |
-| ADR-0014 | Diff rendering virtualizes over `ScrollArea::show_rows`, not `egui_extras::Table` |
-| ADR-0015 | Non-text diffs render outside the display-row model |
+| ADR-0014 | Diff rendering virtualizes over a display-row model |
 | ADR-0016 | Mockups are the single source of truth for the UI redesign |
-| ADR-0017 | Switching workspaces happens from the tab strip's project button, reachable from the palette |
-| ADR-0018 | Superseded: the sidebar PROJECTS tree was removed; the Changes window lists every root |
-| ADR-0019 | Worktree lifecycle owns worktree-list freshness policy |
 | ADR-0020 | `Operation` is the dispatch unit; label text is display-only |
-| ADR-0021 | The keyed read is the diff surface's only way to reach cached git data |
+| ADR-0021 | The keyed read is a surface's only way to reach cached git data |
 | ADR-0022 | The Git engine answers with domain values, over one honest adapter |
-| ADR-0023 | Branch actions live in the context menu, and nowhere else |
-| ADR-0024 | Commit actions live in the log context menu, and nowhere else |
-| ADR-0025 | A reworded commit carries its message through the rebase plan |
-| ADR-0026 | The commit list virtualizes over `ScrollArea::show_rows`, and its listings grow by batches |
-| ADR-0027 | Design system v2: one accent, one ink ramp, one card. R1–R7 in the token and widget layer |
-
-The crate-per-layer split, the sanctioned edge, and the deferred options are
-specified in `AGENTS.md` ("Project Structure and Module Organization", "One
-sanctioned impurity", "Deferred options").
+| ADR-0028 | Conventional commits through one cocogitto parser |
+| ADR-0030 | One engine; the backend choice is retired |
+| ADR-0035 | The presentation layer moves to Native Shell (nsh) |
+| ADR-0036 | egui is removed; nsh is the one UI and one release path |
 
 ## Testing architecture
 
 Tests live in the crate they exercise, and span crates only when they must:
 
-- `crates/turbogit-engine/tests/`, engine-level behavior against real repos
-  (`engine_golden`, `push_dry_run`, `partial_stage_cli`).
+- `crates/turbogit-engine/tests/`, engine-level behavior against real repos.
 - `crates/turbogit-services/tests/`, service behavior over the fake executor.
-- `crates/turbogit-app/tests/`, stateful staging protocol and cache invalidation.
-- `crates/turbogit-ui/tests/`, the egui/kittest surface suites plus the
-  screenshot-acceptance suite.
-- root `tests/`, the three suites that legitimately need every crate, because
-  only the root has the dependency set to reach both sides of each contract:
-  - `diff_parity.rs`, compares engine diff text against
-    `turbogit_ui::ui::diff::parsed_rows`.
-  - `patch_value.rs`, pins ADR-0022's patch-value conventions (quoting, the
-    no-newline property, mode-only change, a rename with no content change).
-  - `port_discipline.rs`, pins ADR-0022's one-raw-escape rule: it fails when a
-    second production `run_raw` call site appears.
+- `crates/turbogit-app/tests/`, stateful staging and cache invalidation.
+- `crates/turbogit-ui/tests/`, the nsh behavior suites, the accessibility and
+  token audits, the ignored perf harnesses, the `tests/ui/*.test.tsx` screenshot
+  lanes, and `diff_parity.rs`.
+- root `tests/`, the two suites that need every crate:
+  - `patch_value.rs`, pins ADR-0022's patch-value conventions.
+  - `port_discipline.rs`, pins ADR-0022's one-raw-escape rule.
 
-All of them create temporary repositories with `tempfile`, require `git` on
-`PATH`, and drive the real `AppState` plus a fake or CLI engine, the same event
-pump path as production, giving harness/production parity. Shared helpers
-(`RecordingExecutor`, the kittest shell driver) live in `test-support`, behind
-its `harness` feature so a crate that only needs the recording executor never
-compiles `egui_kittest`.
+Behavior suites mount `TestRoot` or `AppRoot` in `nsh_testing::Headless` at
+1280x820 dark on a manual clock through `test_support::nsh_harness`. Visual
+claims come from `nsh test --target macos` screenshots, not from `cargo test`.
+Shared helpers (`RecordingExecutor`, the git recipes, the source scans) live in
+`test-support`; its `nsh` feature carries only the headless harness.
+
+The release path is one command per desktop: `nsh package --target
+{macos,windows,linux}` from `crates/turbogit-ui`. macOS produces a `.app` (zipped
+for the release asset), Windows a `.zip`, and Linux the native tarball on Ubuntu
+24.04 (GTK 4.14, glibc 2.39).

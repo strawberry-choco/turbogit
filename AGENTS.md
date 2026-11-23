@@ -2,8 +2,8 @@
 
 ## Project structure & module organization
 
-TurboGit is a Cargo workspace built with `eframe`/`egui`: one crate per layer,
-plus a thin root composition root.
+TurboGit is a Cargo workspace whose presentation layer is Native Shell (nsh)
+0.5.x: one crate per layer, plus a thin root composition root.
 
 - `crates/turbogit-domain`, `model` and `error`. The leaf; depends only on
   `serde`, `chrono`, `thiserror`.
@@ -20,23 +20,24 @@ plus a thin root composition root.
   which a surface reaches a cached git value: `read` answers and admits, `peek`
   answers only), `shell_reads` (the named git reads that are not cached values),
   `events`, `root_caches`, `persistence`, `recents`, `diff_data` (plain
-  diff-pane types), `diff_model` (the egui-free display model the diff read
+  diff-pane types), `diff_model` (the UI-framework-free display model the diff read
   answers with), `diff_load` (the pane's byte sourcing and decode limits),
   `reveals` (a gap's reveal intent and one file's line-addressable text),
   `log_display` (the held log-window display model and its lane walk), `staged_lines`
   (the per-line staged oracle, and the only place that relates a line of one
   patch to a line of another), and the
   `granular` staging orchestrator.
-- `crates/turbogit-ui`, `theme` and every presentation module under `ui/`.
-- `crates/test-support`, the headless harness and kittest helpers, consumed as
-  a dev-dependency.
-- `src/`, composition root only: `main.rs` plus `lib.rs` and `app.rs`
-  (`TurbogitApp` eframe wiring).
-- `tests/`, the root's single cross-layer suite (`diff_parity`).
+- `crates/turbogit-ui`, the nsh presentation crate: `src/ui/**` controls,
+  `src/screens/**` surfaces, `theme.json` chrome tokens, `src/theme.rs` data
+  tokens, the `AppHandle` bridge, and `launch`. The crate's `main.rs` is the
+  entry `nsh run` and `nsh package` build.
+- `crates/test-support`, the nsh headless harness and git fixtures, consumed as
+  a dev-dependency behind its `nsh` feature.
+- `src/`, composition root only: `main.rs` launches `turbogit_ui::launch`;
+  `lib.rs` carries no code.
+- `tests/`, the root's cross-layer suites (`patch_value`, `port_discipline`).
 - `docs/`, product spec, ADRs, architecture notes.
 - `research/`, competitive research and UX findings.
-- `crates/turbogit-ui/tests/snapshots/`, the per-page PNG renders written by
-  `acceptance_matrix.rs` (egui_kittest's default snapshot directory).
 
 Dependencies flow strictly downward: domain ← engine-api ← {engine, services}
 ← app ← ui, with the root composition root above ui. Every shared version lives
@@ -86,17 +87,27 @@ All are choices to make once the layer boundaries exist; none is a prerequisite.
   deadline, not from a shared temp name, since every test gets its own
   `tempfile::tempdir()`. Re-run the failing target alone before reading a red there
   as a defect, and never write a failure off as known flakiness without that re-run.
-- The `commits` CI job, the fifth gate, CI-side rather than local: it lints the
+- `cd crates/turbogit-ui && nsh check`, type check the nsh app and `cargo check`
+  its crates. The nsh CLI and the crates share the 0.5 line; install it with
+  `curl -fsSL https://nsh.dev/install.sh | sh` (`irm https://nsh.dev/install.ps1 |
+  iex` on Windows). Linux needs GTK 4.14 and glibc 2.39 (Ubuntu 24.04), plus
+  `libgtk-4-dev` and `clang`; macOS needs Xcode's command-line tools; Windows
+  needs the MSVC build tools and WebView2.
+- The `commits` CI job, the sixth gate, CI-side rather than local: it lints the
   PR's commit range (and pushes to `main` as a backstop) with the repo's
   `cog.toml`, through the same cocogitto parser the commit-msg hook runs
   (ADR-0028). Nothing to run by hand; the hook is its local counterpart.
 
-All five gates must pass; a failure in any one blocks the change.
+All six gates must pass; a failure in any one blocks the change.
 
 ### Other commands
 
 - `cargo build`, compile the application.
 - `cargo run`, launch the desktop app locally.
+- `cd crates/turbogit-ui && nsh run --target macos`, run the app in the native
+  development host (use `--target windows` or `linux` on those hosts).
+- `cd crates/turbogit-ui && nsh package --target macos`, produce the release
+  bundle (`.app`; `windows` gives a `.zip`, `linux` the native tarball).
 
 ## Coding style & naming conventions
 
@@ -123,23 +134,25 @@ than tolerated:
 
 ## Design system
 
-The design system is `crates/turbogit-ui/src/theme.rs`: every shared presentation
-token (surfaces, ink, severity, radius, spacing, type scale, fonts) is defined,
-consumed and changed there, not at call sites. The shared widgets that paint
-those tokens are `crates/turbogit-ui/src/ui/components.rs` and `ui/widgets.rs`.
+The design system has two token layers in `crates/turbogit-ui`: `theme.json` for
+the chrome roles and `src/theme.rs` for the data roles (diff, status, state,
+ref accents, lanes, type, density). The shared controls that paint those tokens
+are `src/ui/*.rs`; screens compose them from `src/screens/`.
 `docs/design-system-roles.md` records which name owns which role, and
-`crates/turbogit-ui/tests/` (`design_tokens.rs`, `widget_library.rs`,
-`branch_component_kit.rs`) pins these contracts.
+`crates/turbogit-ui/tests/` (`tokens.rs`, `audit.rs`, `branch_component_kit.rs`)
+pins these contracts.
 
 ## Testing guidelines
 
 Prefer headless integration tests that create temporary repositories with
 `tempfile` and require `git` on `PATH`, drive the real `AppState` plus a fake or
-CLI engine, and pump events through the production path. Snapshot and kittest
-helpers live in `crates/test-support`; enable its `harness` feature from
-dev-dependencies. Suites live in the crate they exercise, `crates/<crate>/tests/`,
-named `<area>_<behavior>`. Only suites that must span every crate belong in the
-root `tests/`.
+CLI engine, and pump events through the production path. The headless nsh
+harness lives in `crates/test-support` behind its `nsh` feature; suites mount
+`TestRoot` or `AppRoot` in `nsh_testing::Headless` at 1280x820 dark on a manual
+clock. Suites live in the crate they exercise, `crates/<crate>/tests/`, named
+`<area>_<behavior>`. Only suites that must span every crate belong in the root
+`tests/`. Visual proof comes from `nsh test --target macos` lanes, never from
+`cargo test`.
 
 ## Commit & pull request guidelines
 

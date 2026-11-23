@@ -103,7 +103,9 @@ _Avoid_: async mode, sync flag, executor strategy, thread pool
 The deterministic way headless tests construct the app: an `AppState` over
 explicitly given repository roots, registered synchronously through the
 production registration path, with no background threads, completed
-operations refresh root status synchronously. Built via `AppState::for_roots`.
+operations refresh root status synchronously. Built via `AppState::for_roots`,
+then mounted at 1280x820 dark on a manual clock in `nsh_testing::Headless`
+through `test-support`'s `nsh` feature.
 _Avoid_: test fixture, mock app, fake state
 
 **Shell**:
@@ -402,3 +404,10 @@ release: breaking changes first, then features, then fixes, everything else fold
 into a miscellaneous section. Published on the release and nowhere else, no committed
 mirror of it exists.
 _Avoid_: changelog, CHANGELOG.md, release body
+
+**Release bundle**:
+The installable nsh package `nsh package --target <os>` writes from
+`crates/turbogit-ui`: a `.app` on macOS, a `.zip` on Windows, and the native
+directory plus `.tar.gz` (runner, bundle, `.desktop`) on Linux built at the
+Ubuntu 24.04 floor. One release path, one command per desktop.
+_Avoid_: installer, dmg, AppImage (deferred to CI), tarball (for the other two)
