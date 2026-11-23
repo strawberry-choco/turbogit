@@ -16,7 +16,6 @@ use crate::screens::branch_picker;
 use crate::screens::branches;
 use crate::screens::changes;
 use crate::screens::log;
-use crate::screens::placeholder;
 use crate::screens::submodules;
 use crate::screens::workspace_picker;
 use crate::screens::worktrees;
@@ -26,15 +25,6 @@ use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::progress::{ProgressProps, progress};
 use crate::ui::row::{RowProps, RowState, row};
 use crate::ui::tab::{TabItem, TabsProps, tabs};
-
-/// The title a tool-window route paints while its phase has not built it.
-fn placeholder_label(id: &str) -> &'static str {
-    match id {
-        "settings" => "Settings",
-        "shortcuts" => "Shortcuts",
-        _ => "Tool window",
-    }
-}
 
 /// The status bar's height, the band the whole shell keeps.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
@@ -53,10 +43,9 @@ pub const TAB_TITLES: [(Tab, &str); 5] = [
 pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
     let t = theme();
     let activity_expanded = signal(handle.peek(|s| s.ui.activity.expanded));
-    let tool_open = signal(None::<&'static str>);
-    // The N5 surfaces have no tab of their own: this band opens their
+    // The N5 and N6 surfaces have no tab of their own: this band opens their
     // routes, and a tab press returns to the tab's own surface.
-    let n5_route = signal(None::<String>);
+    let sheet_route = signal(None::<String>);
 
     // The worktree and submodule caches fire like the egui shell's did: the
     // Worktrees and Submodules routes read them.
@@ -87,16 +76,21 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         .on_change(move |at| {
             if let Some((value, _)) = TAB_TITLES.get(at) {
                 tab_for_press.select(*value);
-                n5_route.set(None);
+                sheet_route.set(None);
             }
         }),
     );
 
     let content_handle = handle.clone();
-    let content_route = n5_route;
+    let content_route = sheet_route;
+    let content_switcher = switcher.clone();
     let content = dynamic(move || {
         if let Some(id) = content_route.get() {
-            return crate::screens::route_screen(content_handle.clone(), &id);
+            return crate::screens::route_screen(
+                content_handle.clone(),
+                &id,
+                content_switcher.clone(),
+            );
         }
         match switcher.signal().get() {
             Tab::Commit => changes::changes_screen(content_handle.clone()).into_element(),
@@ -107,25 +101,34 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         }
     });
 
-    let mut n5_band = view()
+    let mut sheet_band = view()
         .flex_row()
+        .flex_wrap()
         .items_center()
         .gap(px(data::DENSITY_LIST_GAP))
-        .test_id(&test_ids::toolbar("n5"));
-    for (id, label) in [
-        ("rewrite", "Rewrite"),
-        ("conflicts", "Conflicts"),
-        ("rebase", "Rebase"),
-        ("rebase_editor", "Edit plan"),
-        ("cherry_pick", "Cherry"),
-        ("get_from_branch", "Get from"),
-        ("patches", "Patches"),
-        ("unshelve", "Unshelve…"),
-        ("bulk", "Bulk"),
+        .px(px(data::PANEL_PADDING))
+        .pb(px(data::SPACING_Y))
+        .test_id(&test_ids::toolbar("surfaces"));
+    for (n6, id, label) in [
+        (false, "rewrite", "Rewrite"),
+        (false, "conflicts", "Conflicts"),
+        (false, "rebase", "Rebase"),
+        (false, "rebase_editor", "Edit plan"),
+        (false, "cherry_pick", "Cherry"),
+        (false, "get_from_branch", "Get from"),
+        (false, "patches", "Patches"),
+        (false, "unshelve", "Unshelve…"),
+        (false, "bulk", "Bulk"),
+        (true, "blame", "Blame"),
+        (true, "settings", "Settings"),
+        (true, "shortcuts", "Shortcuts"),
+        (true, "palette", "Actions"),
+        (true, "custom_command", "Custom"),
     ] {
-        let press_route = n5_route;
-        let band_id = test_ids::toolbar(&format!("n5-{id}"));
-        n5_band = n5_band.child(
+        let press_route = sheet_route;
+        let prefix = if n6 { "n6" } else { "n5" };
+        let band_id = test_ids::toolbar(&format!("{prefix}-{id}"));
+        sheet_band = sheet_band.child(
             view()
                 .role(AccessibilityRole::Button)
                 .label(label)
@@ -143,6 +146,9 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         );
     }
 
+    let settings_handle = handle.clone();
+    let shortcuts_handle = handle.clone();
+    let palette_handle = handle.clone();
     let activity_handle = handle.clone();
     view()
         .flex_1()
@@ -150,95 +156,44 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         .bg(t.background)
         .child(
             view()
-                .flex_row()
-                .items_center()
-                .gap(px(data::SPACING_X))
-                .px(px(data::PANEL_PADDING))
-                .py(px(data::SPACING_Y))
-                .child(strip)
-                .child(n5_band)
-                .child(view().flex_1())
-                .child(icon_button(
-                    IconButtonProps::new("⚙", "Open settings")
-                        .test_id(&test_ids::toolbar("settings"))
-                        .on_press(move || tool_open.set(Some("settings"))),
-                ))
-                .child(icon_button(
-                    IconButtonProps::new("⌘", "Show shortcuts")
-                        .test_id(&test_ids::toolbar("shortcuts"))
-                        .on_press(move || tool_open.set(Some("shortcuts"))),
-                ))
-                .child(workspace_picker::picker_trigger(handle.clone()))
-                .child(branch_picker::picker_trigger(handle.clone())),
+                .flex_col()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(data::SPACING_X))
+                        .px(px(data::PANEL_PADDING))
+                        .py(px(data::SPACING_Y))
+                        .child(strip)
+                        .child(view().flex_1())
+                        .child(icon_button(
+                            IconButtonProps::new("⚙", "Open settings")
+                                .test_id(&test_ids::toolbar("settings"))
+                                .on_press(move || crate::screens::settings::open(&settings_handle)),
+                        ))
+                        .child(icon_button(
+                            IconButtonProps::new("⌘", "Show shortcuts")
+                                .test_id(&test_ids::toolbar("shortcuts"))
+                                .on_press(move || {
+                                    shortcuts_handle.update(|s| s.ui.shortcuts_open = true)
+                                }),
+                        ))
+                        .child(icon_button(
+                            IconButtonProps::new("⌕", "Find actions")
+                                .test_id(&test_ids::toolbar("palette"))
+                                .on_press(move || {
+                                    palette_handle.update(|s| {
+                                        s.ui.command_query.clear();
+                                        s.ui.command_palette = true;
+                                    })
+                                }),
+                        ))
+                        .child(workspace_picker::picker_trigger(handle.clone()))
+                        .child(branch_picker::picker_trigger(handle.clone())),
+                )
+                .child(sheet_band),
         )
         .child(content)
-        .child(when(
-            move || tool_open.get().is_some(),
-            move || {
-                let t = theme();
-                let close_open = tool_open;
-                let which = tool_open.get().unwrap_or("settings");
-                view()
-                    .absolute()
-                    .inset_0()
-                    .bg(t.background.opacity(0.4))
-                    .on_press(move || close_open.set(None))
-                    .child(
-                        view()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .top_0()
-                            .bottom_0()
-                            .items_center()
-                            .child(
-                                view()
-                                    .flex_col()
-                                    .w(px(520.0))
-                                    .max_h(px(560.0))
-                                    .rounded(px(data::CARD_RADIUS))
-                                    .border(px(1.0))
-                                    .border_color(t.border)
-                                    .bg(t.card)
-                                    .p(px(data::PANEL_PADDING))
-                                    .test_id(&test_ids::route(which))
-                                    .child(
-                                        view()
-                                            .flex_row()
-                                            .items_center()
-                                            .child(
-                                                text(placeholder_label(which))
-                                                    .text_size(px(data::TYPE_PANE_TITLE))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(t.card_foreground)
-                                                    .flex_1(),
-                                            )
-                                            .child(
-                                                view()
-                                                    .role(AccessibilityRole::Button)
-                                                    .label("Close")
-                                                    .test_id(&test_ids::route(format!(
-                                                        "{which}-close"
-                                                    )))
-                                                    .px(px(data::DENSITY_DENSE_BUTTON_PAD_X))
-                                                    .py(px(data::DENSITY_DENSE_BUTTON_PAD_Y))
-                                                    .rounded(px(data::CONTROL_RADIUS))
-                                                    .bg(t.secondary)
-                                                    .text_size(px(data::TYPE_CONTROL))
-                                                    .on_press(move || {
-                                                        close_open.set(None);
-                                                    })
-                                                    .child(
-                                                        text("Close")
-                                                            .text_size(px(data::TYPE_CONTROL)),
-                                                    ),
-                                            ),
-                                    )
-                                    .child(placeholder(which)),
-                            ),
-                    )
-            },
-        ))
         .child(activity_panel(activity_handle, activity_expanded))
 }
 

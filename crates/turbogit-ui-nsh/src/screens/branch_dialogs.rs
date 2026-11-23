@@ -45,9 +45,7 @@ pub fn dialog_layer(handle: AppHandle) -> impl IntoElement {
                     Dialog::NewBranch => new_branch(body_handle.clone()).into_element(),
                     Dialog::RenameBranch => rename_branch(body_handle.clone()).into_element(),
                     Dialog::Tag => tag(body_handle.clone()).into_element(),
-                    Dialog::CompareBranches => {
-                        compare_branches(body_handle.clone()).into_element()
-                    }
+                    Dialog::CompareBranches => compare_branches(body_handle.clone()).into_element(),
                     Dialog::Merge => merge::merge_dialog(body_handle.clone()).into_element(),
                     Dialog::NewWorktree => new_worktree(body_handle.clone()).into_element(),
                     Dialog::ManageRemotes => {

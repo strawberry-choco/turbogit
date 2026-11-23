@@ -35,6 +35,9 @@ pub struct ButtonProps {
     pub size: ControlSize,
     /// No presses, dimmed.
     pub disabled: bool,
+    /// A live disabled gate, read fresh on every render (a dialog action
+    /// that enables once the draft differs from the saved settings).
+    pub disabled_of: Option<std::rc::Rc<dyn Fn() -> bool>>,
     /// A toggled trigger, the current tab: screen readers say so.
     pub selected: bool,
     /// The press handler.
@@ -54,6 +57,7 @@ impl ButtonProps {
             variant: ButtonVariant::default(),
             size: ControlSize::default(),
             disabled: false,
+            disabled_of: None,
             selected: false,
             on_press: None,
             accessibility_label: None,
@@ -78,6 +82,11 @@ impl ButtonProps {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn disabled_if(mut self, disabled: impl Fn() -> bool + 'static) -> Self {
+        self.disabled_of = Some(std::rc::Rc::new(disabled));
         self
     }
 
@@ -150,6 +159,8 @@ pub fn button(props: ButtonProps) -> impl IntoElement {
         .clone()
         .unwrap_or_else(|| props.label.clone());
     let a11y_of = props.label_of.clone();
+    let static_disabled = props.disabled;
+    let disabled_of = props.disabled_of.clone();
 
     let mut inner = view()
         .role(AccessibilityRole::Button)
@@ -163,7 +174,7 @@ pub fn button(props: ButtonProps) -> impl IntoElement {
             selected: props.selected,
             ..AccessibilityState::default()
         })
-        .disabled(props.disabled)
+        .disabled(move || disabled_of.as_ref().map_or(static_disabled, |read| read()))
         .flex_row()
         .items_center()
         .rounded(px(data::CONTROL_RADIUS))

@@ -4,6 +4,7 @@
 //! unbuilt route shares, and [`route_for_tab`] is the shell's map from a
 //! tab to its route.
 
+pub mod blame;
 pub mod branch_dialogs;
 pub mod branch_picker;
 pub mod branches;
@@ -12,6 +13,7 @@ pub mod changes;
 pub mod cherry_pick;
 pub mod commit;
 pub mod conflicts;
+pub mod custom_command;
 pub mod diff_view;
 pub mod divergence;
 pub mod feedback;
@@ -21,14 +23,17 @@ pub mod image_diff;
 pub mod log;
 pub mod log_graph;
 pub mod merge;
+pub mod palette;
 pub mod patches;
 pub mod picks;
 pub mod rebase;
 pub mod rebase_editor;
 pub mod remotes;
 pub mod rewrite;
+pub mod settings;
 pub mod shelf;
 pub mod shell;
+pub mod shortcuts;
 pub mod submodules;
 pub mod sync;
 pub mod unshelve;
@@ -40,6 +45,7 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::bridge::AppHandle;
+use crate::screens::shell::TabSwitcher;
 use crate::test_ids;
 use crate::theme as data;
 
@@ -248,10 +254,15 @@ pub fn placeholder(id: &str) -> impl IntoElement {
         )
 }
 
-/// The screen a route id names: the N4 surfaces paint their real screens,
+/// The screen a route id names: the built surfaces paint their real screens,
 /// an unbuilt route paints [`placeholder`].
-pub fn route_screen(handle: AppHandle, id: &str) -> AnyElement {
+pub fn route_screen(handle: AppHandle, id: &str, switcher: TabSwitcher) -> AnyElement {
     match id {
+        "blame" => blame::blame_screen(handle, switcher).into_element(),
+        "settings" => settings::settings_screen(handle).into_element(),
+        "shortcuts" => shortcuts::shortcuts_screen(handle).into_element(),
+        "palette" => palette::palette_screen(handle, switcher).into_element(),
+        "custom_command" => custom_command::custom_command_screen(handle).into_element(),
         "changes" => changes::changes_screen(handle).into_element(),
         "commit" => commit::commit_screen(handle).into_element(),
         "branch_picker" => branch_picker::picker_screen(handle).into_element(),
@@ -289,6 +300,18 @@ pub fn n5_layers(handle: AppHandle) -> impl IntoElement {
         .child(conflicts::layer(handle.clone()))
         .child(bulk::layer(handle.clone()))
         .child(rewrite::layer(handle.clone()))
+}
+
+/// The N6 dialog layers, in paint order. Each owns the state that says it is
+/// open; none paints when its state is closed. The palette goes last so its
+/// result lands above the surface it opened.
+pub fn n6_layers(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
+    view()
+        .child(settings::layer(handle.clone()))
+        .child(shortcuts::layer(handle.clone()))
+        .child(custom_command::layer(handle.clone()))
+        .child(blame::layer(handle.clone(), switcher.clone()))
+        .child(palette::layer(handle, switcher))
 }
 
 /// A commit id's short form, the one spelling every row uses.

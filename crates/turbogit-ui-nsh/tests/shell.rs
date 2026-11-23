@@ -212,23 +212,30 @@ fn the_status_bar_counters_come_from_the_state_map() {
 }
 
 #[test]
-fn the_settings_and_shortcuts_triggers_open_their_routes() {
+fn the_settings_and_shortcuts_triggers_open_their_dialogs() {
     let project = Project::new();
     let mut app = shell_one_repo(&project);
     app.first_render().unwrap();
     app.wait_for("text:1 total").unwrap();
 
     app.press("id:toolbar:settings").unwrap();
-    app.wait_for("id:route:settings").unwrap();
+    app.wait_for("id:dialog:settings").unwrap();
     assert!(app.screen().shows("Settings"));
-
-    app.press("id:route:settings-close").unwrap();
-    app.wait_for_gone("id:route:settings", std::time::Duration::from_secs(5))
+    app.press("id:dialog:settings:cancel").unwrap();
+    app.wait_for_gone("id:dialog:settings", std::time::Duration::from_secs(5))
         .unwrap();
 
     app.press("id:toolbar:shortcuts").unwrap();
-    app.wait_for("id:route:shortcuts").unwrap();
+    app.wait_for("id:dialog:shortcuts").unwrap();
+    app.wait_for("id:shortcuts:table").unwrap();
     assert!(app.screen().shows("Shortcuts"));
+    app.press("id:dialog:shortcuts:cancel").unwrap();
+    app.wait_for_gone("id:dialog:shortcuts", std::time::Duration::from_secs(5))
+        .unwrap();
+
+    app.press("id:toolbar:palette").unwrap();
+    app.wait_for("id:dialog:command-palette").unwrap();
+    assert!(app.screen().shows("Find Action"));
 }
 
 #[test]

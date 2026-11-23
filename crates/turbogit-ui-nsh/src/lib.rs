@@ -162,31 +162,24 @@ impl Component for AppRoot {
 /// state's route names, the feedback layers, and the toast layer at the
 /// window's edge. One interval per mounted root.
 pub fn app_shell(handle: AppHandle) -> impl IntoElement {
-    let pump = handle.clone();
-    set_interval(Duration::from_millis(120), move || {
-        pump.pump();
-    });
-
+    // One tick drains the event queue, moves the toasts, and empties the
+    // state's notice slot. Three timers for the same idle loop were a third
+    // of the app's wakeups; a single 200ms tick keeps the latency the
+    // surfaces need and the idle CPU under the N6 budget.
     let toasts = ToastShared::new();
     let shown_toasts = signal(Vec::<(u64, crate::ui::toast::ToastItem)>::new());
-    let advance_toasts = toasts;
-    let sync_toasts = shown_toasts;
-    set_interval(Duration::from_millis(50), move || {
-        if advance_toasts.advance() {
-            sync_toasts.set(advance_toasts.visible(3));
+    let pump = handle.clone();
+    set_interval(Duration::from_millis(200), move || {
+        pump.pump();
+        if pump.peek(|s| s.ui.toast.is_some()) {
+            let taken = pump.update_with(|s| s.ui.toast.take());
+            if let Some(toast) = taken {
+                toasts.push_kind(toast.kind, SharedString::from(toast.message));
+                shown_toasts.set(toasts.visible(3));
+            }
         }
-    });
-
-    // The state layer's notices join the shared stack and clear: one toast
-    // channel, whatever queued it.
-    let watch = handle.clone();
-    let push_toasts = toasts;
-    let sync_on_push = shown_toasts;
-    set_interval(Duration::from_millis(120), move || {
-        let taken = watch.update_with(|s| s.ui.toast.take());
-        if let Some(toast) = taken {
-            push_toasts.push_kind(toast.kind, SharedString::from(toast.message));
-            sync_on_push.set(push_toasts.visible(3));
+        if toasts.advance() {
+            shown_toasts.set(toasts.visible(3));
         }
     });
 
@@ -200,7 +193,12 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
     let divergence_handle = handle.clone();
     let sync_handle = handle.clone();
     let n5_handle = handle.clone();
+    let n6_handle = handle.clone();
     let undo_handle = handle.clone();
+    let tab = signal(handle.peek(|s| s.ui.tab));
+    let switcher = TabSwitcher::new(handle.clone(), tab);
+    crate::screens::shortcuts::bind(&switcher, &handle);
+    let shell_switcher = switcher.clone();
     let t = theme();
     view()
         .flex_1()
@@ -211,13 +209,7 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
                 move || welcome_cond.read(|s| s.show_welcome()),
                 move || welcome_screen(welcome_handle.clone()),
             )
-            .otherwise(move || {
-                let tab = signal(shell_handle.peek(|s| s.ui.tab));
-                shell_screen(
-                    shell_handle.clone(),
-                    TabSwitcher::new(shell_handle.clone(), tab),
-                )
-            }),
+            .otherwise(move || shell_screen(shell_handle.clone(), shell_switcher.clone())),
         )
         .child(banner_layer(banner_handle))
         .child(confirm_layer(confirm_handle))
@@ -228,6 +220,7 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
         ))
         .child(crate::screens::sync::sync_layer(sync_handle))
         .child(crate::screens::n5_layers(n5_handle))
+        .child(crate::screens::n6_layers(n6_handle, switcher))
         .child(crate::screens::rewrite::undo_banner(undo_handle))
         .child(status_bar(handle))
         .child(

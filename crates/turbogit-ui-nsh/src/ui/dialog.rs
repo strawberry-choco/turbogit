@@ -42,6 +42,9 @@ pub struct DialogProps {
     pub children: Vec<AnyElement>,
     /// The confirm action's label.
     pub action: SharedString,
+    /// The dismiss action's label; "Cancel" unless the surface says
+    /// "Close" (a surface that only reports, like shortcuts).
+    pub cancel_label: SharedString,
     /// True styles the action destructive (a discard, a delete).
     pub destructive: bool,
     pub on_action: Option<std::rc::Rc<dyn Fn() + 'static>>,
@@ -55,8 +58,12 @@ pub struct DialogProps {
     pub width: Option<f32>,
     /// The primary action cannot be pressed.
     pub action_disabled: bool,
+    /// A live gate on the primary action, read fresh on every render.
+    pub action_disabled_when: Option<std::rc::Rc<dyn Fn() -> bool>>,
     /// The primary action is withheld: only the cancel remains.
     pub hide_action: bool,
+    /// The dismiss action is withheld: the body carries its own footer.
+    pub hide_cancel: bool,
 }
 
 impl DialogProps {
@@ -66,6 +73,7 @@ impl DialogProps {
             title: title.into(),
             children: Vec::new(),
             action: "Confirm".into(),
+            cancel_label: "Cancel".into(),
             destructive: false,
             on_action: None,
             on_cancel: None,
@@ -73,7 +81,9 @@ impl DialogProps {
             disclosure: None,
             width: None,
             action_disabled: false,
+            action_disabled_when: None,
             hide_action: false,
+            hide_cancel: false,
         }
     }
 
@@ -84,6 +94,11 @@ impl DialogProps {
 
     pub fn action(mut self, action: impl Into<SharedString>) -> Self {
         self.action = action.into();
+        self
+    }
+
+    pub fn cancel_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.cancel_label = label.into();
         self
     }
 
@@ -116,8 +131,18 @@ impl DialogProps {
         self
     }
 
+    pub fn action_disabled_when(mut self, disabled: impl Fn() -> bool + 'static) -> Self {
+        self.action_disabled_when = Some(std::rc::Rc::new(disabled));
+        self
+    }
+
     pub fn hide_action(mut self, hide: bool) -> Self {
         self.hide_action = hide;
+        self
+    }
+
+    pub fn hide_cancel(mut self, hide: bool) -> Self {
+        self.hide_cancel = hide;
         self
     }
 
@@ -157,23 +182,30 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
         None => view().absolute().inset_0().bg(t.background.opacity(0.4)),
     };
 
-    let mut cancel_button = ButtonProps::new("Cancel").variant(ButtonVariant::Ghost);
+    let cancel_text = props.cancel_label.clone();
+    let mut cancel_button = ButtonProps::new(cancel_text)
+        .variant(ButtonVariant::Ghost)
+        .test_id(&test_ids::dialog_cancel(&name));
     if let Some(cancel) = cancel.clone() {
         cancel_button = cancel_button.on_press(move || cancel());
     }
     let mut footer = view().flex_row().justify_end().gap(px(data::SPACING_X));
     if props.actions.is_empty() {
         let mut action_button = ButtonProps::new(action_label).variant(variant);
-        action_button = action_button
-            .disabled(props.action_disabled)
-            .test_id(&test_ids::dialog_action(&name));
+        action_button = match props.action_disabled_when.clone() {
+            Some(gate) => action_button.disabled_if(move || gate()),
+            None => action_button.disabled(props.action_disabled),
+        }
+        .test_id(&test_ids::dialog_action(&name));
         if let Some(confirm) = confirm.clone() {
             action_button = action_button.on_press(move || confirm());
         }
         if !props.hide_action {
             footer = footer.child(button(action_button));
         }
-        footer = footer.child(button(cancel_button));
+        if !props.hide_cancel {
+            footer = footer.child(button(cancel_button));
+        }
     } else {
         let last = props.actions.len().saturating_sub(1);
         for (at, action) in props.actions.iter().enumerate() {
@@ -185,7 +217,9 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
             action_button = action_button.on_press(move || on_press());
             footer = footer.child(button(action_button));
         }
-        footer = footer.child(button(cancel_button));
+        if !props.hide_cancel {
+            footer = footer.child(button(cancel_button));
+        }
     }
 
     let mut card = view()
@@ -212,9 +246,13 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
         quiet = quiet.on_press(move || run());
         card = card.child(button(quiet));
     }
-    card = card.child(view().h(px(1.0)).bg(t.border)).child(footer);
+    if !(props.hide_action && props.hide_cancel) {
+        card = card.child(view().h(px(1.0)).bg(t.border)).child(footer);
+    }
 
+    let dialog_name = props.title.clone();
     base_dialog()
+        .label(move || dialog_name.clone())
         .close_on_escape(true)
         .close_on_backdrop_press(true)
         .on_cancel(move || {

@@ -23,6 +23,11 @@ pub fn dialog_action(name: &str) -> String {
     format!("dialog:{name}:action")
 }
 
+/// The dismiss action of the dialog named `name`.
+pub fn dialog_cancel(name: &str) -> String {
+    format!("dialog:{name}:cancel")
+}
+
 /// The tab named `name` (Commit, Log, Branches, ...).
 pub fn tab(name: &str) -> String {
     format!("tab:{name}")
@@ -188,6 +193,31 @@ pub fn rewrite(name: impl std::fmt::Display) -> String {
 /// A Bulk-surface control named `name`.
 pub fn bulk(name: impl std::fmt::Display) -> String {
     format!("bulk:{name}")
+}
+
+/// A Blame-surface control named `name` (`window`, `row:12`, `close`).
+pub fn blame(name: impl std::fmt::Display) -> String {
+    format!("blame:{name}")
+}
+
+/// A Settings-surface control named `name` (`tab:Git`, `git-executable`).
+pub fn settings(name: impl std::fmt::Display) -> String {
+    format!("settings:{name}")
+}
+
+/// A Shortcuts-surface control named `name` (`table`, `row:palette`).
+pub fn shortcuts(name: impl std::fmt::Display) -> String {
+    format!("shortcuts:{name}")
+}
+
+/// A command-palette control named `name` (`search`, `action:settings`).
+pub fn palette(name: impl std::fmt::Display) -> String {
+    format!("palette:{name}")
+}
+
+/// A Custom-command control named `name` (`input`, `run`, `recent:git gc`).
+pub fn custom(name: impl std::fmt::Display) -> String {
+    format!("custom:{name}")
 }
 
 /// The shell's status bar.

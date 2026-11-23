@@ -111,7 +111,7 @@ pub fn command(props: CommandProps) -> impl IntoElement {
         .searchable(true)
         .filterable(true)
         .auto_focus(true)
-        .list_class("max-h-96 overflow-y-auto p-1")
+        .list_class("max-h-96 p-1")
         .item_class("h-7 rounded-sm px-2 hover:bg-muted focus:bg-accent")
         .group_class("px-2 py-1 text-xs")
         .separator_class("h-px bg-border");

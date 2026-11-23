@@ -65,6 +65,7 @@ pub fn tabs(props: TabsProps) -> impl IntoElement {
     base_tabs().indicator_class("inset-y-1 rounded-sm").child(
         view()
             .flex_row()
+            .flex_wrap()
             .self_start()
             .gap_1()
             .p_1()
