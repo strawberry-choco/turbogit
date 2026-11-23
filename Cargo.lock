@@ -6755,6 +6755,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "env_logger",
+ "libc",
  "nsh-base",
  "nsh-core",
  "nsh-engine",
