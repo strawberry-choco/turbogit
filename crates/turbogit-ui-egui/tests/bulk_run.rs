@@ -1,0 +1,197 @@
+use egui_kittest::{Harness, kittest::Queryable};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use test_support::git_seed::git as git_ok;
+use test_support::harness::{
+    assert_matrix_geometry, assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
+};
+use turbogit_app::state::AppState;
+use turbogit_services::bulk_run::RowState;
+
+fn git_unchecked(repo: &Path, args: &[&str]) {
+    let _ = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output();
+}
+
+fn temp_repo(parent: &Path, name: &str) -> PathBuf {
+    let path = parent.join(name);
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    git_ok(&path, &["init", "-q", "-b", "main"]);
+    git_ok(&path, &["config", "user.email", "test@example.com"]);
+    git_ok(&path, &["config", "user.name", "Test"]);
+    std::fs::write(path.join("base.txt"), "base\n").unwrap();
+    git_ok(&path, &["add", "."]);
+    git_ok(&path, &["commit", "-q", "-m", "init"]);
+    let bare = parent.join(format!("{name}.origin"));
+    let _ = std::fs::remove_dir_all(&bare);
+    git_ok(
+        parent,
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
+    git_ok(&path, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git_ok(&path, &["push", "-q", "origin", "main"]);
+    git_ok(&path, &["branch", "--set-upstream-to=origin/main", "main"]);
+    path
+}
+
+fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = test_support::scratch_root(&format!("bulk-run-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("wsb");
+    let frontend = project.join("frontend");
+    std::fs::create_dir_all(&frontend).unwrap();
+    let alpha = temp_repo(&frontend, "alpha");
+    let ui = temp_repo(&frontend, "ui");
+    std::fs::write(ui.join("base.txt"), "uncommitted\n").unwrap();
+    (project, alpha, ui)
+}
+
+fn harness(state: AppState) -> Harness<'static, AppState> {
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
+}
+
+fn wait_row_terminal(h: &mut Harness<'_, AppState>, name: &str) {
+    wait_for(h, |s| {
+        s.ui.bulk_run.as_ref().is_some_and(|v| {
+            v.rows.iter().any(|r| {
+                r.name == name && !matches!(r.state, RowState::Queued { .. } | RowState::Running)
+            })
+        })
+    });
+}
+
+fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
+    for _ in 0..1000 {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+        if pred(harness.state()) {
+            return;
+        }
+    }
+    panic!("condition was not met within 1000 frames");
+}
+
+#[test]
+fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
+    let (project, alpha, _ui) = two_repo_project("render");
+    let state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("Pull all").click();
+    settle(&mut h);
+    h.get_by_label("Run on 1 of 1").click();
+    settle(&mut h);
+
+    wait_row_terminal(&mut h, "alpha");
+    settle(&mut h);
+    assert_painted(&h, "alpha");
+    assert_painted(&h, "Done");
+    assert_painted(&h, "1 done");
+    assert_painted(&h, "Stop remaining");
+
+    h.get_by_label("Close").click();
+    settle(&mut h);
+    assert!(h.state().ui.bulk_run.is_none());
+    assert_not_painted(&h, "Stop remaining");
+}
+
+#[test]
+fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
+    let (project, alpha, _ui) = two_repo_project("resolve");
+    git_ok(
+        &alpha,
+        &["remote", "set-url", "origin", "/nonexistent/broken"],
+    );
+    let state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("Fetch all").click();
+    settle(&mut h);
+    h.get_by_label("Run on 1 of 1").click();
+    wait_row_terminal(&mut h, "alpha");
+    settle(&mut h);
+
+    assert_painted(&h, "Failed");
+    assert_matrix_geometry(
+        &h,
+        "DURATION",
+        &[
+            ("REPO", 0.0),
+            ("STATE", 130.0),
+            ("DETAIL", 400.0),
+            ("DURATION", 700.0),
+        ],
+        &["alpha"],
+        22.0,
+        26.0,
+    );
+    h.get_by_label("Resolve alpha").click();
+    settle(&mut h);
+
+    assert!(h.state().ui.bulk_run.is_none());
+    assert_not_painted(&h, "Stop remaining");
+}
+
+#[test]
+fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
+    let (project, alpha, _ui) = two_repo_project("resolver-link");
+    git_ok(&alpha, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(alpha.join("base.txt"), "theirs\n").unwrap();
+    git_ok(&alpha, &["commit", "-qam", "theirs"]);
+    git_ok(&alpha, &["checkout", "-q", "main"]);
+    std::fs::write(alpha.join("base.txt"), "ours\n").unwrap();
+    git_ok(&alpha, &["commit", "-qam", "ours"]);
+    git_unchecked(&alpha, &["merge", "other"]);
+    git_ok(
+        &alpha,
+        &["remote", "set-url", "origin", "/nonexistent/broken"],
+    );
+
+    let state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("Fetch all").click();
+    settle(&mut h);
+    h.get_by_label("Run on 1 of 1").click();
+    wait_row_terminal(&mut h, "alpha");
+    settle(&mut h);
+
+    h.get_by_label("Resolve alpha").click();
+    settle(&mut h);
+
+    assert!(h.state().ui.conflict_open.is_some(), "resolver opened");
+    assert_painted(&h, "Merge: base.txt");
+}
+
+#[test]
+fn retry_skipped_redispatches_the_skipped_repo_from_the_monitor() {
+    let (project, alpha, _ui) = two_repo_project("retry");
+    let state = AppState::for_roots(&project, &[alpha.clone(), _ui.clone()]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("Stash all").click();
+    settle(&mut h);
+    h.get_by_label("Run on 1 of 2").click();
+    wait_row_terminal(&mut h, "alpha");
+    wait_row_terminal(&mut h, "ui");
+    settle(&mut h);
+
+    assert_painted(&h, "Skipped (clean tree)");
+    assert_painted(&h, "Retry 1 skipped");
+    h.get_by_label("Retry 1 skipped").click();
+    wait_for(&mut h, |s| {
+        s.ui.bulk_run
+            .as_ref()
+            .map(|v| v.tally() == (2, 0, 0, 0, 0))
+            .unwrap_or(false)
+    });
+    settle(&mut h);
+    assert_painted(&h, "2 done · 0 running · 0 queued · 0 skipped · 0 failed");
+}

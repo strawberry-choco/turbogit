@@ -6320,7 +6320,7 @@ dependencies = [
  "turbogit-engine",
  "turbogit-engine-api",
  "turbogit-ui",
- "turbogit-ui-nsh",
+ "turbogit-ui-egui",
 ]
 
 [[package]]
@@ -6659,7 +6659,7 @@ dependencies = [
  "turbogit-engine",
  "turbogit-engine-api",
  "turbogit-services",
- "turbogit-ui",
+ "turbogit-ui-egui",
 ]
 
 [[package]]
@@ -6729,29 +6729,6 @@ name = "turbogit-ui"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "dify",
- "egui",
- "egui_extras",
- "egui_kittest",
- "image",
- "jiff 0.2.40",
- "log",
- "nucleo-matcher",
- "ron",
- "tempfile",
- "test-support",
- "turbogit-app",
- "turbogit-domain",
- "turbogit-engine",
- "turbogit-engine-api",
- "turbogit-services",
-]
-
-[[package]]
-name = "turbogit-ui-nsh"
-version = "0.1.0"
-dependencies = [
- "chrono",
  "egui",
  "egui_kittest",
  "env_logger",
@@ -6769,7 +6746,30 @@ dependencies = [
  "turbogit-app",
  "turbogit-domain",
  "turbogit-engine",
- "turbogit-ui",
+ "turbogit-ui-egui",
+]
+
+[[package]]
+name = "turbogit-ui-egui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dify",
+ "egui",
+ "egui_extras",
+ "egui_kittest",
+ "image",
+ "jiff 0.2.40",
+ "log",
+ "nucleo-matcher",
+ "ron",
+ "tempfile",
+ "test-support",
+ "turbogit-app",
+ "turbogit-domain",
+ "turbogit-engine",
+ "turbogit-engine-api",
+ "turbogit-services",
 ]
 
 [[package]]

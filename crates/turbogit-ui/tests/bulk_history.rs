@@ -1,27 +1,20 @@
-use egui_kittest::{Harness, kittest::Queryable};
+//! The fleet history, ported from the egui `bulk_history` suite: the
+//! recorded runs, the per-repository drill-down, and the rollback a
+//! reversible run offers.
+
 use std::path::{Path, PathBuf};
-use test_support::git_seed::{git, repo_with_one_commit};
-use test_support::harness::{assert_painted, settle, shell_harness_over_unstyled};
+use std::time::Duration;
+
+use support::{Mounted, Project, for_roots_seeded};
+use test_support::git_seed::git;
 use turbogit_app::bulk_history::{BulkRunRecord, RepoOutcome, RepoRecord};
+use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::state::AppState;
-use turbogit_services::bulk_ops::BulkOp;
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    repo_with_one_commit(parent, name)
-}
+mod support;
 
-fn two_repo_project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join(tag);
-    let frontend = project.join("frontend");
-    std::fs::create_dir_all(&frontend).unwrap();
-    let alpha = temp_repo(&frontend, "alpha");
-    let ui = temp_repo(&frontend, "ui");
-    (tmp, alpha, ui)
-}
-
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
+fn repo(project: &Project, name: &str) -> PathBuf {
+    support::seeded_repo(project.path(), name)
 }
 
 fn repo_record(root: &Path, name: &str, outcome: RepoOutcome) -> RepoRecord {
@@ -45,102 +38,135 @@ fn record(id: u64, op: BulkOp, branch: &str, repos: Vec<RepoRecord>) -> BulkRunR
     }
 }
 
-fn state_with_history(project: &Path, roots: &[PathBuf], history: Vec<BulkRunRecord>) -> AppState {
-    let mut state = AppState::for_roots(project, roots);
-    state.ui.bulk_history = history;
-    state
+fn bulk_over(
+    project: &Project,
+    roots: &[PathBuf],
+    seed: impl FnOnce(&mut AppState) + Send + 'static,
+) -> Mounted {
+    let mut app = for_roots_seeded(project.path(), roots, seed);
+    app.first_render().expect("the shell mounts");
+    app.press("id:toolbar:n5-bulk").expect("the bulk band");
+    app.wait_for("id:route:bulk").expect("the bulk route");
+    app
 }
 
 #[test]
 fn the_history_list_renders_rows_and_details_drills_down_per_repo() {
-    let (_tmp, alpha, ui) = two_repo_project("hist-ui");
-    let project = alpha.parent().unwrap().parent().unwrap().to_path_buf();
-    let state = state_with_history(
-        &project,
-        &[alpha.clone(), ui.clone()],
-        vec![record(
+    let project = Project::new();
+    let alpha = repo(&project, "alpha");
+    let ui = repo(&project, "ui");
+    let alpha_for_seed = alpha.clone();
+    let ui_for_seed = ui.clone();
+    let mut app = bulk_over(&project, &[alpha.clone(), ui.clone()], move |s| {
+        s.ui.bulk_history = vec![record(
             1,
             BulkOp::FetchAll,
             "",
             vec![
-                repo_record(&alpha, "alpha", RepoOutcome::Done),
+                repo_record(&alpha_for_seed, "alpha", RepoOutcome::Done),
                 repo_record(
-                    &ui,
+                    &ui_for_seed,
                     "ui",
                     RepoOutcome::Skipped {
                         reason: "offline remote".to_string(),
                     },
                 ),
             ],
-        )],
+        )];
+    });
+    app.press("id:bulk:history-open").expect("open history");
+    app.wait_for("id:bulk:history").expect("the history panel");
+    assert!(support::shows_part(&app, "RECENT FLEET OPERATIONS"));
+    assert!(support::shows_part(&app, "Fetch all · 2 repos"));
+    assert!(support::shows_part(
+        &app,
+        "1 ok · 1 skipped (offline remote)"
+    ));
+    app.press("id:bulk:details:1").expect("details");
+    app.wait_for("text:alpha · done").expect("the repo outcome");
+    assert!(support::shows_part(&app, "ui · skipped (offline remote)"));
+    assert!(
+        !app.screen().matches("id:bulk:rollback:1").unwrap_or(true),
+        "a fetch is not reversible"
     );
-    let mut h = harness(state);
-    settle(&mut h);
-
-    h.get_by_label("Fleet history").click();
-    settle(&mut h);
-
-    assert_painted(&h, "RECENT FLEET OPERATIONS");
-    assert_painted(&h, "Fetch all · 2 repos");
-    assert_painted(&h, "1 ok · 1 skipped (offline remote)");
-
-    h.get_by_label("Details Fetch all").click();
-    settle(&mut h);
-    assert_painted(&h, "alpha · done");
-    assert_painted(&h, "ui · skipped (offline remote)");
 }
 
 #[test]
-fn rollback_is_offered_only_for_reversible_runs_and_undoes_the_branches() {
-    let (_tmp, alpha, ui) = two_repo_project("hist-ui-rb");
-    let project = alpha.parent().unwrap().parent().unwrap().to_path_buf();
-    let mut alpha_row = repo_record(&alpha, "alpha", RepoOutcome::Done);
-    alpha_row.prior_branch = Some("main".to_string());
-    alpha_row.created = true;
-    let state = state_with_history(
-        &project,
-        &[alpha.clone(), ui.clone()],
-        vec![
-            record(
-                1,
-                BulkOp::CreateBranch,
-                "feature/x",
-                vec![
-                    alpha_row,
-                    repo_record(
-                        &ui,
-                        "ui",
-                        RepoOutcome::Skipped {
-                            reason: "dirty worktree".to_string(),
-                        },
-                    ),
-                ],
-            ),
-            record(
-                2,
-                BulkOp::FetchAll,
-                "",
-                vec![repo_record(&alpha, "alpha", RepoOutcome::Done)],
-            ),
-        ],
-    );
-    let mut h = harness(state);
-    settle(&mut h);
-
-    h.get_by_label("Fleet history").click();
-    settle(&mut h);
-
-    assert_painted(&h, "Create branch feature/x · 2 repos");
-    h.get_by_label("Rollback Create branch feature/x").click();
-    settle(&mut h);
-
-    assert_eq!(
-        git(&alpha, &["branch", "--show-current"]).trim(),
-        "main",
-        "the prior checkout was restored"
-    );
+fn rollback_is_offered_for_a_created_branch_and_undoes_it() {
+    let project = Project::new();
+    let alpha = repo(&project, "alpha");
+    let ui = repo(&project, "ui");
+    git(&alpha, &["checkout", "-q", "-b", "feature/x"]);
+    let alpha_for_seed = alpha.clone();
+    let ui_for_seed = ui.clone();
+    let mut app = bulk_over(&project, &[alpha.clone(), ui.clone()], move |s| {
+        let mut created = repo_record(&alpha_for_seed, "alpha", RepoOutcome::Done);
+        created.prior_branch = Some("main".to_string());
+        created.created = true;
+        s.ui.bulk_history = vec![record(
+            1,
+            BulkOp::CreateBranch,
+            "feature/x",
+            vec![
+                created,
+                repo_record(
+                    &ui_for_seed,
+                    "ui",
+                    RepoOutcome::Skipped {
+                        reason: "dirty worktree".to_string(),
+                    },
+                ),
+            ],
+        )];
+    });
+    app.press("id:bulk:history-open").expect("open history");
+    app.wait_for("text:Create branch feature/x · 2 repos")
+        .expect("the record paints");
+    app.press("id:bulk:rollback:1").expect("rollback");
     assert!(
-        !git(&alpha, &["branch", "--list", "feature/x"]).contains("feature/x"),
-        "the created branch was deleted"
+        test_support::wait_until(10_000, || {
+            git(&alpha, &["branch", "--show-current"]).trim() == "main"
+                && !git(&alpha, &["branch", "--list", "feature/x"]).contains("feature/x")
+        }),
+        "the rollback restored main and deleted the created branch: {}",
+        git(&alpha, &["branch", "--list"])
     );
+}
+
+#[test]
+fn a_record_details_and_summary_are_the_same_run() {
+    let project = Project::new();
+    let alpha = repo(&project, "alpha");
+    let ui = repo(&project, "ui");
+    let alpha_for_seed = alpha.clone();
+    let ui_for_seed = ui.clone();
+    let mut app = bulk_over(&project, &[alpha, ui], move |s| {
+        s.ui.bulk_history = vec![record(
+            7,
+            BulkOp::StashAll,
+            "",
+            vec![
+                repo_record(&alpha_for_seed, "alpha", RepoOutcome::Done),
+                repo_record(
+                    &ui_for_seed,
+                    "ui",
+                    RepoOutcome::Skipped {
+                        reason: "clean tree".to_string(),
+                    },
+                ),
+            ],
+        )];
+    });
+    app.press("id:bulk:history-open").expect("open history");
+    app.wait_for("text:Stash all · 2 repos").unwrap();
+    app.press("id:bulk:details:7").expect("details");
+    app.wait_for("text:alpha · done").unwrap();
+    app.press("id:bulk:details:7")
+        .expect("the same details control folds");
+    app.wait_until(
+        "the details list closes",
+        Duration::from_secs(5),
+        |screen| !screen.texts().contains(&"alpha · done"),
+    )
+    .expect("a second details press folds the list");
 }

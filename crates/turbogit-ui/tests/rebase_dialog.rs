@@ -1,300 +1,316 @@
-#![allow(dead_code)]
+//! The Rebase dialog, ported from the egui `rebase_dialog` suite: the onto
+//! picker, the modes, the option rows, the dispatch each mode makes, the
+//! cross-repo banner, and the protected-branch gate.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
-use egui_kittest::kittest::Queryable as _;
-use egui_kittest::{Harness, Node};
+use nsh_testing::Headless;
 use test_support::RecordingExecutor;
-use test_support::git_seed::{commit as git_seed_commit, git};
-use test_support::harness::{
-    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, shell_harness_over_unstyled,
-};
-use test_support::wait_until;
+use test_support::git_seed::git;
+use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-fn commit(dir: &Path, name: &str, text: &str) {
-    let file = dir.join(name);
-    let mut body = std::fs::read_to_string(&file).unwrap_or_default();
-    body.push_str(text);
-    body.push('\n');
-    git_seed_commit(dir, name, &body, text);
-}
+mod support;
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    commit(&path, "base.txt", "base");
-    path
-}
-
-fn rebase_repo(parent: &Path, name: &str) -> PathBuf {
-    let repo = temp_repo(parent, name);
+fn rebase_repo(project: &support::Project, name: &str) -> PathBuf {
+    let repo = support::seeded_repo(project.path(), name);
     git(&repo, &["checkout", "-q", "-b", "feature"]);
-    commit(&repo, "a.txt", "feature-1");
-    commit(&repo, "b.txt", "feature-2");
+    support::commit_into(&repo, "a.txt", "feature-1");
+    support::commit_into(&repo, "b.txt", "feature-2");
     repo
 }
 
-fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<RecordingExecutor>) {
-    let exec: Arc<RecordingExecutor> = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
+fn recorder() -> Arc<RecordingExecutor> {
+    Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
         settings: VcsSettings::default(),
-    })));
-    let state = AppState::for_roots(project, roots)
-        .with_executor(exec.clone())
-        .with_settings(VcsSettings::default());
-    (state, exec)
+    })))
 }
 
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
+fn mount(
+    project: &support::Project,
+    roots: &[PathBuf],
+    exec: Arc<RecordingExecutor>,
+    seed: impl FnOnce(&mut AppState) + Send + 'static,
+) -> Headless {
+    let project = project.path().to_path_buf();
+    let roots = roots.to_vec();
+    let mut app = Headless::start(support::app_config(move || {
+        let mut state = AppState::for_roots(&project, &roots)
+            .with_executor(exec)
+            .with_settings(VcsSettings::default());
+        state.drain_events();
+        seed(&mut state);
+        state.refresh(Affected::All);
+        state.drain_events();
+        state
+    }))
+    .expect("the shell mounts");
+    app.first_render().expect("the first frame paints");
+    app
 }
 
-fn open_rebase(h: &mut Harness<'_, AppState>, _root: &Path) {
-    h.state_mut().open_dialog(Dialog::Rebase, None);
-    h.run();
+fn open_rebase(app: &mut Headless, mode: RebaseMode) {
+    let _ = mode;
+    app.wait_for("id:dialog:rebase")
+        .expect("the rebase dialog paints");
 }
 
-fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
-    let anchor = h
-        .query_all_by_label("Change…")
-        .next()
-        .expect("the dialog's Change… anchor")
-        .rect();
-    let mut best: Option<(f32, Node<'h>)> = None;
-    for node in h.query_all_by_label(label) {
-        let d = node.rect().center().distance(anchor.center());
-        if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-            best = Some((d, node));
-        }
-    }
-    best.expect("no in-dialog node with the label").1
+fn choose_onto(app: &mut Headless, branch: &str) {
+    app.press("id:rebase:onto").expect("the onto select opens");
+    app.wait_for(&format!("text:{branch}"))
+        .expect("the branch item paints");
+    app.press(&format!("text:{branch}"))
+        .expect("the branch is chosen");
 }
 
-#[test]
-fn dialog_paints_mode_onto_and_options() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    assert_painted(&h, "Rebase feature");
-    assert_painted(&h, "ONTO BRANCH");
-    assert_painted(&h, "MODE");
-    for segment in ["Interactive", "Standard", "Autosquash"] {
-        assert_painted(&h, segment);
-    }
-    assert_painted(&h, "OPTIONS");
-    assert_painted(&h, "Autosquash fixup commits");
-    assert_painted(&h, "Update branches (--update-refs)");
-    assert_painted(&h, "Keep empty commits");
-    assert_eq!(h.state().ui.dlg.rebase_mode, RebaseMode::Interactive);
-    assert_painted(&h, "Start interactive rebase");
-}
-
-#[test]
-fn picking_an_onto_branch_lists_the_commits_to_rebase() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-    assert_not_painted(&h, "COMMITS TO REBASE");
-
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-
-    assert_painted(&h, "2 COMMITS TO REBASE");
-    assert_painted(&h, "feature-1");
-    assert_painted(&h, "feature-2");
+fn mounted_rebase(
+    project: &support::Project,
+    roots: &[PathBuf],
+    exec: Arc<RecordingExecutor>,
+    mode: RebaseMode,
+    seed: impl FnOnce(&mut AppState) + Send + 'static,
+) -> Headless {
+    let mode_for_seed = mode;
+    let mut app = mount(project, roots, exec, move |s| {
+        s.ui.dlg.rebase_mode = mode_for_seed;
+        let root = s.multi.roots[0].id.clone();
+        s.open_dialog(Dialog::Rebase, Some(std::slice::from_ref(&root)));
+        seed(s);
+    });
+    open_rebase(&mut app, mode);
+    app
 }
 
 #[test]
-fn mode_clicks_select_the_segment() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    for (label, want) in [
-        ("Standard", RebaseMode::Standard),
-        ("Autosquash", RebaseMode::Autosquash),
-        ("Interactive", RebaseMode::Interactive),
+fn the_dialog_paints_the_modes_options_and_start_verb() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec,
+        RebaseMode::Interactive,
+        |_| {},
+    );
+    for label in [
+        "ONTO BRANCH",
+        "MODE",
+        "Interactive",
+        "Standard",
+        "Autosquash",
+        "OPTIONS",
+        "Autosquash fixup commits",
+        "Update branches (--update-refs)",
+        "Keep empty commits",
     ] {
-        dialog_node(&h, label).click();
-        h.run();
-        assert_eq!(h.state().ui.dlg.rebase_mode, want, "clicked {label}");
+        assert!(
+            support::shows_part(&app, label),
+            "the dialog paints {label}"
+        );
     }
-}
-
-fn recorded_rebases(exec: &RecordingExecutor) -> Vec<(String, turbogit_domain::model::RebaseOpts)> {
-    exec.recorded()
-        .iter()
-        .filter_map(|c| match c {
-            test_support::RecordedCall::Rebase { onto, opts, .. } => {
-                Some((onto.clone(), opts.clone()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn recorded_plans(exec: &RecordingExecutor) -> Vec<Vec<turbogit_domain::model::RebasePlanEntry>> {
-    exec.recorded()
-        .iter()
-        .filter_map(|c| match c {
-            test_support::RecordedCall::RebaseInteractive { plan, .. } => Some(plan.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[test]
-fn interactive_mode_dispatches_the_plan_replay() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-    dialog_node(&h, "Start interactive rebase").click();
-    h.run();
-
-    let ok = wait_until(5_000, || !recorded_plans(&exec).is_empty());
-    assert!(ok, "no interactive plan was dispatched");
-    let plans = recorded_plans(&exec);
-    assert_eq!(plans.len(), 1);
-    let subjects: Vec<&str> = plans[0].iter().map(|e| e.subject.as_str()).collect();
-    assert_eq!(
-        subjects,
-        ["feature-1", "feature-2"],
-        "oldest-first all-pick plan"
+    assert!(
+        app.screen()
+            .matches("id:dialog:rebase:action")
+            .unwrap_or(false)
     );
     assert!(
-        recorded_rebases(&exec).is_empty(),
-        "no plain rebase dispatched"
+        support::shows_part(&app, "Start interactive rebase"),
+        "the interactive mode names its verb"
     );
 }
 
 #[test]
-fn standard_mode_dispatches_the_mode_mapped_rebase() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (mut state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    state.ui.dlg.rebase_mode = RebaseMode::Standard;
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    dialog_node(&h, "Update branches (--update-refs)").click();
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-    dialog_node(&h, "Start rebase").click();
-    h.run();
-
-    let ok = wait_until(5_000, || !recorded_rebases(&exec).is_empty());
-    assert!(ok, "no rebase was dispatched");
-    let rebases = recorded_rebases(&exec);
-    assert_eq!(rebases.len(), 1);
-    assert_eq!(rebases[0].0, "main");
-    assert_eq!(
-        rebases[0].1,
-        turbogit_domain::model::RebaseOpts {
-            update_refs: true,
-            ..Default::default()
-        }
+fn choosing_an_onto_branch_lists_the_commits_to_rebase() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec,
+        RebaseMode::Interactive,
+        |_| {},
     );
-    assert!(recorded_plans(&exec).is_empty(), "no plan dispatched");
+    assert!(!support::shows_part(&app, "COMMITS TO REBASE"));
+    choose_onto(&mut app, "main");
+    app.wait_for("id:rebase:commits").expect("the plan lands");
+    assert!(support::shows_part(&app, "2 COMMITS TO REBASE"));
+    assert!(support::shows_part(&app, "feature-1"));
+    assert!(support::shows_part(&app, "feature-2"));
 }
 
 #[test]
-fn autosquash_mode_forces_the_flag_in_the_dispatch() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (mut state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    state.ui.dlg.rebase_mode = RebaseMode::Autosquash;
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
+fn the_mode_rows_change_the_start_verb() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec,
+        RebaseMode::Interactive,
+        |_| {},
+    );
+    app.press("id:rebase:mode-Standard").expect("the mode row");
+    app.wait_for("text:Start rebase")
+        .expect("the standard verb paints");
+    app.press("id:rebase:mode-Autosquash")
+        .expect("the mode row");
+    app.wait_for("text:Start autosquash rebase")
+        .expect("the autosquash verb paints");
+    app.press("id:rebase:mode-Interactive")
+        .expect("the mode row");
+    app.wait_for("text:Start interactive rebase")
+        .expect("the interactive verb returns");
+}
 
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-    dialog_node(&h, "Start autosquash rebase").click();
-    h.run();
+#[test]
+fn interactive_mode_dispatches_the_oldest_first_plan() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec.clone(),
+        RebaseMode::Interactive,
+        |_| {},
+    );
+    choose_onto(&mut app, "main");
+    app.wait_for("id:rebase:commits").unwrap();
+    app.press("id:dialog:rebase:action")
+        .expect("the start action");
+    assert!(
+        test_support::wait_until(10_000, || {
+            exec.recorded()
+                .iter()
+                .any(|call| matches!(call, test_support::RecordedCall::RebaseInteractive { .. }))
+        }),
+        "an interactive plan was dispatched"
+    );
+    let plans: Vec<_> = exec
+        .recorded()
+        .into_iter()
+        .filter_map(|call| match call {
+            test_support::RecordedCall::RebaseInteractive { plan, .. } => Some(plan),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plans.len(), 1);
+    let subjects: Vec<&str> = plans[0].iter().map(|e| e.subject.as_str()).collect();
+    assert_eq!(subjects, ["feature-1", "feature-2"]);
+    assert!(
+        !exec
+            .recorded()
+            .iter()
+            .any(|call| matches!(call, test_support::RecordedCall::Rebase { .. })),
+        "no plain rebase escaped"
+    );
+}
 
-    let ok = wait_until(5_000, || !recorded_rebases(&exec).is_empty());
-    assert!(ok, "no rebase was dispatched");
-    let rebases = recorded_rebases(&exec);
+#[test]
+fn standard_and_autosquash_modes_dispatch_their_flags() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec.clone(),
+        RebaseMode::Standard,
+        |s| s.ui.dlg.rebase_update_refs = true,
+    );
+    choose_onto(&mut app, "main");
+    app.press("id:dialog:rebase:action").unwrap();
+    assert!(test_support::wait_until(10_000, || {
+        exec.recorded()
+            .iter()
+            .any(|call| matches!(call, test_support::RecordedCall::Rebase { onto, .. } if onto == "main"))
+    }));
+    let rebases: Vec<_> = exec
+        .recorded()
+        .into_iter()
+        .filter_map(|call| match call {
+            test_support::RecordedCall::Rebase { onto, opts, .. } => Some((onto, opts)),
+            _ => None,
+        })
+        .collect();
     assert_eq!(rebases.len(), 1);
-    assert!(rebases[0].1.autosquash, "autosquash mode must set the flag");
+    assert!(rebases[0].1.update_refs, "the option reached the dispatch");
+
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "beta");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec.clone(),
+        RebaseMode::Autosquash,
+        |_| {},
+    );
+    choose_onto(&mut app, "main");
+    app.press("id:dialog:rebase:action").unwrap();
+    assert!(test_support::wait_until(10_000, || {
+        exec.recorded()
+            .iter()
+            .any(|call| matches!(call, test_support::RecordedCall::Rebase { opts, .. } if opts.autosquash))
+    }));
 }
 
 #[test]
-fn cross_repo_banner_names_the_rewrite() {
-    let tmp = tempfile::tempdir().unwrap();
-    let focused = rebase_repo(tmp.path(), "focused");
-    let sibling = rebase_repo(tmp.path(), "sibling");
-    let (state, _exec) = app_state_recording(tmp.path(), &[focused.clone(), sibling.clone()]);
-    let mut h = harness(state);
-    open_rebase(&mut h, &focused);
-    assert_not_painted(&h, "Rewrites");
-
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-
-    assert_painted(&h, "Rewrites 2 commits across 2 repos");
+fn the_cross_repo_banner_names_the_rewrite() {
+    let project = support::Project::new();
+    let focused = rebase_repo(&project, "alpha");
+    let sibling = rebase_repo(&project, "beta");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        &[focused, sibling],
+        exec,
+        RebaseMode::Interactive,
+        |_| {},
+    );
+    choose_onto(&mut app, "main");
+    app.wait_for("id:rebase:commits").unwrap();
+    app.wait_for("id:rebase:banner")
+        .expect("the sibling banner paints");
+    assert!(support::shows_part(
+        &app,
+        "Rewrites 2 commits across 2 repos"
+    ));
 }
 
 #[test]
-fn no_banner_without_affected_siblings() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-
-    assert_not_painted(&h, "Rewrites");
-    assert_not_painted(&h, "View affected →");
-}
-
-#[test]
-fn protected_branch_blocks_the_start_button() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = rebase_repo(tmp.path(), "repo");
-    let (mut state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
-    state.settings.protected_branch_patterns = vec!["feature".to_string()];
-    let mut h = harness(state);
-    open_rebase(&mut h, &repo);
-
-    dialog_node(&h, "Change…").click();
-    h.run();
-    dialog_node(&h, "main").click();
-    h.run();
-    dialog_node(&h, "Start interactive rebase").click();
-    h.run();
-
-    assert!(recorded_rebases(&exec).is_empty(), "a plain rebase escaped");
-    assert!(recorded_plans(&exec).is_empty(), "a plan replay escaped");
+fn a_protected_branch_blocks_the_start() {
+    let project = support::Project::new();
+    let repo = rebase_repo(&project, "alpha");
+    let exec = recorder();
+    let mut app = mounted_rebase(
+        &project,
+        std::slice::from_ref(&repo),
+        exec.clone(),
+        RebaseMode::Interactive,
+        |s| s.settings.protected_branch_patterns = vec!["feature".to_string()],
+    );
+    choose_onto(&mut app, "main");
+    app.wait_for("id:rebase:commits").unwrap();
+    app.wait_for("text:/protected branch/")
+        .expect("the blocker is stated");
+    assert!(
+        !app.screen()
+            .enabled("id:dialog:rebase:action")
+            .unwrap_or(true),
+        "the start action is withheld"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        exec.recorded().is_empty(),
+        "a protected branch dispatched nothing: {:?}",
+        exec.recorded()
+    );
 }

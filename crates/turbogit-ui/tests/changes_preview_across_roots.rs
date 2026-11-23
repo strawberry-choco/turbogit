@@ -1,16 +1,20 @@
+//! The changes preview across workspace roots, ported from the egui
+//! `changes_preview_across_roots` suite: a row previews the change its own
+//! repository owns, even when another root holds a file of the same name,
+//! and a nested file in a non-focused root still answers its own diff.
+
 use std::path::{Path, PathBuf};
 
-use egui::Vec2;
-use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT as _, Queryable as _};
-use test_support::git_seed::git;
-use test_support::harness::{painted_text, settle, shell_harness_over};
-use turbogit_app::state::AppState;
+use support::{Project, commit_tab, open_group, shows_part};
 
-fn init_repo(name: &str, parent: &Path) -> PathBuf {
+mod support;
+
+use test_support::git_seed::git;
+
+fn init_repo(parent: &Path, name: &str) -> PathBuf {
     let repo = parent.join(name);
     std::fs::create_dir_all(&repo).expect("repo dir");
-    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);
     repo
@@ -22,12 +26,12 @@ fn commit_file(repo: &Path, name: &str, content: &str) {
     }
     std::fs::write(repo.join(name), content).expect("write");
     git(repo, &["add", name]);
-    git(repo, &["commit", "-m", "seed"]);
+    git(repo, &["commit", "-q", "-m", "seed"]);
 }
 
 fn workspace(tmp: &Path) -> (PathBuf, PathBuf) {
-    let alpha = init_repo("alpha", tmp);
-    let beta = init_repo("beta", tmp);
+    let alpha = init_repo(tmp, "alpha");
+    let beta = init_repo(tmp, "beta");
     commit_file(&alpha, "shared.txt", "alpha version\n");
     commit_file(&beta, "shared.txt", "beta version\n");
     commit_file(&beta, "deep/nested-beta-file.txt", "one\n");
@@ -37,72 +41,80 @@ fn workspace(tmp: &Path) -> (PathBuf, PathBuf) {
     (alpha, beta)
 }
 
-fn shell(project_dir: &Path, roots: &[PathBuf]) -> Harness<'static, AppState> {
-    let state = AppState::for_roots(project_dir, roots);
-    shell_harness_over(state, Vec2::new(1008.0, 900.0))
-}
-
-fn expand_group(h: &mut Harness<AppState>, root: &str) {
-    h.get_by_label(&format!("Toggle {root}")).click();
-    settle(h);
-}
-
-fn click_row(h: &mut Harness<AppState>, name: &str, n: usize) {
-    let matching: Vec<usize> = h
-        .get_all_by_role(egui::accesskit::Role::Button)
-        .filter_map(|node| node.accesskit_node().label().map(|l| l.to_string()))
-        .enumerate()
-        .filter(|(_, l)| l.as_str() == name)
-        .map(|(i, _)| i)
-        .collect();
-    let at = *matching
-        .get(n)
-        .unwrap_or_else(|| panic!("no {n}th row body labelled {name}"));
-    h.get_all_by_role(egui::accesskit::Role::Button)
-        .nth(at)
-        .expect("row body still present")
-        .click();
-    settle(h);
+fn shell(project: &Project, roots: &[PathBuf]) -> support::Mounted {
+    let mut app = commit_tab(project.path(), roots);
+    for root in roots {
+        let name = root.file_name().unwrap().to_string_lossy().to_string();
+        open_group(&mut app, &name);
+    }
+    app
 }
 
 #[test]
 fn a_change_owned_by_another_root_previews_that_change() {
-    let project = tempfile::tempdir().expect("tempdir");
+    let project = Project::new();
     let (alpha, beta) = workspace(project.path());
-    let mut h = shell(project.path(), &[alpha.clone(), beta]);
-    assert_eq!(h.state().multi.roots.len(), 2, "both roots register");
+    let mut app = shell(&project, &[alpha, beta]);
 
-    expand_group(&mut h, "beta");
-    click_row(&mut h, "nested-beta-file.txt", 0);
+    app.press("id:changes:row:beta:deep/nested-beta-file.txt")
+        .unwrap();
+    app.wait_until(
+        "beta's edit paints",
+        std::time::Duration::from_secs(15),
+        |screen| screen.texts().iter().any(|text| text.trim() == "two"),
+    )
+    .unwrap();
 
-    let texts = painted_text(&h);
     assert!(
-        !texts.iter().any(|t| t.contains("(no differences)")),
-        "beta's edit is real; the pane answered for the focused root instead:\n{texts:?}"
+        !shows_part(&app, "(no differences)"),
+        "beta's edit is real; the pane answered for the focused root instead"
     );
     assert!(
-        texts.iter().any(|t| t.contains("two")),
-        "the pane shows the line beta's worktree added:\n{texts:?}"
+        shows_part(&app, "two"),
+        "the pane shows the line beta's worktree added: {:?}",
+        app.screen().texts()
     );
 }
 
 #[test]
 fn two_roots_with_the_same_relative_path_preview_separately() {
-    let project = tempfile::tempdir().expect("tempdir");
+    let project = Project::new();
     let (alpha, beta) = workspace(project.path());
-    let mut h = shell(project.path(), &[alpha, beta]);
+    let mut app = shell(&project, &[alpha, beta]);
 
-    expand_group(&mut h, "alpha");
-    expand_group(&mut h, "beta");
-    click_row(&mut h, "shared.txt", 1);
-
-    let texts = painted_text(&h);
+    app.press("id:changes:row:beta:shared.txt").unwrap();
+    app.wait_until(
+        "beta's row answers",
+        std::time::Duration::from_secs(15),
+        |screen| {
+            screen
+                .texts()
+                .iter()
+                .any(|text| text.contains("beta version CHANGED"))
+        },
+    )
+    .unwrap();
     assert!(
-        texts.iter().any(|t| t.contains("beta version CHANGED")),
-        "beta's row previews beta's file, not the focused root's same-named one:\n{texts:?}"
+        !shows_part(&app, "alpha version CHANGED"),
+        "alpha's line belongs to alpha's row: {:?}",
+        app.screen().texts()
     );
+
+    app.press("id:changes:row:alpha:shared.txt").unwrap();
+    app.wait_until(
+        "alpha's row answers",
+        std::time::Duration::from_secs(15),
+        |screen| {
+            screen
+                .texts()
+                .iter()
+                .any(|text| text.contains("alpha version CHANGED"))
+        },
+    )
+    .unwrap();
     assert!(
-        !texts.iter().any(|t| t.contains("alpha version CHANGED")),
-        "alpha's line belongs to alpha's row:\n{texts:?}"
+        !shows_part(&app, "beta version CHANGED"),
+        "the same relative path in the other root is a different change: {:?}",
+        app.screen().texts()
     );
 }

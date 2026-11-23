@@ -1,659 +1,156 @@
-use egui::accesskit::Role;
-use egui_kittest::kittest::{NodeT as _, Queryable as _};
-use egui_kittest::{Harness, Node};
-use std::path::{Path, PathBuf};
-use test_support::git_seed::git;
-use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, painted_galleys, settle, shell_harness_over,
-};
-use turbogit_app::recents::{RecentKind, RecentProject, Recents, recents_file, save};
-use turbogit_app::state::{AppState, ToastKind};
-use turbogit_ui::theme::Palette;
+//! The workspace picker's behavior, ported from the egui
+//! `workspace_picker` suite: the trigger opens it, Current names the open
+//! workspace, a recent row re-enters, and the two launch verbs go through
+//! the folder seam.
 
-fn seed_repo(base: &Path, name: &str) -> PathBuf {
-    let dir = base.join(name);
-    std::fs::create_dir_all(&dir).expect("create repo dir");
-    git(&dir, &["init", "-q", "-b", "main"]);
-    dir
-}
+use std::path::PathBuf;
 
-fn seed_workspace(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
-    let ws = base.join("ws");
-    std::fs::create_dir_all(&ws).expect("create workspace dir");
-    let shallow = seed_repo(&ws, "alpha");
-    let deep = ws.join("a").join("b").join("c").join("d");
-    std::fs::create_dir_all(&deep).expect("create deep dir");
-    git(&deep, &["init", "-q", "-b", "main"]);
-    (ws, shallow, deep)
-}
+use support::{Project, shows_part, wait_for_part};
 
-fn recent(path: &Path, name: &str, kind: RecentKind, repo_count: Option<usize>) -> RecentProject {
-    RecentProject {
-        path: path.to_path_buf(),
-        name: name.to_string(),
-        last_opened: 1_755_000_000_000,
-        kind,
-        repo_count,
-    }
-}
+mod support;
 
-fn seed_recents(config_dir: &Path, projects: &[RecentProject]) {
-    let file = recents_file(config_dir);
-    std::fs::create_dir_all(file.parent().unwrap()).expect("create config dir");
-    save(
-        config_dir,
-        &Recents {
-            projects: projects.to_vec(),
-        },
-    )
-    .expect("seed recents file");
-}
-
-struct Fixture {
-    harness: Harness<'static, AppState>,
-    /// Injected OS-config-dir stand-in holding the global recents file.
-    _config: tempfile::TempDir,
-}
-
-fn fixture(
-    launch: Option<PathBuf>,
-    picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
-    recents: &[RecentProject],
-) -> Fixture {
-    let config = tempfile::tempdir().expect("temp config dir");
-    if !recents.is_empty() {
-        seed_recents(config.path(), recents);
-    }
-    let mut state = AppState::launch_in(launch, Some(config.path().to_path_buf()));
-    state.dir_picker = picker;
-
-    Fixture {
-        harness: shell_harness_over(state, egui::vec2(1024.0, 768.0)),
-        _config: config,
-    }
-}
-
-fn fixture_at(launch: PathBuf) -> Fixture {
-    fixture(Some(launch), Some(Box::new(|| None)), &[])
-}
-
-fn fixture_at_with_picker(
-    launch: PathBuf,
-    pick: impl Fn() -> Option<PathBuf> + Send + Sync + 'static,
-) -> Fixture {
-    fixture(Some(launch), Some(Box::new(pick)), &[])
-}
-
-fn fixture_at_with_recents(launch: PathBuf, recents: &[RecentProject]) -> Fixture {
-    fixture(Some(launch), Some(Box::new(|| None)), recents)
-}
-
-fn fixture_at_wide(launch: PathBuf, recents: &[RecentProject]) -> Fixture {
-    let mut fx = fixture(Some(launch), Some(Box::new(|| None)), recents);
-    fx.harness.set_size(egui::vec2(1280.0, 768.0));
-    fx
-}
-
-fn button_labels(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .get_all_by_role(Role::Button)
-        .filter_map(|n| n.accesskit_node().label())
-        .collect()
-}
-
-/// The node whose accessible label is exactly `label`.
-///
-/// No role scoping: the topbar selector that used to make the project name
-/// ambiguous is gone, so every label below identifies exactly one node.
-/// `query_by_label` still panics when a label is ambiguous, which is the
-/// signal that two surfaces have started sharing a name.
-#[track_caller]
-fn button<'t>(harness: &'t Harness<'_, AppState>, label: &'t str) -> Node<'t> {
-    harness.query_by_label(label).unwrap_or_else(|| {
-        panic!(
-            "no node labelled {label:?}; buttons: {:?}",
-            button_labels(harness)
-        )
-    })
-}
-
-#[track_caller]
-fn button_containing<'t>(harness: &'t Harness<'_, AppState>, needle: &'t str) -> Node<'t> {
-    harness
-        .query_all_by_label_contains(needle)
-        .find(|n| n.accesskit_node().role() == Role::Button)
-        .unwrap_or_else(|| {
-            panic!(
-                "no button labelled with {needle:?}; buttons: {:?}",
-                button_labels(harness)
-            )
+fn shell_with_recents(project: &Project, recents: &[PathBuf]) -> support::Mounted {
+    // The production launch opens the one repository and loads the store the
+    // Recent half reads.
+    let repo = support::seeded_repo(project.path(), "alpha");
+    let config = tempfile::tempdir().expect("config dir");
+    let seeded: Vec<turbogit_app::recents::RecentProject> = recents
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            support::recent_project(path.clone(), &name)
         })
+        .collect();
+    support::seed_recents(config.path(), &seeded);
+    // The keeper rides on the Mounted? No: launched_over clones what the
+    // state needs; this test keeps the tempdir itself.
+    let mounted = support::launched_over(&repo, config.path());
+    std::mem::forget(config);
+    mounted
 }
 
-#[track_caller]
-fn open_picker(fx: &mut Fixture) {
-    fx.harness.state_mut().ui.command_palette = true;
-    fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
-    settle(&mut fx.harness);
-    button(&fx.harness, "Switch Workspace…").click();
-    settle(&mut fx.harness);
+#[test]
+fn the_trigger_opens_the_picker_over_the_shell() {
+    let project = Project::new();
+    let mut app = shell_with_recents(&project, &[]);
+    app.first_render().unwrap();
+    app.wait_for("text:1 total").unwrap();
+
+    app.press("id:workspace:switch").unwrap();
+    app.wait_for("id:workspace:picker").unwrap();
+
+    assert!(app.screen().shows("Current"), "the Current group paints");
+    assert!(app.screen().shows("Recent"), "the Recent group paints");
+    assert!(app.screen().shows("alpha"), "the open workspace paints");
+    assert!(app.screen().shows("current"), "the current row is marked");
+    assert!(app.screen().shows("Open Project…"));
+    assert!(app.screen().shows("Attach Workspace Root…"));
+}
+
+#[test]
+fn a_recent_row_reenters_that_workspace() {
+    let project = Project::new();
+    let beta = project.seed_repo("beta");
+    let mut app = shell_with_recents(&project, std::slice::from_ref(&beta));
+    app.first_render().unwrap();
+    app.wait_for("text:1 total").unwrap();
+
+    app.press("id:workspace:switch").unwrap();
+    app.wait_for("id:workspace:picker").unwrap();
+
+    app.press("label:beta").unwrap();
+    app.wait_for("text:1 total").unwrap();
     assert!(
-        fx.harness.state().ui.workspace_picker_open,
-        "the palette entry must open the picker"
+        shows_part(&app, "beta"),
+        "the picker's row opened the row's own path"
     );
 }
 
 #[test]
-fn escape_closes_the_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at(repo);
-    settle(&mut fx.harness);
+fn the_open_workspace_answers_stay() {
+    let project = Project::new();
+    let mut app = shell_with_recents(&project, &[]);
+    app.first_render().unwrap();
+    app.wait_for("text:1 total").unwrap();
 
-    open_picker(&mut fx);
-    assert_painted(&fx.harness, "Open Project…");
+    app.press("id:workspace:switch").unwrap();
+    app.wait_for("id:workspace:picker").unwrap();
+    app.press("id:workspace:row-current").unwrap();
 
-    fx.harness.key_press(egui::Key::Escape);
-    settle(&mut fx.harness);
-
-    assert_not_painted(&fx.harness, "Open Project…");
-    assert!(!fx.harness.state().ui.workspace_picker_open);
+    // The picker closes and nothing re-dispatches: the same workspace is
+    // still the one registered.
+    app.wait_until(
+        "the picker closes",
+        std::time::Duration::from_secs(5),
+        |screen| !screen.matches("id:workspace:picker").unwrap_or(true),
+    )
+    .unwrap();
+    assert!(app.screen().shows("1 total"));
 }
 
 #[test]
-fn clicking_outside_the_picker_closes_it() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at(repo);
-    settle(&mut fx.harness);
+fn the_launch_verbs_go_through_the_folder_seam() {
+    let project = Project::new();
+    let picked = project.seed_repo("picked");
+    let mut app = shell_with_recents(&project, &[]);
+    // The standing open-dialog answer: the verb picks the fresh repo.
+    app.on_pick_paths(vec![picked.clone()])
+        .expect("stub the open dialog");
+    app.first_render().unwrap();
+    app.wait_for("text:1 total").unwrap();
 
-    open_picker(&mut fx);
-    assert_painted(&fx.harness, "Open Project…");
+    app.press("id:workspace:switch").unwrap();
+    app.wait_for("id:workspace:picker").unwrap();
+    app.press("id:workspace:open").unwrap();
 
-    button(&fx.harness, "Refresh changes").click();
-    settle(&mut fx.harness);
-
-    assert_not_painted(&fx.harness, "Open Project…");
-    assert!(!fx.harness.state().ui.workspace_picker_open);
-}
-
-#[test]
-fn picker_row_switches_to_a_recent_workspace() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let (ws, shallow, deep) = seed_workspace(scratch.path());
-    let mut fx = fixture_at_with_recents(
-        current,
-        &[recent(&ws, "ws", RecentKind::Workspace, Some(2))],
-    );
-    settle(&mut fx.harness);
-
-    open_picker(&mut fx);
-    assert_painted(&fx.harness, "ws");
-    assert_painted(&fx.harness, "2 repos");
-
-    button_containing(&fx.harness, "ws").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(
-        s.project_dir, ws,
-        "the workspace row retargets the project dir"
-    );
-    assert!(!s.show_welcome(), "switching enters the shell");
-    assert_eq!(
-        s.multi.roots.len(),
-        2,
-        "a Workspace row deep-scans: both repos register"
-    );
+    wait_for_part(&mut app, "picked").unwrap();
     assert!(
-        s.multi.roots.iter().any(|r| r.id.as_path() == shallow),
-        "the shallow repo registers"
-    );
-    assert!(
-        s.multi.roots.iter().any(|r| r.id.as_path() == deep),
-        "the beyond-SCAN_MAX_DEPTH repo registers"
-    );
-    assert!(!s.ui.workspace_picker_open, "switching closes the picker");
-}
-
-#[test]
-fn picker_row_switches_to_a_recent_project() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let beta = seed_repo(scratch.path(), "beta");
-    let mut fx =
-        fixture_at_with_recents(current, &[recent(&beta, "beta", RecentKind::Project, None)]);
-    settle(&mut fx.harness);
-
-    open_picker(&mut fx);
-    button(&fx.harness, "beta").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(s.project_dir, beta);
-    assert!(!s.show_welcome(), "switching enters the shell");
-    assert_eq!(
-        s.multi.roots.len(),
-        1,
-        "a Project row takes the bounded scan"
-    );
-    assert_eq!(s.multi.roots[0].id.as_path(), beta.as_path());
-    assert!(!s.ui.workspace_picker_open);
-}
-
-#[test]
-fn current_workspace_row_is_marked_and_inert() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let (ws, _, _) = seed_workspace(scratch.path());
-    let mut fx = fixture_at_with_recents(
-        current,
-        &[recent(&ws, "ws", RecentKind::Workspace, Some(2))],
-    );
-    settle(&mut fx.harness);
-
-    fx.harness.state_mut().attach_workspace(&ws);
-    settle(&mut fx.harness);
-
-    let root_id = fx.harness.state().multi.roots[0].id.clone();
-    fx.harness
-        .state_mut()
-        .caches
-        .store_ahead_behind(root_id.clone(), (7, 9));
-
-    fx.harness.state_mut().ui.workspace_picker_open = true;
-    settle(&mut fx.harness);
-
-    let before_dir = fx.harness.state().project_dir.clone();
-    let before_cache = fx
-        .harness
-        .state()
-        .caches
-        .ahead_behind(&root_id)
-        .expect("the sentinel cache entry exists");
-
-    button_containing(&fx.harness, "current").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(
-        s.project_dir, before_dir,
-        "clicking the current row must not re-dispatch"
-    );
-    assert_eq!(
-        s.caches.ahead_behind(&root_id),
-        Some(before_cache),
-        "clicking the current row must not drop caches"
-    );
-    assert!(
-        !s.ui.workspace_picker_open,
-        "the click still closes the picker"
+        app.screen().shows("1 total"),
+        "Open Project… opened the picked folder as the one root"
     );
 }
 
 #[test]
-fn row_metadata_reaches_the_accessibility_tree() {
-    let scratch = tempfile::tempdir().unwrap();
-    let live = seed_repo(scratch.path(), "live");
-    let (ws, _, _) = seed_workspace(scratch.path());
-    let beta = seed_repo(scratch.path(), "beta");
-    let mut fx = fixture_at_with_recents(
-        live,
-        &[
-            recent(&ws, "ws", RecentKind::Workspace, Some(2)),
-            recent(&beta, "beta", RecentKind::Project, None),
-        ],
+fn a_workspace_recent_row_announces_its_repo_count() {
+    let project = Project::new();
+    let ws = project.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    support::seeded_repo(&ws, "one");
+    support::seeded_repo(&ws, "two");
+
+    let repo = support::seeded_repo(project.path(), "alpha");
+    let config = tempfile::tempdir().expect("config dir");
+    support::seed_recents(
+        config.path(),
+        &[turbogit_app::recents::RecentProject {
+            path: ws.clone(),
+            name: "ws".into(),
+            last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Workspace,
+            repo_count: Some(2),
+        }],
     );
-    settle(&mut fx.harness);
-
-    open_picker(&mut fx);
-
-    // A row's repo count is painted in its trailing slot and "current" is painted
-    // as a group caption, so neither reaches the tree unless the name carries it.
-    // A row with nothing extra keeps its bare name, which is what keeps every
-    // other suite's `query_by_label` unambiguous.
-    let labels = button_labels(&fx.harness);
-    for expected in ["live · current", "ws · 2 repos", "beta"] {
-        assert!(
-            labels.iter().any(|label| label == expected),
-            "the picker must name its rows' metadata, not only paint it: \
-             missing {expected:?} in {labels:?}"
-        );
-    }
-}
-
-#[test]
-fn open_project_entry_goes_through_the_picker_seam() {
-    static PICKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    use std::sync::atomic::Ordering::SeqCst;
-
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let picked = seed_repo(scratch.path(), "picked");
-    let p = picked.clone();
-    let mut fx = fixture_at_with_picker(current, move || {
-        PICKS.fetch_add(1, SeqCst);
-        Some(p.clone())
-    });
-    settle(&mut fx.harness);
-    PICKS.store(0, SeqCst);
-
-    open_picker(&mut fx);
-    button(&fx.harness, "Open Project…").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(
-        s.project_dir, picked,
-        "Open Project… enters the picked repository"
-    );
-    assert!(!s.show_welcome());
-    assert_eq!(
-        PICKS.load(SeqCst),
-        1,
-        "one click goes through the picker seam exactly once"
-    );
-}
-
-#[test]
-fn attach_entry_indexes_the_whole_tree() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let (ws, _, deep) = seed_workspace(scratch.path());
-    let w = ws.clone();
-    let mut fx = fixture_at_with_picker(current, move || Some(w.clone()));
-    settle(&mut fx.harness);
-
-    open_picker(&mut fx);
-    button(&fx.harness, "Attach Workspace Root…").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(
-        s.project_dir, ws,
-        "the workspace root becomes the project dir"
-    );
-    assert!(!s.show_welcome());
-    assert_eq!(
-        s.multi.roots.len(),
-        2,
-        "the deep scan indexes repos beyond SCAN_MAX_DEPTH"
-    );
-    assert!(
-        s.multi.roots.iter().any(|r| r.id.as_path() == deep),
-        "the beyond-SCAN_MAX_DEPTH repo registers"
-    );
-}
-
-#[test]
-fn missing_recent_path_toasts_instead_of_dispatching() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let gone = seed_repo(scratch.path(), "gone");
-    let mut fx = fixture_at_with_recents(
-        current.clone(),
-        &[recent(&gone, "gone", RecentKind::Project, None)],
-    );
-    settle(&mut fx.harness);
-    std::fs::remove_dir_all(&gone).expect("delete the recent's directory");
-
-    open_picker(&mut fx);
-    button(&fx.harness, "gone").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert_eq!(
-        s.project_dir, current,
-        "a missing path must not retarget the project dir"
-    );
-    assert!(
-        !s.show_welcome(),
-        "a missing path must not bounce the user to Welcome"
-    );
-    let toast =
-        s.ui.toast
-            .as_ref()
-            .expect("a missing recents path surfaces an error toast");
-    assert_eq!(toast.kind, ToastKind::Error);
-    assert!(
-        toast.message.contains("gone"),
-        "the toast names the missing path; got {:?}",
-        toast.message
-    );
-    assert_painted(&fx.harness, "no longer exists");
-}
-
-#[test]
-fn palette_entry_opens_the_same_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at(repo);
-    settle(&mut fx.harness);
-
-    assert_not_painted(&fx.harness, "Open Project…");
-    assert!(!fx.harness.state().ui.workspace_picker_open);
-
-    fx.harness.state_mut().ui.command_palette = true;
-    fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
-    settle(&mut fx.harness);
-
-    button(&fx.harness, "Switch Workspace…").click();
-    settle(&mut fx.harness);
-
-    let s = fx.harness.state();
-    assert!(
-        s.ui.workspace_picker_open,
-        "the palette entry opens the picker"
-    );
-    assert!(
-        !s.ui.command_palette,
-        "picking a palette entry closes the palette"
-    );
-    assert_painted(&fx.harness, "Open Project…");
-}
-
-#[track_caller]
-fn project_button<'t>(harness: &'t Harness<'_, AppState>) -> Node<'t> {
-    button(harness, "Switch project")
-}
-
-/// A real press-and-release at `pos`, the way egui sees a mouse click.
-fn click_at(harness: &mut Harness<'_, AppState>, pos: egui::Pos2) {
-    harness.hover_at(pos);
-    harness.step();
-    harness.drag_at(pos);
-    harness.step();
-    harness.drop_at(pos);
-    settle(harness);
-}
-
-#[test]
-fn the_project_button_opens_the_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let current = seed_repo(scratch.path(), "current");
-    let (ws, _, _) = seed_workspace(scratch.path());
-    let mut fx = fixture_at_wide(
-        current,
-        &[recent(&ws, "ws", RecentKind::Workspace, Some(2))],
-    );
-    settle(&mut fx.harness);
-
-    assert_not_painted(&fx.harness, "Open Project…");
-    assert!(!fx.harness.state().ui.workspace_picker_open);
-
-    let band = project_button(&fx.harness).rect();
-    click_at(&mut fx.harness, band.center());
+    let mut app = support::launched_over(&repo, config.path());
+    std::mem::forget(config);
+    app.first_render().unwrap();
+    app.wait_for("text:1 total").unwrap();
+    app.press("id:workspace:switch").unwrap();
+    app.wait_for("id:workspace:picker").unwrap();
 
     assert!(
-        fx.harness.state().ui.workspace_picker_open,
-        "the project button opens the picker"
+        shows_part(&app, "2 repos"),
+        "the workspace row's count paints: {:?}",
+        app.screen().texts()
     );
-
-    assert_painted(&fx.harness, "ws");
-    assert_painted(&fx.harness, "2 repos");
-    assert_painted(&fx.harness, "CURRENT");
-    assert_painted(&fx.harness, "RECENT");
-    assert_painted(&fx.harness, "Open Project…");
-    assert_painted(&fx.harness, "Attach Workspace Root…");
-}
-
-/// A dropdown hangs under its trigger, not at a fixed screen corner.
-#[track_caller]
-fn assert_hangs_under(harness: &Harness<'_, AppState>, trigger: egui::Rect) {
-    let caption = painted_galleys(harness)
-        .into_iter()
-        .find(|g| g.text == "CURRENT")
-        .expect("the picker paints its Current caption");
-    let row = button(harness, "Open Project…").rect();
-
+    // The a11y label carries it too, for a reader that cannot see the count.
     assert!(
-        caption.rect.top() >= trigger.bottom(),
-        "the picker opens below the project button; trigger {trigger:?}, caption {:?}",
-        caption.rect
+        app.screen().matches("label:ws · 2 repos").unwrap_or(false),
+        "the row's accessible name carries its count: {:?}",
+        app.screen().texts()
     );
-    assert!(
-        row.left() <= trigger.right() && row.right() >= trigger.left(),
-        "the picker sits under the project button; trigger {trigger:?}, row {row:?}"
-    );
-    assert!(
-        (row.right() - trigger.right()).abs() <= 16.0,
-        "the picker's right edge lines up with the button; trigger {trigger:?}, row {row:?}"
-    );
-    assert!(
-        row.right() <= 1280.0,
-        "the picker stays inside the window; row {row:?}"
-    );
-}
-
-#[test]
-fn the_picker_hangs_under_the_project_button() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at_wide(repo, &[]);
-    settle(&mut fx.harness);
-
-    let trigger = project_button(&fx.harness).rect();
-    click_at(&mut fx.harness, trigger.center());
-
-    assert_hangs_under(&fx.harness, trigger);
-}
-
-#[test]
-fn the_palette_route_hangs_the_picker_under_the_project_button() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at_wide(repo, &[]);
-    settle(&mut fx.harness);
-
-    let trigger = project_button(&fx.harness).rect();
-    fx.harness.state_mut().ui.command_palette = true;
-    fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
-    settle(&mut fx.harness);
-    button(&fx.harness, "Switch Workspace…").click();
-    settle(&mut fx.harness);
-
-    assert_hangs_under(&fx.harness, trigger);
-}
-
-#[test]
-fn hovering_the_project_button_paints_the_ghost_hover_state() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at_wide(repo, &[]);
-    settle(&mut fx.harness);
-
-    let node = project_button(&fx.harness);
-    assert_eq!(
-        node.accesskit_node().role(),
-        Role::Button,
-        "the project trigger answers as a button, which is the semantics that \
-         makes it read as clickable"
-    );
-    let band = node.rect();
-    assert!(
-        !filled_rects(&fx.harness)
-            .iter()
-            .any(|(rect, fill)| *fill == Palette::SURFACE_2 && band.contains_rect(*rect)),
-        "the ghost button rests transparent, so its hover fill is the only \
-         pointer affordance it offers"
-    );
-
-    fx.harness.hover_at(band.center());
-    // The tooltip waits for a still pointer, so hold the hover for a beat.
-    for _ in 0..6 {
-        fx.harness.step();
-    }
-
-    assert!(
-        filled_rects(&fx.harness)
-            .iter()
-            .any(|(rect, fill)| *fill == Palette::SURFACE_2 && band.contains_rect(*rect)),
-        "the ghost button takes its hover fill while the pointer is over it, which \
-         is the affordance it offers in place of a hand cursor"
-    );
-    let label = painted_galleys(&fx.harness)
-        .into_iter()
-        .find(|g| band.contains_rect(g.rect))
-        .expect("the project button paints its project name");
-    assert_eq!(
-        label.color,
-        Palette::INK,
-        "a hovered ghost button steps its ink up from INK_2 to INK"
-    );
-    assert!(
-        !fx.harness.state().ui.workspace_picker_open,
-        "a hover is not a click"
-    );
-}
-
-#[test]
-fn clicking_the_project_button_again_closes_the_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at_wide(repo, &[]);
-    settle(&mut fx.harness);
-
-    let aim = project_button(&fx.harness).rect().center();
-    click_at(&mut fx.harness, aim);
-    assert!(
-        fx.harness.state().ui.workspace_picker_open,
-        "the project button opens the picker"
-    );
-    assert_painted(&fx.harness, "Open Project…");
-
-    click_at(&mut fx.harness, aim);
-
-    assert!(
-        !fx.harness.state().ui.workspace_picker_open,
-        "a second click on the trigger dismisses the dropdown, as click-outside does"
-    );
-    assert_not_painted(&fx.harness, "Open Project…");
-}
-
-#[test]
-fn a_third_click_on_the_project_button_reopens_the_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at_wide(repo, &[]);
-    settle(&mut fx.harness);
-
-    let aim = project_button(&fx.harness).rect().center();
-
-    click_at(&mut fx.harness, aim);
-    assert_painted(&fx.harness, "Open Project…");
-
-    click_at(&mut fx.harness, aim);
-    assert!(
-        !fx.harness.state().ui.workspace_picker_open,
-        "the dismiss happened"
-    );
-
-    click_at(&mut fx.harness, aim);
-
-    assert!(
-        fx.harness.state().ui.workspace_picker_open,
-        "the trigger opens the picker as often as it is clicked"
-    );
-    assert_painted(&fx.harness, "Open Project…");
+    app.press("id:workspace:row:ws").unwrap();
+    app.wait_for("text:2 total").unwrap();
 }

@@ -1,510 +1,373 @@
-use egui_kittest::{Harness, kittest::Queryable};
-use std::path::{Path, PathBuf};
-use test_support::git_seed::{git, pin_eol_lf};
-use test_support::harness::{
-    assert_not_painted, filled_rects, galley_origin, painted_galleys, shell_harness_over_unstyled,
-};
-use turbogit_app::state::{AppState, Dialog, PendingConfirm};
-use turbogit_domain::model::{RootId, Shelf};
+//! The Shelf and Stash panes, ported from the egui `shelf_stash_panes`
+//! suite: both roots' shelves list together, the keep and remove unshelve
+//! verbs do what their names say, the stash pane lists git's own entries and
+//! applies or pops the one its row names, both deletes ask first, and each
+//! empty state names its own mechanism.
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    pin_eol_lf(&path);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    path
+use std::path::{Path, PathBuf};
+
+use support::{Project, for_roots_seeded, seeded_repo};
+
+mod support;
+
+use chrono::Utc;
+use nsh_testing::DialogAnswer;
+use test_support::git_seed::git;
+use turbogit_domain::model::{RootId, Shelf, ShelfSource};
+
+fn repo(project: &Project, name: &str) -> PathBuf {
+    let repo = seeded_repo(project.path(), name);
+    std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+    git(&repo, &["add", "base.txt"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    repo
 }
 
-fn shelf_record(name: &str, root: &Path) -> Shelf {
+fn shelf(name: &str, root: &Path) -> Shelf {
     Shelf {
         name: name.to_string(),
         changes: Vec::new(),
-        created_at: chrono::Utc::now(),
-        root: RootId(root.into()),
-        source: turbogit_domain::model::ShelfSource::Stash,
+        created_at: Utc::now(),
+        root: RootId(root.to_path_buf().into()),
+        source: ShelfSource::Stash,
     }
 }
 
-fn app_state(roots: &[PathBuf]) -> AppState {
-    let dir = roots
-        .first()
-        .and_then(|r| r.parent())
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    AppState::for_roots(&dir, roots)
+/// Parks the working tree's `base.txt` edit in a stash named `name`, the
+/// entry a shelf record points at.
+fn park_edit(repo: &Path, name: &str, body: &str) {
+    std::fs::write(repo.join("base.txt"), body).unwrap();
+    git(repo, &["stash", "push", "-q", "-m", name]);
 }
 
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    test_support::harness::settle(&mut harness);
-    harness
+fn changes_app(project: &Project, roots: &[PathBuf]) -> support::Mounted {
+    let mut app = for_roots_seeded(project.path(), roots, |_| {});
+    app.first_render().unwrap();
+    app.press("id:tab:Commit").unwrap();
+    app.wait_for("id:route:changes").unwrap();
+    app
 }
 
-fn open_sub_tab(h: &mut Harness<'static, AppState>, label: &str) {
-    h.get_by_label(label).click();
-    h.run();
+fn shelf_app(project: &Project, roots: &[PathBuf], shelves: Vec<Shelf>) -> support::Mounted {
+    let mut app = for_roots_seeded(project.path(), roots, move |state| {
+        state.ui.shelves.extend(shelves);
+    });
+    app.first_render().unwrap();
+    app.press("id:tab:Commit").unwrap();
+    app.wait_for("id:route:changes").unwrap();
+    app.press("id:changes:subtab:shelf").unwrap();
+    app.wait_for("id:route:shelf").unwrap();
+    app
 }
 
-const ROW_FIELD_WINDOW: f32 = 300.0;
-
-fn painted_in_pane(h: &Harness<'_, AppState>, needle: &str, anchor: &str) -> bool {
-    let top = galley_origin(h, anchor).unwrap_or_else(|| panic!("the {anchor} pane header paints"));
-    painted_galleys(h).iter().any(|g| {
-        g.text.contains(needle)
-            && g.pos.y > top.y
-            && g.pos.x >= top.x - 1.0
-            && g.pos.x <= top.x + ROW_FIELD_WINDOW
-    })
+fn stash_app(project: &Project, roots: &[PathBuf]) -> support::Mounted {
+    let mut app = changes_app(project, roots);
+    app.press("id:changes:subtab:stash").unwrap();
+    app.wait_for("text:STASHES").unwrap();
+    app
 }
 
-fn fill_behind(h: &Harness<'_, AppState>, label: &str) -> egui::Color32 {
-    let origin = galley_origin(h, label).unwrap_or_else(|| panic!("{label} paints as a label"));
-    filled_rects(h)
-        .into_iter()
-        .filter(|(rect, _)| rect.contains(origin))
-        .min_by_key(|(rect, _)| (rect.width() * rect.height()) as i64)
-        .map(|(_, fill)| fill)
-        .unwrap_or_else(|| panic!("no filled rect behind {label}"))
-}
-
-fn stash_lines(repo: &Path) -> Vec<String> {
+fn stash_list(repo: &Path) -> Vec<String> {
     git(repo, &["stash", "list"])
         .lines()
         .map(str::to_owned)
         .collect()
 }
 
-fn accept_confirm(h: &mut Harness<'static, AppState>) {
-    let confirm: PendingConfirm = h
-        .state()
-        .ui
-        .confirm
-        .clone()
-        .expect("a verb armed a confirmation");
-    h.state_mut().run_confirmed(confirm);
-    h.state_mut().ui.confirm = None;
-    h.run();
+fn worktree(repo: &Path) -> String {
+    std::fs::read_to_string(repo.join("base.txt")).unwrap_or_default()
+}
+
+fn answer_pending(app: &mut support::Mounted, label: &str) {
+    for _ in 0..200 {
+        if app.pending_dialog().is_some() {
+            break;
+        }
+        app.wait(std::time::Duration::from_millis(20)).unwrap();
+    }
+    app.answer_dialog(DialogAnswer::Press(label.to_string()))
+        .expect("the platform alert is pending");
+}
+
+fn in_pane(app: &support::Mounted, needle: &str) -> bool {
+    app.screen()
+        .texts()
+        .iter()
+        .any(|text| text.contains(needle))
 }
 
 #[test]
-fn shelf_pane_lists_every_roots_shelves_grouped_by_repository() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = temp_repo(parent.path(), "alpha");
-    let beta = temp_repo(parent.path(), "beta");
-    let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    state.ui.shelves.push(shelf_record("weather", &alpha));
-    state.ui.shelves.push(shelf_record("tides", &beta));
-    let mut h = harness(state);
-
-    open_sub_tab(&mut h, "Shelf");
-
-    assert_not_painted(&h, "arrives in a later phase");
-    assert!(
-        painted_in_pane(&h, "weather", "SHELVES"),
-        "one root's shelf paints under its group"
+fn the_shelf_pane_lists_every_roots_shelves() {
+    let project = Project::new();
+    let alpha = repo(&project, "alpha");
+    let beta = repo(&project, "beta");
+    let mut app = shelf_app(
+        &project,
+        &[alpha.clone(), beta.clone()],
+        vec![shelf("weather", &alpha), shelf("tides", &beta)],
     );
-    assert!(
-        painted_in_pane(&h, "tides", "SHELVES"),
-        "and another root's shelf paints too: the pane reads every repository"
-    );
-    assert!(painted_in_pane(&h, "ALPHA", "SHELVES"));
-    assert!(painted_in_pane(&h, "BETA", "SHELVES"));
+
+    app.wait_for("id:shelf:row:alpha:weather")
+        .expect("one root's shelf paints");
+    app.wait_for("id:shelf:row:beta:tides")
+        .expect("and another root's shelf paints too");
+    for name in ["alpha", "beta", "weather", "tides"] {
+        assert!(in_pane(&app, name), "the pane names {name}");
+    }
 }
 
 #[test]
-fn shelf_pane_gives_two_unshelve_verbs_with_different_fills() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "verbs");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-
-    open_sub_tab(&mut h, "Shelf");
-
-    let galleys = painted_galleys(&h);
-    let unshelve = galleys.iter().any(|g| g.text == "Unshelve");
-    let remove = galleys.iter().any(|g| g.text == "Unshelve and Remove");
-    assert!(
-        unshelve && remove,
-        "the keep/remove pair paints as two distinct verbs; painted:\n{galleys:#?}"
+fn the_shelf_offers_both_unshelve_verbs() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "weather", "shelved work\n");
+    let app = shelf_app(
+        &project,
+        std::slice::from_ref(&repo),
+        vec![shelf("weather", &repo)],
     );
-    assert_ne!(
-        fill_behind(&h, "Unshelve"),
-        fill_behind(&h, "Unshelve and Remove"),
-        "two identical fills would make the destructive choice indistinguishable"
+
+    assert!(
+        app.screen()
+            .matches("id:shelf:unshelve:weather")
+            .unwrap_or(false),
+        "the keeping verb paints"
+    );
+    assert!(
+        app.screen()
+            .matches("id:shelf:unshelve-remove:weather")
+            .unwrap_or(false),
+        "the destructive sibling paints beside it"
     );
 }
 
 #[test]
 fn unshelve_puts_the_work_back_and_keeps_the_shelf_row() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "keep");
-    shelve_one_change(&repo, "weather");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_sub_tab(&mut h, "Shelf");
-    assert!(
-        painted_in_pane(&h, "weather", "SHELVES"),
-        "the shelve the dialog made paints as a shelf row"
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "weather", "shelved work\n");
+    let mut app = shelf_app(
+        &project,
+        std::slice::from_ref(&repo),
+        vec![shelf("weather", &repo)],
     );
 
-    h.get_by_label("Unshelve").click();
-    h.run();
-    h.run();
-
-    assert!(
-        painted_in_pane(&h, "weather", "SHELVES"),
-        "Unshelve keeps the shelf"
-    );
+    app.press("id:shelf:unshelve:weather").unwrap();
+    app.wait_until(
+        "the shelved change returns to the working tree",
+        std::time::Duration::from_secs(15),
+        |_| worktree(&repo) == "shelved work\n",
+    )
+    .unwrap();
     assert_eq!(
-        h.state().ui.shelves.len(),
+        stash_list(&repo).len(),
         1,
-        "the record survives the keeping verb"
+        "Unshelve keeps git's copy of the content"
     );
     assert!(
-        !stash_lines(&repo).is_empty(),
-        "git's copy of the shelved content survives too"
-    );
-    assert!(
-        git(&repo, &["status", "--porcelain"]).contains("base.txt"),
-        "the shelved change is back in the working tree"
+        app.screen()
+            .matches("id:shelf:row:alpha:weather")
+            .unwrap_or(false),
+        "and keeps the shelf row"
     );
 }
 
 #[test]
-fn unshelve_and_remove_takes_the_shelf_row_and_gits_copy() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "remove");
-    shelve_one_change(&repo, "weather");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_sub_tab(&mut h, "Shelf");
-    h.get_by_label("Unshelve and Remove").click();
-    h.run();
-    h.run();
-
-    assert!(
-        !painted_in_pane(&h, "weather", "SHELVES"),
-        "the destructive sibling destroys the shelf"
+fn unshelve_and_remove_takes_the_row_and_gits_copy() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "weather", "shelved work\n");
+    let mut app = shelf_app(
+        &project,
+        std::slice::from_ref(&repo),
+        vec![shelf("weather", &repo)],
     );
-    assert!(
-        h.state().ui.shelves.is_empty(),
-        "and the record goes with it"
-    );
-    assert!(
-        stash_lines(&repo).is_empty(),
-        "and the stash entry the content lived in"
-    );
-    assert!(
-        git(&repo, &["status", "--porcelain"]).contains("base.txt"),
-        "while the work itself lands back in the tree"
-    );
-}
 
-#[test]
-fn stash_pane_lists_the_roots_stash_entries() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stash-list");
-    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-
-    assert!(
-        painted_in_pane(&h, "stash@{0}", "STASHES"),
-        "the entry's own git ref paints as a row"
-    );
-    assert!(
-        painted_in_pane(&h, "half-done", "STASHES"),
-        "and so does the message it was stashed under"
-    );
-}
-
-#[test]
-fn stash_pane_apply_and_pop_are_two_rects_with_two_fills() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stash-verbs");
-    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-
-    assert_ne!(
-        fill_behind(&h, "Apply Stash (keeps)"),
-        fill_behind(&h, "Pop Stash (removes)"),
-        "the keep/remove pair must not be two identical rects"
-    );
-    let galleys = painted_galleys(&h);
-    for label in ["Apply Stash (keeps)", "Pop Stash (removes)", "Delete Stash"] {
-        assert!(
-            galleys.iter().any(|g| g.text == label),
-            "{label} paints in the stash pane; painted:\n{galleys:#?}"
-        );
-    }
-}
-
-#[test]
-fn shelf_and_stash_deletes_ask_before_they_destroy() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "confirm");
-    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-
-    open_sub_tab(&mut h, "Shelf");
-    h.get_by_label("Delete Shelf").click();
-    h.run();
-    assert!(
-        matches!(
-            h.state().ui.confirm,
-            Some(PendingConfirm::DeleteShelf { .. })
-        ),
-        "the shelf delete raises a confirmation instead of acting"
-    );
+    app.press("id:shelf:unshelve-remove:weather").unwrap();
+    app.wait_until(
+        "the destructive verb empties git's stash list",
+        std::time::Duration::from_secs(15),
+        |_| stash_list(&repo).is_empty(),
+    )
+    .unwrap();
     assert_eq!(
-        h.state().ui.shelves.len(),
-        1,
-        "and nothing is destroyed while the question is open"
+        worktree(&repo),
+        "shelved work\n",
+        "and the work itself lands back in the tree"
     );
-    accept_confirm(&mut h);
-    assert!(
-        h.state().ui.shelves.is_empty(),
-        "the confirmed answer is what removes the record"
-    );
-
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.get_by_label("Delete Stash").click();
-    h.run();
-    assert!(
-        matches!(
-            h.state().ui.confirm,
-            Some(PendingConfirm::DeleteStash { .. })
-        ),
-        "the stash delete raises a confirmation too"
-    );
-    assert_eq!(
-        stash_lines(&repo).len(),
-        1,
-        "the entry survives the question"
-    );
-    accept_confirm(&mut h);
-    assert!(
-        stash_lines(&repo).is_empty(),
-        "and goes when the confirmation is accepted"
-    );
+    app.wait_for_gone(
+        "id:shelf:row:alpha:weather",
+        std::time::Duration::from_secs(10),
+    )
+    .unwrap();
 }
 
 #[test]
-fn the_two_empty_states_name_their_own_mechanism() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "empty");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+fn the_stash_pane_lists_the_roots_entries() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "half-done", "half-done work\n");
+    let mut app = stash_app(&project, std::slice::from_ref(&repo));
+    app.wait_for("text:stash@{0}")
+        .expect("the entry's own git ref paints as a row");
 
-    open_sub_tab(&mut h, "Shelf");
+    assert!(in_pane(&app, "stash@{0}"));
     assert!(
-        painted_in_pane(&h, "Nothing is shelved in this repository", "SHELVES"),
-        "the shelf's empty state says what a shelf holds and where to make one"
-    );
-
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-    assert!(
-        painted_in_pane(&h, "Nothing is stashed in this repository", "STASHES"),
-        "the stash's empty state is its own sentence about its own mechanism"
-    );
-}
-
-fn select_in_commit_list(state: &mut AppState, name: &str) {
-    let key = state
-        .multi
-        .roots
-        .iter()
-        .find_map(|r| {
-            r.status
-                .changes
-                .iter()
-                .find(|c| c.path.ends_with(name))
-                .map(|c| r.canonical_key(c))
-        })
-        .unwrap_or_else(|| panic!("{name} is a local change of a registered root"));
-    state.ui.selected.insert(key);
-}
-
-fn shelve_one_change(repo: &Path, name: &str) {
-    std::fs::write(repo.join("base.txt"), "shelved work\n").unwrap();
-    let mut state = app_state(&[repo.to_path_buf()]);
-    select_in_commit_list(&mut state, "base.txt");
-    state.ui.dlg.shelve_name = name.to_string();
-    let root = state.multi.roots[0].id.clone();
-    state.open_shelve_dialog(Some(root));
-    let mut h = harness(state);
-    h.get_by_label("Shelve selected").click();
-    h.run();
-    h.run();
-    assert_eq!(
-        stash_lines(repo).len(),
-        1,
-        "the shelve parked the change in git's stash stack"
+        in_pane(&app, "half-done"),
+        "and so does the message it was stashed under: {:?}",
+        app.screen().texts()
     );
 }
 
 #[test]
 fn apply_stash_puts_the_work_back_and_keeps_the_entry() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stash-click");
-    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "half-done", "half-done work\n");
+    let mut app = stash_app(&project, std::slice::from_ref(&repo));
+    app.wait_for("text:stash@{0}")
+        .expect("the entry paints before its verb is pressed");
 
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-    h.get_by_label("Apply Stash (keeps)").click();
-    h.run();
-    h.run();
-
+    app.press("id:shelf:apply:0").unwrap();
+    app.wait_until(
+        "the click puts the entry's content back",
+        std::time::Duration::from_secs(15),
+        |_| worktree(&repo) == "half-done work\n",
+    )
+    .unwrap();
     assert_eq!(
-        std::fs::read_to_string(repo.join("base.txt")).unwrap(),
-        "half-done work\n",
-        "the click put the entry's content back in the tree"
-    );
-    assert_eq!(
-        stash_lines(&repo).len(),
+        stash_list(&repo).len(),
         1,
-        "and the keeping half of the pair really keeps: the entry is still git's"
+        "the keeping half of the pair really keeps the entry"
     );
-    assert!(
-        git(&repo, &["stash", "list"]).contains("half-done"),
-        "under the message it was stashed with"
-    );
+    assert!(git(&repo, &["stash", "list"]).contains("half-done"));
 }
 
 #[test]
 fn pop_stash_removes_the_entry_its_own_row_names() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stash-pop");
-    std::fs::write(repo.join("base.txt"), "older work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "older"]);
-    std::fs::write(repo.join("base.txt"), "newer work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "newer"]);
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "older", "older work\n");
+    park_edit(&repo, "newer", "newer work\n");
+    assert_eq!(stash_list(&repo).len(), 2, "two entries to tell apart");
 
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-
-    let older = galley_origin(&h, "stash@{1}").expect("the second entry paints its ref");
-    let pops: Vec<_> = h.get_all_by_label("Pop Stash (removes)").collect();
-    assert_eq!(pops.len(), 2, "one destructive verb per row");
-    let target = pops
-        .iter()
-        .min_by_key(|n| (n.rect().center().y - older.y).abs() as i32)
-        .expect("a pop on the older entry's line");
-    target.click();
-    h.run();
-    h.run();
-
-    let lines = stash_lines(&repo);
-    assert_eq!(lines.len(), 1, "the pop took exactly one entry: {lines:?}");
+    let mut app = stash_app(&project, std::slice::from_ref(&repo));
+    app.wait_for("text:stash@{1}").unwrap();
+    app.press("id:shelf:pop:1").unwrap();
+    app.wait_until(
+        "the pop takes exactly one entry",
+        std::time::Duration::from_secs(15),
+        |_| stash_list(&repo).len() == 1,
+    )
+    .unwrap();
+    let left = stash_list(&repo);
     assert!(
-        lines[0].contains("newer"),
-        "and the survivor is the entry that was NOT clicked: {lines:?}"
+        left[0].contains("newer"),
+        "the survivor is the entry that was NOT clicked: {left:?}"
     );
     assert_eq!(
-        std::fs::read_to_string(repo.join("base.txt")).unwrap(),
+        worktree(&repo),
         "older work\n",
         "the work that came back is the clicked row's own content"
     );
 }
 
 #[test]
-fn the_shelf_pane_header_reaches_the_shelve_dialog() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "shelve-header");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-
-    open_sub_tab(&mut h, "Shelf");
-    assert_eq!(
-        h.state().ui.dialog,
-        None,
-        "listing the pane opens no window of its own"
+fn the_shelf_and_stash_deletes_ask_before_they_destroy() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "weather", "shelved work\n");
+    let mut app = shelf_app(
+        &project,
+        std::slice::from_ref(&repo),
+        vec![shelf("weather", &repo)],
     );
 
-    h.get_by_label("Shelve\u{2026}").click();
-    h.run();
-
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Shelve),
-        "the pane's own header button is a route to the shelve dialog, not a painted \
-         decoration"
-    );
-}
-
-#[test]
-fn the_stash_pane_header_reaches_the_stash_dialog() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stash-header");
-    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
-    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_sub_tab(&mut h, "Stash");
-    h.run();
-    h.run();
-    assert_eq!(h.state().ui.dialog, None, "and the same for the stash pane");
-
-    h.get_by_label("Stash\u{2026}").click();
-    h.run();
-
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Stash),
-        "the stash pane's header opens the park-every-changes window"
-    );
-}
-
-#[test]
-fn a_failed_unshelve_and_remove_leaves_the_row_painted() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "pop-failed");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-
-    open_sub_tab(&mut h, "Shelf");
-    h.get_by_label("Unshelve and Remove").click();
-    h.run();
-    h.run();
-
+    app.answer_dialogs_myself();
+    app.press("id:shelf:delete:weather").unwrap();
+    answer_pending(&mut app, "OK");
+    app.wait_for_gone(
+        "id:shelf:row:alpha:weather",
+        std::time::Duration::from_secs(15),
+    )
+    .expect("the confirmed answer removes the record");
     assert!(
-        painted_in_pane(&h, "weather", "SHELVES"),
-        "a pop that failed leaves the row painted — the work is still wherever it is"
+        stash_list(&repo).is_empty(),
+        "and the stash entry the shelf's content lived in"
     );
+
+    park_edit(&repo, "half-done", "half-done work\n");
+    app.press("id:changes:subtab:stash").unwrap();
+    app.wait_for("text:STASHES").unwrap();
+    app.wait_for("id:shelf:row:alpha:stash@{0}")
+        .expect("the fresh entry paints");
+    app.press("id:shelf:delete:0").unwrap();
+    answer_pending(&mut app, "OK");
+    app.wait_until(
+        "the confirmed answer drops the entry",
+        std::time::Duration::from_secs(15),
+        |_| stash_list(&repo).is_empty(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn cancelling_a_delete_keeps_the_row_and_the_entry() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "half-done", "half-done work\n");
+    let mut app = stash_app(&project, std::slice::from_ref(&repo));
+    app.wait_for("text:stash@{0}").unwrap();
+
+    app.answer_dialogs_myself();
+    app.press("id:shelf:delete:0").unwrap();
+    answer_pending(&mut app, "Cancel");
+    app.wait(std::time::Duration::from_millis(500)).unwrap();
     assert_eq!(
-        h.state().ui.shelves.len(),
+        stash_list(&repo).len(),
         1,
-        "the record goes with the failure, not with the intent"
+        "Cancel must leave the entry alone"
+    );
+}
+
+#[test]
+fn the_two_empty_states_name_their_own_mechanism() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    let mut app = shelf_app(&project, std::slice::from_ref(&repo), Vec::new());
+    assert!(
+        in_pane(&app, "Nothing is shelved in this repository"),
+        "the shelf's empty state says what a shelf holds and where to make one: {:?}",
+        app.screen().texts()
+    );
+
+    app.press("id:changes:subtab:stash").unwrap();
+    app.wait_for("text:STASHES").unwrap();
+    app.wait_until(
+        "the stash's empty state paints",
+        std::time::Duration::from_secs(10),
+        |screen| {
+            screen
+                .texts()
+                .iter()
+                .any(|text| text.contains("Nothing is stashed in this repository"))
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_shelf_header_reaches_its_own_verb() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    let app = shelf_app(&project, std::slice::from_ref(&repo), Vec::new());
+
+    assert!(
+        app.screen().matches("id:shelf:shelve").unwrap_or(false),
+        "the pane's header offers its Shelve verb"
     );
     assert!(
-        h.state().ui.shelf_removal_pending.is_none(),
-        "and the armed removal is disarmed, so no later success can spend it"
+        app.screen().matches("id:shelf:import").unwrap_or(false),
+        "and the import path"
     );
 }

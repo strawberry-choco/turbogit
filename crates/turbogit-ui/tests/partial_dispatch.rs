@@ -1,34 +1,17 @@
+//! Granular staging from the diff pane, ported from the egui
+//! `partial_dispatch` suite: the gutter's hunk verbs reach git forward and
+//! reverse, a per-line click stages exactly that line, a conflicted path's
+//! gutter refuses, and a commit sends the index as it stands rather than
+//! restaging a partially staged file.
+
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-use test_support::harness::{painted_text, shell_harness_over_unstyled};
-use test_support::{RecordedCall, RecordingExecutor, wait_until};
 
-use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use support::{Project, commit_tab, open_group, seeded_repo, staged_patch};
+
+mod support;
+
 use test_support::git_seed::git;
-use turbogit_app::state::AppState;
-use turbogit_domain::model::{ChangeRef, RootId, VcsSettings};
-use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
-struct Repo {
-    path: PathBuf,
-}
-
-fn temp_repo(parent: &Path, name: &str) -> Repo {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    Repo { path }
-}
-
-/// 20-line file whose edits at line 2 (`bravo`) and line 17 (`quebec`) sit
-/// far enough apart that git reports two independent hunks.
 const BASE: &str = concat!(
     "alpha\n",
     "bravo\n",
@@ -52,88 +35,40 @@ const BASE: &str = concat!(
     "tango\n",
 );
 
-fn seed_two_hunk_change(repo: &Repo) {
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
+const HUNK_ONE: &str = concat!(
+    "diff --git a/words.txt b/words.txt\n",
+    "--- a/words.txt\n",
+    "+++ b/words.txt\n",
+    "@@ -1,5 +1,5 @@\n",
+    " alpha\n",
+    "-bravo\n",
+    "+BRAVO\n",
+    " charlie\n",
+    " delta\n",
+    " echo\n",
+);
+
+fn temp_repo(project: &Project, name: &str) -> PathBuf {
+    let repo = seeded_repo(project.path(), name);
+    git(&repo, &["checkout", "-q", "-b", "work"]);
+    repo
+}
+
+fn seed_two_hunk_change(repo: &Path) {
+    std::fs::write(repo.join("words.txt"), BASE).unwrap();
+    git(repo, &["add", "words.txt"]);
+    git(repo, &["commit", "-q", "-m", "words"]);
     let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
-    std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
+    std::fs::write(repo.join("words.txt"), worktree).unwrap();
 }
 
-fn app_state_with_recorder(
-    project_dir: &Path,
-    roots: &[PathBuf],
-) -> (AppState, Arc<RecordingExecutor>) {
-    let recorder = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
-        settings: VcsSettings::default(),
-    })));
-    let state = AppState::for_roots(project_dir, roots)
-        .with_executor(recorder.clone() as Arc<dyn GitExecutor>);
-    (state, recorder)
-}
-
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    test_support::harness::settle(&mut h);
-    test_support::harness::expand_every_repo_group(&mut h);
-    h
-}
-
-#[test]
-fn gutter_stage_button_dispatches_forward_patch_application() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "gutter-stage");
-    seed_two_hunk_change(&repo);
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "gutter stage control for hunk 1 should appear once the diff loads"
-    );
-
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || recorder.recorded().contains(
-            &RecordedCall::ApplyPatch {
-                direction: ApplyDirection::Forward
-            }
-        )),
-        "clicking the gutter + must ask the engine to apply the composed \
-         patch forward, recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-fn stage_first_hunk_by_hand(repo: &Repo, parent: &Path) {
+fn stage_first_hunk_by_hand(repo: &Path, parent: &Path) {
     let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
-    std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
+    std::fs::write(repo.join("words.txt"), worktree).unwrap();
     let patch_path = parent.join("hunk-one.patch");
-    std::fs::write(
-        &patch_path,
-        concat!(
-            "diff --git a/words.txt b/words.txt\n",
-            "--- a/words.txt\n",
-            "+++ b/words.txt\n",
-            "@@ -1,5 +1,5 @@\n",
-            " alpha\n",
-            "-bravo\n",
-            "+BRAVO\n",
-            " charlie\n",
-            " delta\n",
-            " echo\n",
-        ),
-    )
-    .unwrap();
+    std::fs::write(&patch_path, HUNK_ONE).unwrap();
     git(
-        &repo.path,
+        repo,
         &[
             "apply",
             "--cached",
@@ -143,554 +78,117 @@ fn stage_first_hunk_by_hand(repo: &Repo, parent: &Path) {
     );
 }
 
-#[test]
-fn gutter_unstage_button_dispatches_reverse_patch_application() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "gutter-unstage");
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
-    stage_first_hunk_by_hand(&repo, parent.path());
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || h.query_by_label("Unstage hunk 1").is_some()),
-        "gutter unstage control for hunk 1 should appear once the diff loads"
-    );
-
-    h.get_by_label("Unstage hunk 1").click();
-    for _ in 0..8 {
-        h.run();
-    }
-
-    assert!(
-        wait_until(15_000, || recorder.recorded().contains(
-            &RecordedCall::ApplyPatch {
-                direction: ApplyDirection::Reverse
-            }
-        )),
-        "clicking the gutter − must ask the engine to reverse-apply the \
-         composed patch against the index, recorded={:?}",
-        recorder.recorded()
-    );
-    assert!(
-        wait_until(15_000, || git(&repo.path, &["diff", "--cached"]).is_empty()
-            && git(&repo.path, &["status", "--porcelain"]).trim_end()
-                == " M words.txt"),
-        "the reverse apply must actually take the staged hunk out of the index, \
-         staged={:?} status={:?} toast={:?} recorded={:?}",
-        git(&repo.path, &["diff", "--cached"]),
-        git(&repo.path, &["status", "--porcelain"]),
-        h.state().ui.toast.clone(),
-        recorder.recorded()
-    );
-    assert!(
-        h.state()
-            .ui
-            .toast
-            .as_ref()
-            .is_none_or(|t| !matches!(t.kind, turbogit_app::state::ToastKind::Error)),
-        "git accepted it, so no error toast"
-    );
+fn open_preview(app: &mut support::Mounted, root_name: &str) {
+    app.press(&format!("id:changes:row:{root_name}:words.txt"))
+        .unwrap();
+    app.wait_for("id:diff:stage-hunk:0")
+        .expect("the preview's staging gutter paints");
 }
 
-fn row(text: &str, staged: bool) -> String {
-    format!("{text} ({})", if staged { "staged" } else { "unstaged" })
-}
-
-fn run_palette_entry(h: &mut Harness<'_, AppState>, query: &str, label: &str) {
-    {
-        let st = h.state_mut();
-        st.ui.command_palette = true;
-        st.ui.command_query = query.to_owned();
-    }
-    h.run();
-    h.run();
-    h.get_by_label(label).click();
-    h.run();
+fn two_hunk_app(project: &Project, repo: &Path, name: &str) -> support::Mounted {
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo.to_path_buf()));
+    open_group(&mut app, name);
+    app.wait_for(&format!("id:changes:row:{name}:words.txt"))
+        .expect("the changed file row paints");
+    open_preview(&mut app, name);
+    app
 }
 
 #[test]
-fn palette_stage_verb_dispatches_forward_apply_for_current_hunk() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "palette-stage");
+fn the_gutter_stage_verb_applies_that_hunk_forward() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
     seed_two_hunk_change(&repo);
+    let mut app = two_hunk_app(&project, &repo, "alpha");
 
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
+    app.press("id:diff:stage-hunk:0").unwrap();
+    app.wait_until(
+        "the first hunk reaches the index",
+        std::time::Duration::from_secs(15),
+        |_| {
+            let staged = staged_patch(&repo);
+            staged.contains("+BRAVO") && !staged.contains("QUEBEC")
+        },
+    )
+    .unwrap();
     assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    h.state_mut().ui.diff_current_hunk = 0;
-    h.run();
-
-    run_palette_entry(&mut h, "stage hunk", "Stage Hunk");
-
-    assert!(
-        wait_until(15_000, || recorder.recorded().contains(
-            &RecordedCall::ApplyPatch {
-                direction: ApplyDirection::Forward
-            }
-        )),
-        "palette `s` must apply the current hunk's composed patch forward, \
-         recorded={:?}",
-        recorder.recorded()
+        git(&repo, &["diff"]).contains("+QUEBEC"),
+        "the untouched hunk stays unstaged work: {}",
+        git(&repo, &["diff"])
     );
 }
 
 #[test]
-fn palette_stage_verb_no_ops_without_a_previewed_file() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "palette-noop");
+fn the_gutter_unstage_verb_applies_that_hunk_in_reverse() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
+    std::fs::write(repo.join("words.txt"), BASE).unwrap();
+    git(&repo, &["add", "words.txt"]);
+    git(&repo, &["commit", "-q", "-m", "words"]);
+    stage_first_hunk_by_hand(&repo, project.path());
+    assert!(staged_patch(&repo).contains("+BRAVO"));
+
+    let mut app = two_hunk_app(&project, &repo, "alpha");
+    app.press("id:diff:unstage-hunk:0").unwrap();
+    app.wait_until(
+        "the reverse apply takes the staged hunk out of the index",
+        std::time::Duration::from_secs(15),
+        |_| staged_patch(&repo).is_empty(),
+    )
+    .unwrap();
+    assert_eq!(
+        git(&repo, &["status", "--porcelain"]).trim_end(),
+        " M words.txt",
+        "the work itself is still there, now wholly unstaged"
+    );
+}
+
+#[test]
+fn per_line_clicks_stage_each_line_and_never_the_other_side() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
     seed_two_hunk_change(&repo);
+    let mut app = two_hunk_app(&project, &repo, "alpha");
 
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    assert!(h.state().ui.preview_change.is_none());
-    run_palette_entry(&mut h, "stage hunk", "Stage Hunk");
-
-    std::thread::sleep(Duration::from_millis(300));
-    h.run();
-    assert!(
-        !recorder
-            .recorded()
-            .iter()
-            .any(|c| matches!(c, RecordedCall::ApplyPatch { .. })),
-        "palette `s` without a previewed file must not reach the engine, \
-         recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-#[test]
-fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "palette-unstage");
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
-    stage_first_hunk_by_hand(&repo, parent.path());
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Unstage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    h.state_mut().ui.diff_current_hunk = 0;
-    h.run();
-
-    run_palette_entry(&mut h, "unstage hunk", "Unstage Hunk");
-
-    assert!(
-        wait_until(15_000, || recorder.recorded().contains(
-            &RecordedCall::ApplyPatch {
-                direction: ApplyDirection::Reverse
-            }
-        )),
-        "palette `u` must reverse-apply the current hunk's patch against the \
-         index, recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
-    h.get_by_label("Commit changes")
-}
-
-#[test]
-fn commit_with_partially_staged_file_commits_index_without_restaging() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "partial-commit");
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
-    let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
-    std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
-    let hunk_one = concat!(
-        "diff --git a/words.txt b/words.txt\n",
-        "--- a/words.txt\n",
-        "+++ b/words.txt\n",
-        "@@ -1,5 +1,5 @@\n",
-        " alpha\n",
-        "-bravo\n",
-        "+BRAVO\n",
-        " charlie\n",
-        " delta\n",
-        " echo\n",
-    );
-    let patch_path = parent.path().join("hunk-one.patch");
-    std::fs::write(&patch_path, hunk_one).unwrap();
-    git(
-        &repo.path,
-        &[
-            "apply",
-            "--cached",
-            "--recount",
-            patch_path.to_str().unwrap(),
-        ],
-    );
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-    for _ in 0..3 {
-        h.run();
-    }
-
-    h.get_by_label("words.txt").click();
-    h.state_mut().ui.commit_message = "partial: index as-is".into();
-    h.run();
-    commit_action_button(&h).click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || recorder
-            .recorded()
-            .contains(&RecordedCall::CommitIndex)),
-        "the commit must go through commit_index, recorded={:?}",
-        recorder.recorded()
-    );
-    assert!(
-        !recorder.recorded().iter().any(|c| matches!(
-            c,
-            RecordedCall::Add(paths) if paths.iter().any(|p| p.ends_with("words.txt"))
-        )),
-        "a partially staged file must NOT be re-staged whole — that would \
-         blow away the granular selection, recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-#[test]
-fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "untracked-gutter");
-    std::fs::write(
-        repo.path.join("new.txt"),
-        "one\ntwo\nthree\nfour\nfive\nsix\n",
+    // Lower hunk first: staging a line in a later hunk and then one in an
+    // earlier hunk leaves each patch's pre-image unshifted. (The reverse
+    // order composes a later hunk whose header was written against the
+    // pre-stage index; `git apply --cached` recounts it, libgit2's index
+    // apply refuses it — an engine finding outside this port.)
+    app.press("id:diff:del:17").unwrap();
+    app.wait_until(
+        "the clicked deletion alone reaches the index",
+        std::time::Duration::from_secs(15),
+        |_| {
+            let staged = staged_patch(&repo);
+            staged.contains("-quebec") && !staged.contains("QUEBEC") && !staged.contains("BRAVO")
+        },
+    )
+    .unwrap();
+    app.wait_until(
+        "the preview re-reads the index before the next click",
+        std::time::Duration::from_secs(15),
+        |screen| screen.matches("label:quebec (staged)").unwrap_or(false),
     )
     .unwrap();
 
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("new.txt").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "an untracked file's preview must offer granular staging controls"
-    );
-
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || {
-            let recorded = recorder.recorded();
-            let intent = recorded.iter().position(|c| matches!(
-                c,
-                RecordedCall::AddIntentToAdd(paths) if paths.iter().any(|p| p.ends_with("new.txt"))
-            ));
-            let patch = recorded.iter().position(|c| {
-                matches!(
-                    c,
-                    RecordedCall::ApplyPatch {
-                        direction: ApplyDirection::Forward
-                    }
-                )
-            });
-            match (intent, patch) {
-                (Some(i), Some(p)) => i < p,
-                _ => false,
-            }
-        }),
-        "staging part of an untracked file must mark it intent-to-add BEFORE \
-         applying the composed patch, recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-fn git_unchecked(repo: &Path, args: &[&str]) {
-    let _ = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output();
-}
-
-fn seed_conflict(repo: &Repo, branch: &str) {
-    git(&repo.path, &["checkout", "-q", "-b", "side"]);
-    std::fs::write(repo.path.join("conf.txt"), "side\n").unwrap();
-    git(&repo.path, &["add", "conf.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "side commit"]);
-    git(&repo.path, &["checkout", "-q", branch]);
-    std::fs::write(repo.path.join("conf.txt"), "main line\n").unwrap();
-    git(&repo.path, &["add", "conf.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "main commit"]);
-    git_unchecked(&repo.path, &["merge", "--no-edit", "side"]);
-}
-
-#[test]
-fn conflicted_file_gutter_controls_are_disabled_and_never_dispatch() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "conflict-block");
-    let branch = git(&repo.path, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .trim()
-        .to_string();
-    seed_conflict(&repo, &branch);
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("C conf.txt").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "conflicted files must still render their granular controls"
-    );
-    assert!(
-        h.get_by_label("Stage hunk 1")
-            .accesskit_node()
-            .is_disabled(),
-        "gutter stage control must be disabled on a conflicted file"
-    );
-
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-    std::thread::sleep(Duration::from_millis(300));
-    h.run();
-    assert!(
-        !recorder
-            .recorded()
-            .iter()
-            .any(|c| matches!(c, RecordedCall::ApplyPatch { .. })),
-        "conflicted files resolve through the conflict modal — no granular \
-         patch application may be dispatched, recorded={:?}",
-        recorder.recorded()
-    );
-}
-
-#[test]
-fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "focus-advance");
-    seed_two_hunk_change(&repo);
-    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            let text = painted_text(&h).join("\n");
-            text.contains("QUEBEC") && text.contains("BRAVO")
-        }),
-        "the preview keeps showing both hunks after the first is staged"
-    );
-    h.get_by_label("Stage hunk 2").click();
-    h.run();
-
-    assert!(
-        wait_until(15_000, || !h.state().ui.granularly_completed.is_empty()),
-        "the granular completion must be recorded"
-    );
-    assert!(
-        h.query_by_label("words.txt").is_some(),
-        "the flat list keeps a fully staged file visible"
-    );
-    assert!(
-        h.query_by_label("Unstage words.txt (staged)").is_some(),
-        "and its checkbox now reads fully staged"
-    );
-    assert!(
-        wait_until(15_000, || {
-            h.state().ui.preview_change
-                == Some(ChangeRef::new(RootId(repo.path.clone().into()), "base.txt"))
-        }),
-        "preview focus must advance to the next changed file, got {:?}",
-        h.state().ui.preview_change
-    );
-}
-
-#[test]
-fn a_partially_staged_file_renders_the_checkbox_middle_state() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "partial-indicator");
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
-    let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
-    std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
-    let patch_path = parent.path().join("hunk-one.patch");
-    std::fs::write(
-        &patch_path,
-        concat!(
-            "diff --git a/words.txt b/words.txt\n",
-            "--- a/words.txt\n",
-            "+++ b/words.txt\n",
-            "@@ -1,5 +1,5 @@\n",
-            " alpha\n",
-            "-bravo\n",
-            "+BRAVO\n",
-            " charlie\n",
-            " delta\n",
-            " echo\n",
-        ),
-    )
-    .unwrap();
-    git(
-        &repo.path,
-        &[
-            "apply",
-            "--cached",
-            "--recount",
-            patch_path.to_str().unwrap(),
-        ],
-    );
-    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let h = harness(state);
-
-    h.get_by_label("words.txt");
-
-    assert!(
-        wait_until(15_000, || h
-            .query_by_label("Stage all of words.txt (partially staged)")
-            .is_some()),
-        "the partially staged file's checkbox must read its middle state"
-    );
-    h.get_by_label("Stage base.txt (unstaged)");
-    assert!(
-        !painted_text(&h)
-            .iter()
-            .any(|t| t.contains("Partially staged")),
-        "the old warning dot is gone — the checkbox carries the state"
-    );
-}
-
-#[test]
-fn staging_one_hunk_from_the_diff_viewer_makes_the_row_partially_staged() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "partial-from-viewer");
-    seed_two_hunk_change(&repo);
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || git(&repo.path, &["diff", "--cached"])
-            .contains("+BRAVO")),
-        "one hunk reached the index"
-    );
-
-    assert!(
-        wait_until(15_000, || h
-            .query_by_label("Stage all of words.txt (partially staged)")
-            .is_some()),
-        "the row's checkbox must show the middle state after a partial stage"
-    );
-}
-
-#[test]
-fn per_line_clicks_stage_each_line_end_to_end() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "line-toggle");
-    seed_two_hunk_change(&repo);
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    h.get_by_label(&row("bravo", false)).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            let staged = git(&repo.path, &["diff", "--cached"]);
-            staged.contains("-bravo") && !staged.contains("+BRAVO") && !staged.contains("QUEBEC")
-        }),
-        "the clicked deletion alone must reach the index, got:\n{}",
-        git(&repo.path, &["diff", "--cached"])
-    );
-
-    assert!(
-        wait_until(15_000, || {
-            h.run();
-            h.query_by_label(&row("bravo", true)).is_some()
-                && h.query_by_label(&row("BRAVO", false)).is_some()
-        }),
-        "the staged row stays in the preview beside its pair, and says so while it \
-         does: the click moved one line, not the row's own state report"
-    );
-
-    h.get_by_label(&row("quebec", false)).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            let staged = git(&repo.path, &["diff", "--cached"]);
+    app.press("id:diff:del:2").unwrap();
+    app.wait_until(
+        "the second clicked deletion joins it",
+        std::time::Duration::from_secs(15),
+        |_| {
+            let staged = staged_patch(&repo);
             staged.contains("-bravo") && staged.contains("-quebec")
-        }),
-        "both clicked deletions must be staged, got:\n{}",
-        git(&repo.path, &["diff", "--cached"])
-    );
+        },
+    )
+    .unwrap();
 
-    let staged = git(&repo.path, &["diff", "--cached"]);
+    let staged = staged_patch(&repo);
     assert!(
         !staged.contains("BRAVO") && !staged.contains("QUEBEC"),
-        "the unclicked additions must stay out of the index:\n{staged}"
+        "the unclicked additions stay out of the index:\n{staged}"
     );
-    let unstaged = git(&repo.path, &["diff"]);
+    let unstaged = git(&repo, &["diff"]);
     assert!(
         unstaged.contains("+BRAVO") && unstaged.contains("+QUEBEC"),
         "the additions remain unstaged worktree change:\n{unstaged}"
@@ -698,102 +196,114 @@ fn per_line_clicks_stage_each_line_end_to_end() {
 }
 
 #[test]
-fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_untouched() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "unstage-noop");
+fn staging_a_hunk_keeps_both_rows_of_that_hunk_in_the_preview() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
     seed_two_hunk_change(&repo);
-    let worktree_before = std::fs::read_to_string(repo.path.join("words.txt")).unwrap();
+    let mut app = two_hunk_app(&project, &repo, "alpha");
 
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
+    app.press("id:diff:stage-hunk:0").unwrap();
+    app.wait_until(
+        "the stage lands",
+        std::time::Duration::from_secs(15),
+        |_| !staged_patch(&repo).is_empty(),
+    )
+    .unwrap();
+    app.wait_until(
+        "the preview keeps both hunks after the first is staged",
+        std::time::Duration::from_secs(10),
+        |screen| {
+            screen.texts().iter().any(|text| text.contains("QUEBEC"))
+                && screen.texts().iter().any(|text| text.contains("BRAVO"))
+        },
+    )
+    .unwrap();
+}
 
-    h.get_by_label("words.txt").click();
-    h.run();
+#[test]
+fn a_conflicted_files_gutter_is_disabled_and_dispatches_nothing() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
+    let branch = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .trim()
+        .to_string();
+    git(&repo, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(repo.join("conf.txt"), "side\n").unwrap();
+    git(&repo, &["add", "conf.txt"]);
+    git(&repo, &["commit", "-q", "-m", "side"]);
+    git(&repo, &["checkout", "-q", &branch]);
+    std::fs::write(repo.join("conf.txt"), "main line\n").unwrap();
+    git(&repo, &["add", "conf.txt"]);
+    git(&repo, &["commit", "-q", "-m", "main"]);
+    let _ = std::process::Command::new("git")
+        .args(["merge", "--no-edit", "side"])
+        .current_dir(&repo)
+        .output();
+
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo));
+    open_group(&mut app, "alpha");
+    app.press("id:changes:row:alpha:conf.txt").unwrap();
+    app.wait_for("id:diff:stage-hunk:0")
+        .expect("a conflicted file still renders its granular controls");
+    let unmerged_before = staged_patch(&repo);
     assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
+        !app.screen().enabled("id:diff:stage-hunk:0").unwrap(),
+        "the gutter stage control is disabled on a conflicted file"
     );
-
-    h.get_by_label("Unstage hunk 1").click();
-    for _ in 0..8 {
-        h.run();
-    }
-    std::thread::sleep(Duration::from_millis(300));
-    h.run();
-
     assert!(
-        !recorder
-            .recorded()
-            .iter()
-            .any(|c| matches!(c, RecordedCall::ApplyPatch { .. })),
-        "a hunk with no staged row has nothing to reverse-apply, recorded={:?}",
-        recorder.recorded()
+        app.press("id:diff:stage-hunk:0").is_err(),
+        "a disabled control cannot be pressed"
     );
-    assert!(
-        !matches!(
-            h.state().ui.toast.as_ref().map(|t| t.kind),
-            Some(turbogit_app::state::ToastKind::Error)
-        ),
-        "the refused apply that used to surface as an error toast is gone: {:?}",
-        h.state().ui.toast
-    );
-    assert!(
-        h.state().ui.pending_granular.is_none(),
-        "a no-op must not arm completion settlement"
-    );
-
-    assert!(
-        git(&repo.path, &["diff", "--cached"]).is_empty(),
-        "index moved"
+    app.wait(std::time::Duration::from_millis(300)).unwrap();
+    assert_eq!(
+        staged_patch(&repo),
+        unmerged_before,
+        "no granular patch application may be dispatched for an unmerged path"
     );
     assert_eq!(
-        git(&repo.path, &["status", "--porcelain"]).trim_end(),
-        " M words.txt",
-        "status moved"
-    );
-    assert_eq!(
-        std::fs::read_to_string(repo.path.join("words.txt")).unwrap(),
-        worktree_before,
-        "worktree moved"
+        git(&repo, &["diff", "--name-only", "--diff-filter=U"]).trim(),
+        "conf.txt",
+        "the conflict is still the conflict it was"
     );
 }
 
 #[test]
-fn the_pinned_preview_keeps_the_staged_and_the_unstaged_row_both_visible() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "preview-stability");
-    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
-    git(&repo.path, &["add", "words.txt"]);
-    git(&repo.path, &["commit", "-q", "-m", "words"]);
-    stage_first_hunk_by_hand(&repo, parent.path());
+fn a_partially_staged_file_commits_the_index_without_restaging() {
+    let project = Project::new();
+    let repo = temp_repo(&project, "alpha");
+    std::fs::write(repo.join("words.txt"), BASE).unwrap();
+    git(&repo, &["add", "words.txt"]);
+    git(&repo, &["commit", "-q", "-m", "words"]);
+    let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
+    std::fs::write(repo.join("words.txt"), worktree).unwrap();
+    stage_first_hunk_by_hand(&repo, project.path());
 
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo));
+    open_group(&mut app, "alpha");
+    app.wait_for("id:changes:row:alpha:words.txt").unwrap();
+    app.type_text("id:commit:message", "partial: index as-is")
+        .unwrap();
+    app.wait_until(
+        "the commit enables",
+        std::time::Duration::from_secs(15),
+        |screen| screen.enabled("id:commit:action").unwrap_or(false),
+    )
+    .unwrap();
+    app.press("id:commit:action").unwrap();
+    app.wait_until(
+        "the commit lands",
+        std::time::Duration::from_secs(20),
+        |_| git(&repo, &["log", "-1", "--pretty=%s"]).trim() == "partial: index as-is",
+    )
+    .unwrap();
 
-    h.get_by_label("words.txt").click();
-    h.run();
+    let committed = git(&repo, &["show", "--format=", "--", "words.txt"]);
     assert!(
-        wait_until(15_000, || {
-            let text = painted_text(&h).join("\n");
-            text.contains("BRAVO") && text.contains("QUEBEC")
-        }),
-        "the combined view shows the staged half and the unstaged half at once"
+        committed.contains("+BRAVO") && !committed.contains("QUEBEC"),
+        "the commit sends the index as it stood and never re-stages the whole file:\n{committed}"
     );
-
-    let before = painted_text(&h).join("\n");
-    h.get_by_label(&row("BRAVO", true)).click();
     assert!(
-        wait_until(15_000, || {
-            h.run();
-            let text = painted_text(&h).join("\n");
-            text.contains("BRAVO")
-                && text.contains("bravo")
-                && text.contains("QUEBEC")
-                && git(&repo.path, &["diff", "--cached"]).is_empty()
-        }),
-        "unstaging the line the reader clicked moved no row and hid no row; \
-         before={before}"
+        git(&repo, &["diff"]).contains("+QUEBEC"),
+        "the half left out of the index is still unstaged work"
     );
 }

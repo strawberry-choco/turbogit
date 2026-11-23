@@ -20,13 +20,13 @@ pub const VIEWPORT: (f32, f32) = (1280.0, 820.0);
 /// thread, and the closure it stores must be `Send`, so the state cannot
 /// cross it from the test.
 pub fn config(project_dir: Option<PathBuf>) -> EngineConfig {
-    let root = Root::new::<turbogit_ui_nsh::TestRoot>(move || turbogit_ui_nsh::TestRootProps {
-        handle: turbogit_ui_nsh::bridge::AppHandle::new(match &project_dir {
+    let root = Root::new::<turbogit_ui::TestRoot>(move || turbogit_ui::TestRootProps {
+        handle: turbogit_ui::bridge::AppHandle::new(match &project_dir {
             Some(dir) => AppState::for_roots(dir, std::slice::from_ref(dir)),
             None => AppState::launch(None),
         }),
     })
-    .tokens(turbogit_ui_nsh::tokens())
+    .tokens(turbogit_ui::tokens())
     .appearance(Appearance::Dark);
     let mut config = EngineConfig::new(root);
     config.viewport = Size::new(

@@ -85,7 +85,7 @@ const MARKER: &str = "iiiiiiiiiiiiiiii";
 fn unfonited(size: Vec2) -> Harness<'static, ()> {
     let mut harness = Harness::new_ui_state(
         |ui, _| {
-            turbogit_ui::theme::configure_style(ui.ctx());
+            turbogit_ui_egui::theme::configure_style(ui.ctx());
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.monospace(MARKER);
             });
@@ -344,12 +344,12 @@ fn the_unstyled_constructor_installs_neither_the_fonts_nor_the_tokens() {
     let stroke = |ctx: &egui::Context| ctx.style_of(egui::Theme::Dark).visuals.window_stroke;
     assert_eq!(
         stroke(&styled.ctx).color,
-        turbogit_ui::theme::Palette::LINE,
+        turbogit_ui_egui::theme::Palette::LINE,
         "the styling constructor applies the design system's line token"
     );
     assert_ne!(
         stroke(&bare.ctx).color,
-        turbogit_ui::theme::Palette::LINE,
+        turbogit_ui_egui::theme::Palette::LINE,
         "the no-style constructor must leave egui's own window stroke — the frame \
          a suite that asserts painted geometry deliberately measures — in place"
     );

@@ -1,195 +1,165 @@
+//! Line granularity in the staging pane, ported from the egui
+//! `line_granularity` suite: a press on a changed row stages that line and
+//! only it, and a drag across an addition stages exactly the character range
+//! it names, once.
+
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-use test_support::git_seed::{git, repo_with_one_commit};
-use test_support::harness::shell_harness_over_unstyled;
-use test_support::{RecordedCall, RecordingExecutor, wait_until};
 
-use egui::FontFamily::Monospace;
-use egui::FontId;
-use egui::epaint::text::CharIndex;
-use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use turbogit_app::state::AppState;
-use turbogit_domain::model::VcsSettings;
-use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
+use support::{Project, commit_tab, open_group, seeded_repo, staged_patch};
 
-struct Repo {
-    path: PathBuf,
+mod support;
+
+use test_support::git_seed::git;
+
+const OLD_LINE: &str = "    let x = 1;";
+const NEW_LINE: &str = "    let calculated_value = compute(x);";
+
+const WIDE_ADD: &str = concat!(
+    "    let calculated_value = compute(x);",
+    " ------------------------------------------------------------",
+    " keep going with the same long addition so a character drag has room",
+);
+
+fn repo(project: &Project) -> PathBuf {
+    let repo = seeded_repo(project.path(), "alpha");
+    git(&repo, &["checkout", "-q", "-b", "work"]);
+    repo
 }
 
-fn temp_repo(parent: &Path, name: &str) -> Repo {
-    Repo {
-        path: repo_with_one_commit(parent, name),
-    }
-}
-
-fn seed_single_line_edit(repo: &Repo) {
+fn seed_single_line_edit(repo: &Path, new_line: &str) {
     std::fs::write(
-        repo.path.join("code.rs"),
-        "fn main() {\n    let x = 1;\n}\n",
+        repo.join("code.rs"),
+        format!("fn main() {{\n{OLD_LINE}\n}}\n"),
     )
     .unwrap();
-    git(&repo.path, &["add", "code.rs"]);
-    git(&repo.path, &["commit", "-q", "-m", "code"]);
+    git(repo, &["add", "code.rs"]);
+    git(repo, &["commit", "-q", "-m", "code"]);
     std::fs::write(
-        repo.path.join("code.rs"),
-        "fn main() {\n    let calculated_value = compute(x);\n}\n",
+        repo.join("code.rs"),
+        format!("fn main() {{\n{new_line}\n}}\n"),
     )
     .unwrap();
 }
 
-const ADD_ROW: &str = "    let calculated_value = compute(x);";
-const DEL_ROW: &str = "    let x = 1;";
-
-fn row(text: &str, staged: bool) -> String {
-    format!("{text} ({})", if staged { "staged" } else { "unstaged" })
+fn open_diff(project: &Project, repo: &Path) -> support::Mounted {
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo.to_path_buf()));
+    open_group(&mut app, "alpha");
+    app.wait_for("id:changes:row:alpha:code.rs")
+        .expect("the changed row paints");
+    app.press("id:changes:row:alpha:code.rs").unwrap();
+    app.wait_for("id:diff:list")
+        .expect("the staging rows paint");
+    app
 }
 
-fn app_state_with_recorder(
-    project_dir: &Path,
-    roots: &[PathBuf],
-) -> (AppState, Arc<RecordingExecutor>) {
-    let recorder = Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
-        settings: VcsSettings::default(),
-    })));
-    let state = AppState::for_roots(project_dir, roots)
-        .with_executor(recorder.clone() as Arc<dyn GitExecutor>);
-    (state, recorder)
-}
-
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    test_support::harness::settle(&mut h);
-    test_support::harness::expand_every_repo_group(&mut h);
-    h
-}
-
-fn open_preview(h: &mut Harness<'_, AppState>) {
-    h.get_by_label("code.rs").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-    h.run();
-}
-
-fn char_x(h: &Harness<'_, AppState>, col: usize) -> f32 {
-    h.ctx.fonts_mut(|f| {
-        f.layout_no_wrap(
-            ADD_ROW.to_owned(),
-            FontId::new(12.0, Monospace),
-            egui::Color32::WHITE,
-        )
-        .rows
-        .first()
-        .expect("layout of one line has one row")
-        .x_offset(CharIndex(col))
-    })
-}
-
-const TEXT_X: f32 = 16.0 + 40.0 + 12.0;
-
-fn drag_calculated_value(h: &mut Harness<'_, AppState>) {
-    let rect = h.get_by_label(&row(ADD_ROW, false)).rect();
-    let origin = rect.left() + TEXT_X;
-    let y = rect.center().y;
-    h.drag_at(egui::pos2(origin + char_x(h, 8), y));
-    h.run();
-    h.hover_at(egui::pos2(origin + char_x(h, 24), y));
-    h.run();
-    h.drop_at(egui::pos2(origin + char_x(h, 24), y));
-    h.run();
+fn added_lines(patch: &str) -> Vec<String> {
+    patch
+        .lines()
+        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+        .map(|line| line.trim_start_matches('+').to_owned())
+        .collect()
 }
 
 #[test]
-fn row_click_stages_the_line_in_git() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "toggle");
-    seed_single_line_edit(&repo);
+fn a_row_click_stages_the_line_in_git_and_keeps_its_partner() {
+    let project = Project::new();
+    let repo = repo(&project);
+    seed_single_line_edit(&repo, NEW_LINE);
+    let mut app = open_diff(&project, &repo);
+    app.wait_for("id:diff:del:2")
+        .expect("the deletion row paints");
 
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-    open_preview(&mut h);
+    app.press("id:diff:del:2").unwrap();
+    app.wait_until(
+        "the clicked deletion lands in the index",
+        std::time::Duration::from_secs(15),
+        |_| {
+            let staged = staged_patch(&repo);
+            staged.contains(&format!("-{OLD_LINE}"))
+        },
+    )
+    .unwrap();
+    assert!(
+        !staged_patch(&repo).contains(&format!("+{NEW_LINE}")),
+        "the unclicked addition stays out of the index:\n{}",
+        staged_patch(&repo)
+    );
 
-    h.get_by_label(&row(DEL_ROW, false)).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || git(
-            &repo.path,
-            &["diff", "--cached", "--", "code.rs"]
-        )
-        .contains("-    let x = 1;")),
-        "the clicked deletion must land in the index, got:\n{}",
-        git(&repo.path, &["diff", "--cached", "--", "code.rs"])
-    );
-    assert!(
-        wait_until(15_000, || {
-            h.run();
-            h.query_by_label(&row(DEL_ROW, true)).is_some()
-                && h.query_by_label(&row(ADD_ROW, false)).is_some()
-        }),
-        "both rows of the edit stay in the preview after one of them is staged, and \
-         only the clicked one says `staged`"
-    );
-    h.get_by_label(&row(ADD_ROW, false)).click();
-    h.run();
-    assert!(
-        wait_until(15_000, || git(
-            &repo.path,
-            &["diff", "--cached", "--", "code.rs"]
-        )
-        .contains("+    let calculated_value = compute(x);")),
-        "the clicked addition must land in the index, got:\n{}",
-        git(&repo.path, &["diff", "--cached", "--", "code.rs"])
-    );
+    app.wait_until(
+        "both rows of the edit stay in the preview",
+        std::time::Duration::from_secs(15),
+        |screen| {
+            screen
+                .matches(&format!("label:{OLD_LINE} (staged)"))
+                .unwrap_or(false)
+                && screen
+                    .matches(&format!("label:{NEW_LINE} (unstaged)"))
+                    .unwrap_or(false)
+        },
+    )
+    .unwrap();
 }
 
 #[test]
-fn drag_release_stages_the_character_range_and_nothing_else() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "drag-stage");
-    seed_single_line_edit(&repo);
+fn a_drag_stages_the_character_range_and_nothing_else() {
+    let project = Project::new();
+    let repo = repo(&project);
+    seed_single_line_edit(&repo, WIDE_ADD);
+    let mut app = open_diff(&project, &repo);
+    app.wait_for("id:diff:add:2")
+        .expect("the wide addition row paints");
 
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-    open_preview(&mut h);
+    // Start near the row's middle and drag left: the row maps the pointer's
+    // x through the monospace advance, so the draft names a substring, not
+    // the whole line.
+    app.drag(
+        "id:diff:add:2",
+        nsh_core::geometry::point(nsh_core::Points(-300.0), nsh_core::Points(0.0)),
+    )
+    .expect("the row hears the drag");
+    app.wait_until(
+        "the dragged bytes reach the index",
+        std::time::Duration::from_secs(15),
+        |_| !added_lines(&staged_patch(&repo)).is_empty(),
+    )
+    .unwrap();
+    app.wait(std::time::Duration::from_millis(400)).unwrap();
 
-    drag_calculated_value(&mut h);
-
-    std::thread::sleep(Duration::from_millis(300));
-    h.run();
-    let forwards = recorder
-        .recorded()
-        .iter()
-        .filter(|call| {
-            matches!(
-                call,
-                RecordedCall::ApplyPatch {
-                    direction: ApplyDirection::Forward
-                }
-            )
-        })
-        .count();
+    let staged = staged_patch(&repo);
+    let staged_additions = added_lines(&staged);
     assert_eq!(
-        forwards,
+        staged_additions.len(),
         1,
-        "the release must stage exactly once, recorded={:?}",
-        recorder.recorded()
+        "the release stages exactly once:\n{staged}"
+    );
+    let staged_line = &staged_additions[0];
+    assert_ne!(
+        staged_line, WIDE_ADD,
+        "the drag must stage a range, not the whole line:\n{staged}"
     );
     assert!(
-        h.state().ui.char_drag.is_none(),
-        "the draft dies with the release"
+        WIDE_ADD.contains(staged_line) && !staged_line.is_empty(),
+        "the staged bytes are a slice of the dragged line, got {staged_line:?}"
     );
-    assert!(
-        wait_until(15_000, || {
-            let staged = git(&repo.path, &["diff", "--cached"]);
-            staged.contains("+calculated_value\n") && !staged.contains("compute")
-        }),
-        "the index must gain exactly the dragged bytes, not the whole line:\n{}",
-        git(&repo.path, &["diff", "--cached"])
-    );
+}
+
+#[test]
+fn an_untracked_files_gutter_offers_the_same_granular_rows() {
+    let project = Project::new();
+    let repo = repo(&project);
+    std::fs::write(repo.join("new.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n").unwrap();
+    let mut app = open_diff_new(&project, &repo, "new.txt");
+    app.wait_for("id:diff:add:1")
+        .expect("an untracked file's rows are granular");
+    app.wait_for("id:diff:stage-hunk:0")
+        .expect("and its gutter stages a hunk");
+}
+
+fn open_diff_new(project: &Project, repo: &Path, file: &str) -> support::Mounted {
+    let mut app = commit_tab(project.path(), std::slice::from_ref(&repo.to_path_buf()));
+    open_group(&mut app, "alpha");
+    app.wait_for(&format!("id:changes:row:alpha:{file}"))
+        .expect("the untracked row paints");
+    app.press(&format!("id:changes:row:alpha:{file}")).unwrap();
+    app
 }

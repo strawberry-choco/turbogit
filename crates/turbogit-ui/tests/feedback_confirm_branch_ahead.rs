@@ -1,81 +1,76 @@
-use egui_kittest::Harness;
-use tempfile::TempDir;
-use test_support::git_seed::{commit, git, repo_with_one_commit};
-use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, shell_harness_over};
-use turbogit_app::state::{AppState, PendingConfirm};
+//! The delete confirm's ahead-and-unmerged warning, ported from the egui
+//! `feedback_confirm_branch_ahead` suite.
 
-/// A repo on `main` with a local `feature` branch that has commits
-/// ahead of `main` (i.e. the upstream is NOT an ancestor of feature).
-///
-/// The floor is `git_seed::repo_with_one_commit`. **The branch half is kept local, not
-/// `repo_with_feature_branch`**: the confirmation under test reads a *local*
-/// upstream (`--set-upstream-to=main feature`), which is the whole precondition. A
-/// remote upstream would measure `ahead` against a ref that does not exist here.
-///
-fn repo_with_unmerged_feature() -> (TempDir, std::path::PathBuf) {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().to_path_buf();
-    let alpha = repo_with_one_commit(&project, "alpha");
-    git(&alpha, &["checkout", "-b", "feature"]);
-    commit(&alpha, "feature.txt", "y\n", "feature work");
-    git(&alpha, &["branch", "--set-upstream-to=main", "feature"]);
-    (tmp, project)
+use std::path::PathBuf;
+use std::time::Duration;
+
+use support::{Project, branches_tab, open_branch_menu, shows_part};
+use test_support::git_seed::git;
+
+mod support;
+
+fn unmerged_repo(project: &Project) -> PathBuf {
+    let repo = support::seeded_repo(project.path(), "alpha");
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
+    support::commit_into(&repo, "feature.txt", "feature work");
+    git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["branch", "--set-upstream-to=main", "feature"]);
+    repo
 }
 
-fn repo_with_merged_feature() -> (TempDir, std::path::PathBuf) {
-    let tmp = tempfile::tempdir().unwrap();
-    let project = tmp.path().to_path_buf();
-    let alpha = repo_with_one_commit(&project, "alpha");
-    git(&alpha, &["checkout", "-b", "feature"]);
-    git(&alpha, &["checkout", "main"]);
-    (tmp, project)
-}
-
-fn feedback_harness(project_dir: std::path::PathBuf) -> Harness<'static, AppState> {
-    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
+fn merged_repo(project: &Project) -> PathBuf {
+    let repo = support::seeded_repo(project.path(), "alpha");
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    repo
 }
 
 #[test]
-fn delete_branch_confirm_warns_when_ahead_and_unmerged() {
-    let (_tmp, project) = repo_with_unmerged_feature();
-    let mut harness = feedback_harness(project);
-
-    {
-        let st = harness.state_mut();
-        let root = st.multi.roots[0].id.clone();
-        st.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
-            root,
-            name: "feature".into(),
-        });
-    }
-    settle_quiet(&mut harness);
-
-    assert_painted(
-        &harness,
-        "Delete local branch 'feature'? This cannot be undone.",
+fn the_confirm_warns_when_the_branch_is_ahead_and_unmerged() {
+    let project = Project::new();
+    let repo = unmerged_repo(&project);
+    let mut app = branches_tab(project.path(), std::slice::from_ref(&repo));
+    open_branch_menu(&mut app, "alpha", "feature");
+    app.choose_menu_item("Delete branch").unwrap();
+    app.wait_for("id:dialog:delete-local-branch").unwrap();
+    assert!(
+        shows_part(
+            &app,
+            "Delete local branch 'feature'? This cannot be undone."
+        ),
+        "the ask paints"
     );
-    assert_painted(&harness, "ahead");
-    assert_painted(&harness, "not merged");
+    assert!(shows_part(&app, "ahead"), "the warning names ahead");
+    assert!(
+        shows_part(&app, "not merged"),
+        "the warning names the merge"
+    );
 }
 
 #[test]
-fn delete_branch_confirm_omits_warning_when_merged() {
-    let (_tmp, project) = repo_with_merged_feature();
-    let mut harness = feedback_harness(project);
-
-    {
-        let st = harness.state_mut();
-        let root = st.multi.roots[0].id.clone();
-        st.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
-            root,
-            name: "feature".into(),
-        });
+fn the_confirm_omits_the_warning_when_the_branch_is_merged() {
+    let project = Project::new();
+    let repo = merged_repo(&project);
+    let mut app = branches_tab(project.path(), std::slice::from_ref(&repo));
+    app.answer_dialogs_myself();
+    open_branch_menu(&mut app, "alpha", "feature");
+    app.choose_menu_item("Delete branch").unwrap();
+    for _ in 0..200 {
+        if let Some(dialog) = app.pending_dialog() {
+            let text = format!(
+                "{} {}",
+                dialog.title.clone().unwrap_or_default(),
+                dialog.message.clone().unwrap_or_default()
+            );
+            assert!(text.contains("Delete local branch 'feature'?"), "{text}");
+            assert!(
+                !text.contains("not merged"),
+                "no warning when merged: {text}"
+            );
+            let _ = app.answer_dialog(nsh_testing::DialogAnswer::Press("Cancel".into()));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    settle_quiet(&mut harness);
-
-    assert_painted(
-        &harness,
-        "Delete local branch 'feature'? This cannot be undone.",
-    );
-    assert_not_painted(&harness, "not merged");
+    panic!("no confirm appeared");
 }

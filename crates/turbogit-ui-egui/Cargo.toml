@@ -1,0 +1,31 @@
+[package]
+name = "turbogit-ui-egui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+chrono = { workspace = true }
+egui = { workspace = true }
+egui_extras = { workspace = true, features = ["datepicker"] }
+image = { workspace = true }
+jiff = { workspace = true }
+log = { workspace = true }
+nucleo-matcher = { workspace = true }
+turbogit-app = { workspace = true }
+turbogit-domain = { workspace = true }
+
+[dev-dependencies]
+dify = { workspace = true }
+egui_kittest = { workspace = true }
+ron = { workspace = true }
+tempfile = { workspace = true }
+test-support = { workspace = true, features = ["harness"] }
+turbogit-app = { workspace = true }
+turbogit-domain = { workspace = true }
+turbogit-engine = { workspace = true, features = ["test-util"] }
+turbogit-engine-api = { workspace = true }
+turbogit-services = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,232 +1,321 @@
+//! The changes-list selection reducer, ported from the egui
+//! `changes_selection_gestures` suite. The stopped gesture grammar is pure:
+//! a plain click replaces, Command toggles, Shift spans the painted rows from
+//! one anchor, an unmerged path is previewed but never selected, and a
+//! key that is not on screen keeps the selection and moves the anchor.
+
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use test_support::git_seed::{repo_with_conflict, repo_with_one_commit};
-use test_support::harness::{
-    click_with_modifiers, expand_every_repo_group, shell_harness_over_unstyled,
-};
-use turbogit_app::state::AppState;
-use turbogit_domain::model::{ChangeRef, RootId};
+use turbogit_ui::screens::changes::{ClickKind, RowSlot, apply, click_kind};
 
-fn app_state(roots: &[PathBuf]) -> AppState {
-    let dir = roots
-        .first()
-        .and_then(|r| r.parent())
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    AppState::for_roots(&dir, roots)
+fn slot(name: &str, selectable: bool) -> RowSlot {
+    RowSlot {
+        key: PathBuf::from(name),
+        selectable,
+    }
 }
 
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    test_support::harness::settle(&mut h);
-    expand_every_repo_group(&mut h);
-    h
+fn order(names: &[&str]) -> Vec<RowSlot> {
+    names.iter().map(|name| slot(name, true)).collect()
 }
 
-fn change(repo: &Path, rel: &str) -> ChangeRef {
-    ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
-}
-
-fn add_worktree_file(repo: &Path, name: &str) {
-    std::fs::write(repo.join(name), format!("work in {name}\n")).unwrap();
-}
-
-fn selected_names(h: &Harness<'_, AppState>) -> Vec<String> {
-    let mut out: Vec<String> = h
-        .state()
-        .ui
-        .selected
+fn selected(selection: &HashSet<PathBuf>) -> Vec<String> {
+    let mut out: Vec<String> = selection
         .iter()
-        .map(|k| k.display().to_string())
+        .map(|key| key.display().to_string())
         .collect();
     out.sort();
     out
 }
 
-#[track_caller]
-fn click_row(h: &mut Harness<'_, AppState>, label: &str) {
-    h.get_by_label(label).click();
-    h.run();
+fn click(
+    selection: &mut HashSet<PathBuf>,
+    anchor: &mut Option<PathBuf>,
+    slots: &[RowSlot],
+    name: &str,
+    kind: ClickKind,
+) {
+    apply(selection, anchor, slots, Path::new(name), kind);
 }
 
-#[track_caller]
-fn command_click(h: &mut Harness<'_, AppState>, label: &str) {
-    click_with_modifiers(h, label, egui::Modifiers::COMMAND);
-}
-
-#[track_caller]
-fn shift_click(h: &mut Harness<'_, AppState>, label: &str) {
-    click_with_modifiers(h, label, egui::Modifiers::SHIFT);
+#[test]
+fn shift_outranks_command_and_command_alone_toggles() {
+    assert_eq!(click_kind(true, true), ClickKind::Range);
+    assert_eq!(click_kind(false, true), ClickKind::Toggle);
+    assert_eq!(click_kind(false, false), ClickKind::Replace);
 }
 
 #[test]
 fn a_plain_click_selects_one_row_and_clears_a_held_multi_selection() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_with_one_commit(parent.path(), "replace-repo");
-    for name in ["a.txt", "b.txt", "c.txt"] {
-        add_worktree_file(&repo, name);
-    }
+    let slots = order(&["a.txt", "b.txt", "c.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = None;
 
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-    click_row(&mut h, "a.txt");
-    assert_eq!(
-        selected_names(&h),
-        vec![repo.join("a.txt").display().to_string()],
-        "a first plain click selects the row it landed on"
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "a.txt",
+        ClickKind::Replace,
     );
+    assert_eq!(selected(&selection), vec!["a.txt"]);
+    assert_eq!(anchor.as_deref(), Some(Path::new("a.txt")));
 
-    command_click(&mut h, "b.txt");
-    assert_eq!(
-        selected_names(&h).len(),
-        2,
-        "Command/Ctrl adds a second row without dropping the first"
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "b.txt",
+        ClickKind::Toggle,
     );
+    assert_eq!(selected(&selection), vec!["a.txt", "b.txt"]);
 
-    click_row(&mut h, "c.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "c.txt",
+        ClickKind::Replace,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![repo.join("c.txt").display().to_string()],
+        selected(&selection),
+        vec!["c.txt"],
         "a plain click after a multi-selection leaves exactly the clicked row"
     );
-    assert_eq!(
-        h.state().ui.preview_change,
-        Some(change(&repo, "c.txt")),
-        "and previews it"
-    );
+    assert_eq!(anchor.as_deref(), Some(Path::new("c.txt")));
 }
 
 #[test]
 fn a_command_click_moves_one_row_into_the_set_and_back_out() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_with_one_commit(parent.path(), "toggle-repo");
-    for name in ["a.txt", "b.txt", "c.txt"] {
-        add_worktree_file(&repo, name);
-    }
+    let slots = order(&["a.txt", "b.txt", "c.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = None;
 
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-    click_row(&mut h, "a.txt");
-    command_click(&mut h, "c.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "a.txt",
+        ClickKind::Replace,
+    );
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "c.txt",
+        ClickKind::Toggle,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![
-            repo.join("a.txt").display().to_string(),
-            repo.join("c.txt").display().to_string(),
-        ],
+        selected(&selection),
+        vec!["a.txt", "c.txt"],
         "both rows are held, and the row nobody clicked stays out"
     );
 
-    command_click(&mut h, "a.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "a.txt",
+        ClickKind::Toggle,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![repo.join("c.txt").display().to_string()],
+        selected(&selection),
+        vec!["c.txt"],
         "the same click on a selected row takes only that row out"
     );
     assert_eq!(
-        h.state().ui.preview_change,
-        Some(change(&repo, "a.txt")),
+        anchor.as_deref(),
+        Some(Path::new("a.txt")),
         "a row taken out of the set is still the row being looked at"
     );
 }
 
 #[test]
 fn a_shift_click_spans_the_painted_rows_and_reshapes_from_one_anchor() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = repo_with_one_commit(parent.path(), "range-repo");
-    for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
-        add_worktree_file(&repo, name);
-    }
+    let slots = order(&["a.txt", "b.txt", "c.txt", "d.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = None;
 
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-    click_row(&mut h, "b.txt");
-    shift_click(&mut h, "d.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "b.txt",
+        ClickKind::Replace,
+    );
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "d.txt",
+        ClickKind::Range,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![
-            repo.join("b.txt").display().to_string(),
-            repo.join("c.txt").display().to_string(),
-            repo.join("d.txt").display().to_string(),
-        ],
+        selected(&selection),
+        vec!["b.txt", "c.txt", "d.txt"],
         "the range is inclusive at both ends and replaces the set rather than widening it"
     );
-    assert_eq!(
-        h.state().ui.preview_change,
-        Some(change(&repo, "d.txt")),
-        "a range click previews the row it landed on"
-    );
 
-    shift_click(&mut h, "a.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "a.txt",
+        ClickKind::Range,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![
-            repo.join("a.txt").display().to_string(),
-            repo.join("b.txt").display().to_string(),
-        ],
+        selected(&selection),
+        vec!["a.txt", "b.txt"],
         "the second shift-click reshapes the same anchor downwards instead of chaining"
     );
 }
 
 #[test]
 fn a_shift_range_crosses_two_repository_groups() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = repo_with_one_commit(parent.path(), "alpha");
-    let lib = repo_with_one_commit(parent.path(), "lib");
-    add_worktree_file(&alpha, "a1.txt");
-    add_worktree_file(&alpha, "a2.txt");
-    add_worktree_file(&lib, "b1.txt");
+    let slots = order(&["alpha/a1.txt", "alpha/a2.txt", "lib/b1.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = None;
 
-    let mut h = harness(app_state(&[alpha.clone(), lib.clone()]));
-    click_row(&mut h, "a2.txt");
-    shift_click(&mut h, "b1.txt");
-
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "alpha/a2.txt",
+        ClickKind::Replace,
+    );
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "lib/b1.txt",
+        ClickKind::Range,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![
-            alpha.join("a2.txt").display().to_string(),
-            lib.join("b1.txt").display().to_string(),
-        ],
+        selected(&selection),
+        vec!["alpha/a2.txt", "lib/b1.txt"],
         "one range spans both groups' painted rows, from the anchor rather than the list start"
     );
     assert!(
-        !h.state().ui.selected.contains(&alpha.join("a1.txt")),
+        !selection.contains(Path::new("alpha/a1.txt")),
         "a row above the anchor is not part of a range that started at it"
     );
 }
 
 #[test]
 fn a_shift_range_that_spans_the_conflicts_group_leaves_the_conflicted_path_out() {
-    let parent = tempfile::tempdir().unwrap();
-    let solo = repo_with_conflict(parent.path(), "solo");
-    let other = repo_with_one_commit(parent.path(), "other");
-    add_worktree_file(&other, "x.txt");
-    add_worktree_file(&other, "y.txt");
+    let mut slots = order(&["solo/conf.txt", "other/x.txt", "other/y.txt"]);
+    slots[0].selectable = false;
+    let mut selection = HashSet::new();
+    let mut anchor = None;
 
-    let mut h = harness(app_state(&[solo.clone(), other.clone()]));
-
-    click_row(&mut h, "C conf.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "solo/conf.txt",
+        ClickKind::Replace,
+    );
     assert!(
-        h.state().ui.selected.is_empty(),
-        "a conflicted row is previewed and never selected: {:?}",
-        selected_names(&h)
+        selection.is_empty(),
+        "a conflicted row is previewed and never selected"
     );
     assert_eq!(
-        h.state().ui.preview_change,
-        Some(change(&solo, "conf.txt")),
-        "clicking it is still a browse"
+        anchor.as_deref(),
+        Some(Path::new("solo/conf.txt")),
+        "clicking it is still a browse, and the anchor follows"
     );
 
-    shift_click(&mut h, "y.txt");
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "solo/conf.txt",
+        ClickKind::Range,
+    );
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "other/y.txt",
+        ClickKind::Range,
+    );
     assert_eq!(
-        selected_names(&h),
-        vec![
-            other.join("x.txt").display().to_string(),
-            other.join("y.txt").display().to_string(),
-        ],
+        selected(&selection),
+        vec!["other/x.txt", "other/y.txt"],
         "the files the range passes over are selected and the unmerged path between them is not"
     );
-    assert!(
-        !h.state().ui.selected.contains(&solo.join("conf.txt")),
-        "the guard against Discard and Shelve being handed an unmerged path"
+}
+
+#[test]
+fn a_command_toggle_on_a_conflicted_row_never_inserts_it() {
+    let mut slots = order(&["a.txt", "conf.txt"]);
+    slots[1].selectable = false;
+    let mut selection = HashSet::new();
+    let mut anchor = None;
+
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "conf.txt",
+        ClickKind::Toggle,
     );
+    assert!(
+        selection.is_empty(),
+        "an unmerged path is the one thing Discard and Shelve must never be handed"
+    );
+}
+
+#[test]
+fn a_key_that_is_not_painted_keeps_the_selection_and_moves_the_anchor() {
+    let slots = order(&["a.txt", "b.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = None;
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "a.txt",
+        ClickKind::Replace,
+    );
+
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "gone.txt",
+        ClickKind::Replace,
+    );
+    assert_eq!(
+        selected(&selection),
+        vec!["a.txt"],
+        "a row that is no longer on screen cannot clear the set"
+    );
+    assert_eq!(
+        anchor.as_deref(),
+        Some(Path::new("gone.txt")),
+        "but it becomes the anchor the next range starts from"
+    );
+}
+
+#[test]
+fn a_range_without_a_painted_anchor_falls_back_to_the_clicked_row() {
+    let slots = order(&["a.txt", "b.txt", "c.txt"]);
+    let mut selection = HashSet::new();
+    let mut anchor = Some(PathBuf::from("gone.txt"));
+
+    click(
+        &mut selection,
+        &mut anchor,
+        &slots,
+        "b.txt",
+        ClickKind::Range,
+    );
+    assert_eq!(
+        selected(&selection),
+        vec!["b.txt"],
+        "an anchor that left the list cannot span, so the click becomes a plain one"
+    );
+    assert_eq!(anchor.as_deref(), Some(Path::new("b.txt")));
 }

@@ -1,7 +1,7 @@
 use eframe::NativeOptions;
 use std::path::PathBuf;
 use turbogit::app::TurbogitApp;
-use turbogit_ui::theme;
+use turbogit_ui_egui::theme;
 
 fn main() {
     let project_dir: Option<PathBuf> = std::env::args().nth(1).map(PathBuf::from);

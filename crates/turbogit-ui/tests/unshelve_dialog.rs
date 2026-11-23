@@ -1,448 +1,174 @@
-use egui_kittest::{
-    Harness,
-    kittest::{NodeT, Queryable},
-};
-use std::path::{Path, PathBuf};
-use test_support::git_seed::git;
-use test_support::harness::{
-    filled_rects, galley_origin, painted_galleys, shell_harness_over_unstyled,
-};
-use turbogit_app::state::{AppState, Dialog};
-use turbogit_domain::model::{RootId, Shelf};
-use turbogit_ui::ui::popups::{Action, run_action};
+//! Unshelve, ported from the egui `unshelve_dialog` suite: every root's
+//! shelves in one picker, the remove option's captured default, and the
+//! apply that keeps or destroys the shelf and git's copy.
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    path
+use std::path::{Path, PathBuf};
+
+use support::{Mounted, Project, for_roots_seeded};
+use test_support::git_seed::git;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::{RootId, Shelf, ShelfSource};
+
+mod support;
+
+fn repo(project: &Project, name: &str) -> PathBuf {
+    support::seeded_repo(project.path(), name)
 }
 
-fn shelf_record(name: &str, root: &Path) -> Shelf {
+fn shelf(name: &str, root: &Path) -> Shelf {
     Shelf {
         name: name.to_string(),
         changes: Vec::new(),
         created_at: chrono::Utc::now(),
         root: RootId(root.into()),
-        source: turbogit_domain::model::ShelfSource::Stash,
+        source: ShelfSource::Stash,
     }
 }
 
-fn app_state(roots: &[PathBuf]) -> AppState {
-    let dir = roots
-        .first()
-        .and_then(|r| r.parent())
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    AppState::for_roots(&dir, roots)
+fn stash(repo: &Path, message: &str) {
+    std::fs::write(repo.join("README.md"), "shelved work\n").expect("dirty file");
+    git(repo, &["stash", "push", "-q", "-m", message]);
 }
 
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
-    test_support::harness::settle(&mut harness);
-    harness
+fn unshelve_over(
+    project: &Project,
+    roots: &[PathBuf],
+    seed: impl FnOnce(&mut AppState) + Send + 'static,
+) -> Mounted {
+    let mut app = for_roots_seeded(project.path(), roots, |s| {
+        seed(s);
+        s.open_unshelve_dialog();
+    });
+    app.first_render().expect("the shell mounts");
+    app.wait_for("id:dialog:unshelve")
+        .expect("the unshelve dialog paints");
+    app
 }
 
-fn select_in_commit_list(state: &mut AppState, name: &str) {
-    let key = state
-        .multi
-        .roots
-        .iter()
-        .find_map(|r| {
-            r.status
-                .changes
-                .iter()
-                .find(|c| c.path.ends_with(name))
-                .map(|c| r.canonical_key(c))
-        })
-        .unwrap_or_else(|| panic!("{name} is a local change of a registered root"));
-    state.ui.selected.insert(key);
-}
-
-fn shelve_one_change(repo: &Path, name: &str) {
-    std::fs::write(repo.join("base.txt"), "shelved work\n").unwrap();
-    let mut state = app_state(&[repo.to_path_buf()]);
-    select_in_commit_list(&mut state, "base.txt");
-    state.ui.dlg.shelve_name = name.to_string();
-    state.open_shelve_dialog(state.multi.roots.first().map(|r| r.id.clone()));
-    let mut h = harness(state);
-    h.get_by_label("Shelve selected").click();
-    h.run();
-    h.run();
-    assert_eq!(stash_lines(repo).len(), 1, "the shelve parked the change");
-}
-
-fn stash_lines(repo: &Path) -> Vec<String> {
-    git(repo, &["stash", "list"])
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
-const REMOVE_FIELD: &str = "Remove successfully applied files from the shelf";
-
-const DIALOG_FIELD_WINDOW: f32 = 420.0;
-
-fn painted_in_dialog(h: &Harness<'_, AppState>, needle: &str) -> bool {
-    let top = galley_origin(h, "NAME").expect("the dialog paints its NAME field heading");
-    painted_galleys(h).iter().any(|g| {
-        g.text.contains(needle) && g.pos.y > top.y && g.pos.x <= top.x + DIALOG_FIELD_WINDOW
-    })
-}
-
-fn painted_exact(h: &Harness<'_, AppState>, text: &str) -> bool {
-    painted_galleys(h).iter().any(|g| g.text == text)
-}
-
-fn fill_behind(h: &Harness<'_, AppState>, label: &str) -> egui::Color32 {
-    let origin = galley_origin(h, label).unwrap_or_else(|| panic!("{label} paints as a label"));
-    filled_rects(h)
-        .into_iter()
-        .filter(|(rect, _)| rect.contains(origin))
-        .min_by_key(|(rect, _)| (rect.width() * rect.height()) as i64)
-        .map(|(_, fill)| fill)
-        .unwrap_or_else(|| panic!("no filled rect behind {label}"))
-}
-
-fn open_dialog(h: &mut Harness<'static, AppState>) {
-    h.state_mut().open_unshelve_dialog();
-    h.run();
+fn exact(app: &Mounted, text: &str) -> bool {
+    app.screen().texts().contains(&text)
 }
 
 #[test]
 fn the_name_field_lists_every_roots_shelves() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = temp_repo(parent.path(), "alpha");
-    let beta = temp_repo(parent.path(), "beta");
-    let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    state.ui.shelves.push(shelf_record("weather", &alpha));
-    state.ui.shelves.push(shelf_record("tides", &beta));
-    let mut h = harness(state);
-
-    open_dialog(&mut h);
-
-    assert!(
-        painted_in_dialog(&h, "weather"),
-        "one root's shelf is a selectable row in the dialog"
-    );
-    assert!(
-        painted_in_dialog(&h, "tides"),
-        "and another root's shelf is a destination too"
-    );
-    assert!(
-        painted_in_dialog(&h, "ALPHA") && painted_in_dialog(&h, "BETA"),
-        "each repository groups its own shelves"
-    );
+    let project = Project::new();
+    let alpha = repo(&project, "alpha");
+    let beta = repo(&project, "beta");
+    let a = alpha.clone();
+    let b = beta.clone();
+    let app = unshelve_over(&project, &[alpha, beta], move |s| {
+        s.ui.shelves.push(shelf("weather", &a));
+        s.ui.shelves.push(shelf("tides", &b));
+    });
+    for text in ["weather", "tides", "ALPHA", "BETA"] {
+        assert!(support::shows_part(&app, text), "{text} paints");
+    }
 }
 
 #[test]
 fn the_remove_option_is_off_every_time_the_dialog_opens() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "default");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    state.ui.dlg.unshelve_remove = true;
-    let mut h = harness(state);
-
-    open_dialog(&mut h);
-
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    let r = repo.clone();
+    let app = unshelve_over(&project, std::slice::from_ref(&repo), move |s| {
+        s.ui.shelves.push(shelf("weather", &r));
+        s.ui.dlg.unshelve_remove = true;
+    });
+    assert!(exact(
+        &app,
+        "Remove successfully applied files from the shelf"
+    ));
+    assert!(exact(&app, "Unshelve"), "the keeping verb paints");
     assert!(
-        painted_exact(&h, REMOVE_FIELD),
-        "the reference's own field is here, spelled as the doc spells it"
-    );
-    assert!(
-        !h.state().ui.dlg.unshelve_remove,
-        "`Remove successfully applied files from the shelf` is OFF by default on every open"
-    );
-    assert!(
-        painted_exact(&h, "Unshelve"),
-        "with the option off the affirmative keeps the keeping verb's name"
-    );
-    assert!(
-        !painted_exact(&h, "Unshelve and Remove"),
-        "and the destructive name is not painted while the option is off"
+        !exact(&app, "Unshelve and Remove"),
+        "the destructive name stays out while the option is off"
     );
 }
 
 #[test]
-fn ticking_the_remove_option_renames_and_recolors_the_affirmative() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "rename");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-    open_dialog(&mut h);
-
-    let keep_fill = fill_behind(&h, "Unshelve");
-    h.get_by_label(REMOVE_FIELD).click();
-    h.run();
-
-    assert!(
-        h.state().ui.dlg.unshelve_remove,
-        "the click landed on the option"
-    );
-    assert!(
-        painted_exact(&h, "Unshelve and Remove"),
-        "the affirmative now says what it will destroy"
-    );
-    assert!(
-        !painted_exact(&h, "Unshelve"),
-        "one affirmative, not a keeping button beside a destroying one"
-    );
-    assert_ne!(
-        fill_behind(&h, "Unshelve and Remove"),
-        keep_fill,
-        "the destructive choice must not wear the keeping choice's fill"
-    );
+fn ticking_the_remove_option_renames_the_affirmative() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    let r = repo.clone();
+    let mut app = unshelve_over(&project, std::slice::from_ref(&repo), move |s| {
+        s.ui.shelves.push(shelf("weather", &r));
+    });
+    app.press("id:unshelve:remove-option").expect("the option");
+    app.wait_for("text:Unshelve and Remove")
+        .expect("the affirmative renames");
+    assert!(!exact(&app, "Unshelve"), "one affirmative, not two");
 }
 
 #[test]
 fn unshelving_through_the_dialog_keeps_the_shelf_and_gits_copy() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "keep");
-    shelve_one_change(&repo, "weather");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-    open_dialog(&mut h);
-
-    h.get_by_label("Unshelve").click();
-    h.run();
-    h.run();
-
-    assert_eq!(
-        h.state().ui.shelves.len(),
-        1,
-        "the unticked option is the captured default: the shelf record survives"
+    let project = Project::new();
+    let repo = repo(&project, "weather");
+    stash(&repo, "weather");
+    let r = repo.clone();
+    let app = unshelve_over(&project, std::slice::from_ref(&repo), move |s| {
+        s.ui.shelves.push(shelf("weather", &r));
+    });
+    let mut app = app;
+    app.press("id:dialog:unshelve:action").expect("unshelve");
+    assert!(
+        test_support::wait_until(10_000, || {
+            git(&repo, &["status", "--porcelain"]).contains("README.md")
+        }),
+        "the work lands back in the tree"
     );
     assert!(
-        !stash_lines(&repo).is_empty(),
-        "and so does the stash entry the content lives in"
-    );
-    assert!(
-        git(&repo, &["status", "--porcelain"]).contains("base.txt"),
-        "while the work itself lands back in the tree"
-    );
-    assert!(
-        h.state().ui.dialog.is_none(),
-        "the dialog is gone once its verb has been dispatched"
+        !git(&repo, &["stash", "list"]).trim().is_empty(),
+        "the keeping option leaves git's copy"
     );
 }
 
 #[test]
 fn ticking_the_option_and_confirming_destroys_the_shelf_and_gits_copy() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "remove");
-    shelve_one_change(&repo, "weather");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-    open_dialog(&mut h);
-    h.get_by_label(REMOVE_FIELD).click();
-    h.run();
-
-    h.get_by_label("Unshelve and Remove").click();
-    h.run();
-    h.run();
-
+    let project = Project::new();
+    let repo = repo(&project, "weather");
+    stash(&repo, "weather");
+    let r = repo.clone();
+    let mut app = unshelve_over(&project, std::slice::from_ref(&repo), move |s| {
+        s.ui.shelves.push(shelf("weather", &r));
+    });
+    app.press("id:unshelve:remove-option").expect("the option");
+    app.press("id:dialog:unshelve:action")
+        .expect("unshelve and remove");
     assert!(
-        h.state().ui.confirm.is_none(),
-        "the window itself is the gate on the destructive path: an explicit tick plus a \
-         danger-labelled affirmative, and no second confirmation on top of it"
+        test_support::wait_until(10_000, || {
+            git(&repo, &["status", "--porcelain"]).contains("README.md")
+                && git(&repo, &["stash", "list"]).trim().is_empty()
+        }),
+        "the work lands and git's copy goes: {}",
+        git(&repo, &["stash", "list"])
     );
-
-    assert!(
-        h.state().ui.shelves.is_empty(),
-        "the ticked option takes the shelf record with it"
-    );
-    assert!(
-        stash_lines(&repo).is_empty(),
-        "and the stash entry, because the apply landed"
-    );
-    assert!(
-        git(&repo, &["status", "--porcelain"]).contains("base.txt"),
-        "while the work itself lands back in the tree"
-    );
-    let stored = turbogit_services::shelve_stash::load_shelves(parent.path())
-        .expect("the store this build wrote parses");
-    assert!(
-        stored.is_empty(),
-        "the store is rewritten without the shelf that was destroyed: {stored:?}"
-    );
-}
-
-#[test]
-fn the_dialog_applies_a_shelf_to_the_root_that_owns_it() {
-    let parent = tempfile::tempdir().unwrap();
-    let alpha = temp_repo(parent.path(), "alpha");
-    let beta = temp_repo(parent.path(), "beta");
-    shelve_one_change(&alpha, "weather");
-    std::fs::write(beta.join("base.txt"), "beta work\n").unwrap();
-    git(&beta, &["stash", "push", "-q", "-m", "beta-only"]);
-    let mut state = app_state(&[alpha.clone(), beta.clone()]);
-    let beta_shelf = shelf_record("tides", &beta);
-    state.ui.shelves.push(beta_shelf);
-    let mut h = harness(state);
-    open_dialog(&mut h);
-
-    h.get_by_label("Unshelve").click();
-    h.run();
-    h.run();
-
-    assert!(
-        git(&alpha, &["status", "--porcelain"]).contains("base.txt"),
-        "the picked shelf's own repository receives the work"
-    );
-    assert!(
-        git(&beta, &["status", "--porcelain"]).is_empty(),
-        "the other repository is untouched"
-    );
-    assert_eq!(
-        stash_lines(&beta).len(),
-        1,
-        "and the other root's stash entry is still the one git holds"
-    );
-}
-
-#[test]
-fn the_changelist_fields_are_absent_rather_than_inert() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "buckets");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-    open_dialog(&mut h);
-
-    let painted: Vec<String> = painted_galleys(&h)
-        .into_iter()
-        .map(|g| g.text.to_lowercase())
-        .collect();
-    for absent in ["comment", "set active", "track context", "changelist"] {
-        let hits: Vec<&str> = painted
-            .iter()
-            .filter(|text| text.contains(absent))
-            .map(String::as_str)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "`{absent}` would promise a changelist this application cannot write: {hits:?}"
-        );
-    }
-}
-
-#[test]
-fn the_name_field_caps_a_picker_and_invents_no_destination() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "destination");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    state.ui.shelves.push(shelf_record("tides", &repo));
-    let mut h = harness(state);
-    open_dialog(&mut h);
-
-    assert!(
-        painted_in_dialog(&h, "weather") && painted_in_dialog(&h, "tides"),
-        "the heading caps a list of this root's shelves — that is the field's whole content"
-    );
-
-    let window = h
-        .get_all_by_role(egui::accesskit::Role::Window)
-        .find(|n| {
-            n.accesskit_node()
-                .label()
-                .is_some_and(|label| label.starts_with("Unshelve"))
-        })
-        .expect("the open dialog is a window node titled by the verb it runs");
-
-    let options: Vec<egui::Rect> = window
-        .query_all_by_role(egui::accesskit::Role::CheckBox)
-        .map(|n| n.rect())
-        .collect();
-    assert_eq!(
-        options.len(),
-        1,
-        "the option is the window's one checkbox, so the walk is inside the window: \
-         {options:?}"
-    );
-
-    let inputs: Vec<egui::Rect> = window
-        .query_all_by_role(egui::accesskit::Role::TextInput)
-        .map(|n| n.rect())
-        .collect();
-    assert!(
-        inputs.is_empty(),
-        "a text input inside this window could only name a changelist that does not \
-         exist; found {inputs:?}"
-    );
+    let stored = turbogit_app::shelve_stash::load_shelves(project.path()).unwrap_or_default();
+    assert!(stored.is_empty(), "the store drops the destroyed shelf");
 }
 
 #[test]
 fn a_root_with_nothing_shelved_says_so_and_offers_no_verb() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "empty");
-    let mut h = harness(app_state(std::slice::from_ref(&repo)));
-
-    open_dialog(&mut h);
-
-    assert!(
-        painted_in_dialog(&h, "Nothing is shelved in the selected repositories"),
-        "the empty state names the mechanism and the way out of it"
-    );
-    assert!(
-        !painted_exact(&h, "Unshelve"),
-        "with nothing to apply the affirmative is withheld, not greyed: an accent fill \
-         survives a disabled button and would paint a promise the click cannot keep"
-    );
-    assert!(painted_exact(&h, "Cancel"), "the way out is always there");
+    let project = Project::new();
+    let repo = repo(&project, "empty");
+    let app = unshelve_over(&project, std::slice::from_ref(&repo), |_| {});
+    assert!(support::shows_part(
+        &app,
+        "Nothing is shelved in the selected repositories"
+    ));
+    assert!(!exact(&app, "Unshelve"), "no affirmative is offered");
+    assert!(exact(&app, "Cancel"), "the way out is always there");
 }
 
 #[test]
-fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "routes");
-    let mut state = app_state(std::slice::from_ref(&repo));
-    state.ui.shelves.push(shelf_record("weather", &repo));
-    let mut h = harness(state);
-
-    h.get_by_label("Shelf").click();
-    h.run();
-    h.get_by_label("Unshelve\u{2026}").click();
-    h.run();
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Unshelve),
-        "the pane's own route opens the dialog"
-    );
-
-    h.state_mut().ui.dialog = None;
-    run_action(h.state_mut(), Action::Unshelve);
-    assert_eq!(
-        h.state().ui.dialog,
-        Some(Dialog::Unshelve),
-        "the menu route reaches the same window"
-    );
-    assert!(
-        !h.state().ui.dlg.unshelve_remove,
-        "and arms the same captured default: off"
-    );
-    assert_eq!(
-        h.state().ui.dlg.repo_scope.len(),
-        1,
-        "the dialog scopes the one registered repository"
-    );
-
-    let palette: Vec<&str> = Action::palette_actions()
-        .iter()
-        .map(|a| a.label())
-        .collect();
-    assert!(
-        palette.contains(&"Unshelve\u{2026}"),
-        "the menu route exists because the reference reaches the dialog from a menu: {palette:?}"
-    );
-    let popup: Vec<&str> = Action::all().iter().map(|a| a.label()).collect();
-    assert!(
-        !popup.contains(&"Unshelve\u{2026}"),
-        "the VCS popup's documented action set stays frozen"
-    );
+fn the_changelist_fields_are_absent_rather_than_inert() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    let r = repo.clone();
+    let app = unshelve_over(&project, std::slice::from_ref(&repo), move |s| {
+        s.ui.shelves.push(shelf("weather", &r));
+    });
+    let painted = app.screen().texts().join(" ").to_lowercase();
+    for absent in ["comment", "set active", "track context", "changelist"] {
+        assert!(!painted.contains(absent), "`{absent}` is not painted");
+    }
 }

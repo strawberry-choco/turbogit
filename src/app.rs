@@ -1,8 +1,8 @@
 use eframe::{App, Frame};
 use egui::Ui;
 use turbogit_app::state::AppState;
-use turbogit_ui::theme;
-use turbogit_ui::ui;
+use turbogit_ui_egui::theme;
+use turbogit_ui_egui::ui;
 
 pub struct TurbogitApp {
     pub state: AppState,

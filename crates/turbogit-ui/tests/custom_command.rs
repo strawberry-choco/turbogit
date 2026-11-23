@@ -1,181 +1,133 @@
-use egui::Key;
-use egui_kittest::{Harness, kittest::Queryable};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-use test_support::git_seed::{git, repo_with_one_commit};
-use test_support::harness::{
-    assert_matrix_geometry, assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
-};
-use turbogit_app::state::AppState;
-use turbogit_domain::model::VcsSettings;
-use turbogit_services::bulk_ops::BulkOp;
-use turbogit_services::bulk_run::RowState;
+//! The custom command, ported from the egui `custom_command` suite: the
+//! fleet preflight runs a typed command across every root, a destructive
+//! command arms before it runs, and a recent command refills the field.
 
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    repo_with_one_commit(parent, name)
-}
+use std::path::PathBuf;
 
-fn unprotected() -> VcsSettings {
-    VcsSettings {
-        protected_branch_patterns: Vec::new(),
-        ..VcsSettings::default()
-    }
-}
+use support::{Mounted, Project, for_roots_seeded, shows_part, wait_for_part};
+use test_support::git_seed::git;
 
-fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = test_support::scratch_root(&format!("custom-command-{tag}"));
-    let _ = std::fs::remove_dir_all(&base);
-    let project = base.join("wsb");
-    let frontend = project.join("frontend");
+mod support;
+
+fn two_repo_project(project: &Project) -> (PathBuf, PathBuf) {
+    let frontend = project.path().join("frontend");
     std::fs::create_dir_all(&frontend).unwrap();
-    let alpha = temp_repo(&frontend, "alpha");
-    let ui = temp_repo(&frontend, "ui");
-    (project, alpha, ui)
+    let alpha = support::seeded_repo(&frontend, "alpha");
+    let ui = support::seeded_repo(&frontend, "ui");
+    (alpha, ui)
 }
 
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
+fn two_roots(project: &Project) -> Mounted {
+    let (alpha, ui) = two_repo_project(project);
+    for_roots_seeded(project.path(), &[alpha, ui], |s| {
+        s.settings.protected_branch_patterns.clear();
+    })
 }
 
-fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
-    for _ in 0..1000 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        if pred(harness.state()) {
-            return;
-        }
-    }
-    panic!("condition was not met within 1000 frames");
+fn open_custom_route(app: &mut Mounted) {
+    app.press("id:toolbar:n6-custom_command").unwrap();
+    app.wait_for("id:route:custom_command").unwrap();
 }
 
-fn open_custom_command(h: &mut Harness<'_, AppState>) {
-    h.get_by_label("Custom command").click();
-    settle(h);
+fn wait_done(app: &mut Mounted) {
+    app.wait_until(
+        "the fleet run settles",
+        std::time::Duration::from_secs(30),
+        |screen| screen.texts().iter().any(|text| text.starts_with("2 done")),
+    )
+    .unwrap();
 }
 
 #[test]
-fn the_custom_command_fleet_entry_opens_a_modal_that_runs_the_typed_command() {
-    let (project, alpha, ui) = two_repo_project("entry");
-    let state =
-        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
-    let mut h = harness(state);
-    settle(&mut h);
+fn the_route_runs_the_typed_command_on_every_repository() {
+    let project = Project::new();
+    let mut app = two_roots(&project);
+    app.first_render().unwrap();
+    open_custom_route(&mut app);
 
-    open_custom_command(&mut h);
-    assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Custom));
+    app.type_text("id:custom:input", "git branch bulk-marker")
+        .unwrap();
+    app.press("id:custom:open").unwrap();
+    app.wait_for("id:bulk:preflight").unwrap();
+    assert!(shows_part(&app, "Will run on all 2 repositories."));
+    assert!(app.screen().shows("2 of 2 will run"));
 
-    assert_painted(&h, "Command");
-    h.get_by_label("Run on 2 of 2").click();
-    settle(&mut h);
-    assert!(h.state().ui.bulk_run.is_none(), "no run without a command");
-    assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Custom));
+    app.press("id:bulk:run").unwrap();
+    app.wait_for("id:bulk:monitor").unwrap();
+    wait_done(&mut app);
 
-    assert_matrix_geometry(
-        &h,
-        "OUTCOME",
-        &[
-            ("REPO", 0.0),
-            ("CURRENT BRANCH", 170.0),
-            ("STATUS", 300.0),
-            ("OUTCOME", 390.0),
-        ],
-        &["alpha", "ui"],
-        22.0,
-        30.0,
-    );
-
-    h.get_by_label("Command input").focus();
-    h.get_by_label("Command input")
-        .type_text("git branch bulk-marker");
-    settle(&mut h);
-    assert_painted(&h, "Will run on all 2 repositories.");
-
-    h.get_by_label("Run on 2 of 2").click();
-    settle(&mut h);
-    assert_eq!(h.state().ui.bulk_op, None);
-    assert!(h.state().ui.bulk_run.is_some(), "the monitor opened");
-
-    wait_for(&mut h, |s| {
-        s.ui.bulk_run
-            .as_ref()
-            .is_some_and(|v| v.rows.len() == 2 && v.rows.iter().all(|r| r.state == RowState::Done))
-    });
-
-    settle(&mut h);
-    assert_painted(&h, "2 of 2 done");
-    assert_painted(&h, "git branch bulk-marker");
-
-    for repo in [&alpha, &ui] {
+    for repo in [
+        project.path().join("frontend/alpha"),
+        project.path().join("frontend/ui"),
+    ] {
         assert!(
-            git(repo, &["branch", "--list", "bulk-marker"]).contains("bulk-marker"),
+            git(&repo, &["branch", "--list", "bulk-marker"]).contains("bulk-marker"),
             "{repo:?} got the branch"
         );
     }
-
-    h.key_press(Key::Escape);
-    settle(&mut h);
 }
 
 #[test]
-fn a_destructive_command_needs_a_second_explicit_confirmation() {
-    let (project, alpha, ui) = two_repo_project("destructive");
-    let state =
-        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
-    let mut h = harness(state);
-    settle(&mut h);
+fn a_destructive_command_arms_before_it_runs() {
+    let project = Project::new();
+    let mut app = two_roots(&project);
+    app.first_render().unwrap();
+    open_custom_route(&mut app);
 
-    open_custom_command(&mut h);
-    h.get_by_label("Command input").focus();
-    h.get_by_label("Command input")
-        .type_text("git reset --hard");
-    settle(&mut h);
+    app.type_text("id:custom:input", "git reset --hard")
+        .unwrap();
+    app.press("id:custom:open").unwrap();
+    app.wait_for("id:bulk:preflight").unwrap();
+    assert!(shows_part(&app, "Destructive command"));
 
-    h.get_by_label("Run on 2 of 2").click();
-    settle(&mut h);
-    assert!(h.state().ui.bulk_run.is_none(), "nothing dispatched yet");
-    assert!(h.state().ui.bulk_command_armed, "the confirm is armed");
-    assert_painted(&h, "Destructive command");
-
-    h.get_by_label("Yes, run git reset --hard").click();
-    settle(&mut h);
-    assert!(h.state().ui.bulk_run.is_some(), "the confirmed run started");
-
-    wait_for(&mut h, |s| {
-        s.ui.bulk_run
-            .as_ref()
-            .is_some_and(|v| v.rows.len() == 2 && v.rows.iter().all(|r| r.state == RowState::Done))
-    });
-}
-
-#[test]
-fn recent_commands_are_offered_in_the_modal_and_refill_the_input() {
-    let (project, alpha, ui) = two_repo_project("recents");
-    let mut state =
-        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
-    state.ui.recent_custom_commands = vec!["git gc".to_string()];
-    let mut h = harness(state);
-    settle(&mut h);
-
-    open_custom_command(&mut h);
-
-    assert_painted(&h, "Recent commands");
-    h.get_by_label("Use git gc").click();
-    settle(&mut h);
-    assert_eq!(h.state().ui.bulk_command, "git gc");
-
-    h.get_by_label("Run on 2 of 2").click();
-    settle(&mut h);
-    assert!(h.state().ui.bulk_run.is_some(), "the monitor opened");
-    wait_for(&mut h, |s| {
-        s.ui.bulk_run
-            .as_ref()
-            .is_some_and(|v| v.rows.iter().all(|r| r.state == RowState::Done))
-    });
-
-    let recents = &h.state().ui.recent_custom_commands;
+    app.press("id:bulk:run").unwrap();
     assert!(
-        recents.first().is_some_and(|c| c == "git gc"),
-        "the confirmed command is recorded: {recents:?}"
+        !app.screen().matches("id:bulk:monitor").unwrap_or(false),
+        "nothing dispatched on the first press"
     );
-    assert_not_painted(&h, "git remote prune origin");
+    assert!(
+        shows_part(&app, "Yes, run git reset --hard"),
+        "the confirm takes the first press"
+    );
+    app.press("id:bulk:run").unwrap();
+    app.wait_for("id:bulk:monitor").unwrap();
+}
+
+#[test]
+fn an_empty_command_runs_nothing() {
+    let project = Project::new();
+    let mut app = two_roots(&project);
+    app.first_render().unwrap();
+    open_custom_route(&mut app);
+
+    app.press("id:custom:open").unwrap();
+    app.wait_for("id:bulk:preflight").unwrap();
+    assert!(
+        !app.screen().enabled("id:bulk:run").unwrap(),
+        "the run is gated on a typed command"
+    );
+    assert!(
+        !app.screen().matches("id:bulk:monitor").unwrap_or(false),
+        "no run without a command"
+    );
+}
+
+#[test]
+fn a_recent_command_refills_the_preflight_and_is_recorded() {
+    let project = Project::new();
+    let (alpha, ui) = two_repo_project(&project);
+    let mut app = for_roots_seeded(project.path(), &[alpha, ui], |s| {
+        s.settings.protected_branch_patterns.clear();
+        s.ui.recent_custom_commands = vec!["git gc".to_string()];
+    });
+    app.first_render().unwrap();
+    open_custom_route(&mut app);
+
+    app.press("id:custom:recent:git gc").unwrap();
+    app.wait_for("id:bulk:preflight").unwrap();
+    app.wait_for("text:git gc").unwrap();
+    app.press("id:bulk:run").unwrap();
+    app.wait_for("id:bulk:monitor").unwrap();
+    wait_done(&mut app);
+    wait_for_part(&mut app, "git gc").unwrap();
 }

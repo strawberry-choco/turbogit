@@ -2,7 +2,7 @@ use egui::epaint::TextShape;
 use egui::{Color32, FontFamily, Pos2, Rect, Shape, Ui, Vec2};
 use egui_kittest::Harness;
 use turbogit_app::state::AppState;
-use turbogit_ui::theme::{configure_style, install_fonts};
+use turbogit_ui_egui::theme::{configure_style, install_fonts};
 
 pub fn shell_harness_over(state: AppState, size: Vec2) -> Harness<'static, AppState> {
     shell_harness_built(state, size, Tempo::KITTEST_DEFAULT, true)
@@ -71,7 +71,7 @@ fn shell_harness_built(
                     }
                 }
                 state.drain_events();
-                turbogit_ui::render(ui, state);
+                turbogit_ui_egui::render(ui, state);
             },
             state,
         );
@@ -337,7 +337,7 @@ pub fn assert_matrix_geometry<S>(
 
     assert_eq!(
         anchor_galley.color,
-        turbogit_ui::theme::Palette::INK_3,
+        turbogit_ui_egui::theme::Palette::INK_3,
         "the header label's ink is not the muted step"
     );
     assert_eq!(
@@ -351,7 +351,7 @@ pub fn assert_matrix_geometry<S>(
         .expect("the first row's first cell is painted");
     assert_eq!(
         first_cell.color,
-        turbogit_ui::theme::Palette::INK,
+        turbogit_ui_egui::theme::Palette::INK,
         "the first cell's ink is not the primary step"
     );
     assert_eq!(
