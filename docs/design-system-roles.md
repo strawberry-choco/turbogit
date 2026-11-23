@@ -688,6 +688,52 @@ left to award: the one it used to carry, `status_badge`, went with `ref_label`,
 `CountDirection` and `tree_row` in the dead-API sweep, and an API with no
 production consumer now goes through that sweep rather than waiting for a review.
 
+## The nsh owners
+
+`crates/turbogit-ui-nsh` is the live owner of every role this document
+describes. The egui module names above are the roles' history; the table
+below is the path a maintainer edits today. A role with no row here has no
+nsh owner and is a gap, not a shared primitive.
+
+| Role | nsh owner |
+| --- | --- |
+| Chrome tokens, the one radius | `src/theme.json` (read by `nsh_base::theme()`) |
+| Data tokens: diff, status, state, ref accents, lanes, type, density, radii | `src/theme.rs` |
+| General buttons and icon buttons | `src/ui/button.rs`, `src/ui/icon_button.rs` |
+| Inputs and text areas | `src/ui/input.rs` |
+| Checkbox and switch | `src/ui/checkbox.rs`, `src/ui/switch.rs` |
+| Select, combobox, command | `src/ui/select.rs`, `src/ui/combobox.rs`, `src/ui/command.rs` |
+| Tabs and toolbars | `src/ui/tab.rs`, `src/ui/toolbar.rs` |
+| Rows and trees | `src/ui/row.rs`, `src/ui/tree.rs` |
+| Cards and pane headers | `src/ui/card.rs`, `src/ui/pane_header.rs` |
+| Data tables | `src/ui/data_table.rs` |
+| Menus and context menus | `src/ui/menu.rs` |
+| Dialogs, alert dialogs, popovers, tooltips | `src/ui/dialog.rs`, `src/ui/alert.rs`, `src/ui/popover.rs`, `src/ui/tooltip.rs` |
+| Toast and banners | `src/ui/toast.rs`, `src/screens/feedback.rs` |
+| Progress and scrollbars | `src/ui/progress.rs`, `src/ui/scrollbar.rs` |
+| The shell frame, tabs, status bar, activity feed | `src/screens/shell.rs` |
+| Welcome, recents, workspace picker | `src/screens/welcome.rs`, `src/screens/workspace_picker.rs` |
+| Log, graph, filter bar, commit actions | `src/screens/log.rs`, `src/screens/log_graph.rs` |
+| Changes, commit card, diff, image diff | `src/screens/changes.rs`, `src/screens/commit.rs`, `src/screens/diff_view.rs`, `src/screens/image_diff.rs` |
+| Branch kit, dialogs, picker, divergence | `src/screens/branches.rs`, `src/screens/branch_dialogs.rs`, `src/screens/branch_picker.rs`, `src/screens/divergence.rs` |
+| Sync, push, pull, remotes, merge | `src/screens/sync.rs`, `src/screens/remotes.rs`, `src/screens/merge.rs` |
+| Worktrees and submodules | `src/screens/worktrees.rs`, `src/screens/submodules.rs` |
+| Rewrite, rebase, cherry-pick, patches, unshelve, conflicts, bulk | `src/screens/rewrite.rs`, `src/screens/rebase.rs`, `src/screens/rebase_editor.rs`, `src/screens/cherry_pick.rs`, `src/screens/patches.rs`, `src/screens/unshelve.rs`, `src/screens/conflicts.rs`, `src/screens/bulk.rs` |
+| Blame | `src/screens/blame.rs` |
+| Settings | `src/screens/settings.rs` |
+| Shortcuts | `src/screens/shortcuts.rs` |
+| Command palette | `src/screens/palette.rs` |
+| Custom command | `src/screens/custom_command.rs` |
+| The route table and the dialog layers | `src/screens/mod.rs`, `src/lib.rs` |
+
+Two boundaries carry over unchanged into nsh. A general control in `src/ui`
+takes no application state and decides no policy; a screen owns its data and
+verbs. A screen never paints its own dialog: the shell paints the layer for
+the state that says it is open, which is why `src/lib.rs` composes the N4 to
+N6 layers and every dialog screen exports a `layer`. The token audit in
+`tests/audit.rs` is the nsh ratchet for the first rule; the layer composition
+is the second.
+
 ## Compatibility and public import contract
 
 The following paths are the current compatibility surface and must continue to

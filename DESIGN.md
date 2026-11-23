@@ -146,6 +146,20 @@ change; the nsh controls that carry their own motion honor it natively.
 | Menu | open, close, item hover or focus | The popup appears and goes at once, no fade; the accent band switches at once |
 | Context menu | open, close | The platform's own popup at the pointer; the app animates nothing |
 | Alert dialog | present, dismiss | The platform presents and dismisses it (NSAlert on macOS); the app animates nothing |
+| Blame | open, close, line press | The dialog's native presentation; a line's band and the jump to the log switch at once |
+| Settings | category, switch, select, apply | The tab indicator travels natively (off under reduced motion); the switch's thumb steps at once; the select's popup enters natively; Apply keeps the card open |
+| Shortcuts | open, close | The dialog's native presentation; the table is static |
+| Command palette | open, close, filter, choose | The dialog's native presentation; the list and the empty sentence switch at once; choosing closes the palette and the opened surface presents |
+| Custom command | open, close, arm, run | The dialog's native presentation; the destructive warning and the confirm label switch at once; the monitor's progress follows the run with no spring |
+| Route screens | mount | A route swaps at once; no entrance motion |
+
+**Closing the inventory.** Every line above is a control's own state, and
+each is proved by the state change rather than by a pixel: `tests/r4_polish.rs`
+holds the dialogs' frame and the shell at a small window, `tests/audit.rs`
+runs the reduced-motion switch and the 200 percent scale, and the N6 lanes
+capture the dialogs on a live macOS window. The one thing this inventory
+cannot prove natively is a screen reader speaking: VoiceOver and Narrator
+are named lane gaps in the N6 report while no reader is driven.
 
 ## What the review judges
 
