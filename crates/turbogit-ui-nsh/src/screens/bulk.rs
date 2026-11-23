@@ -50,7 +50,11 @@ pub fn layer(handle: AppHandle) -> impl IntoElement {
                     )
                 });
                 let mut out = view().into_element();
-                if let Some(op) = preflight {
+                // The custom command's dialog belongs to its own surface;
+                // this layer keeps the fleet monitors.
+                if let Some(op) = preflight
+                    && op != BulkOp::Custom
+                {
                     out = preflight_dialog(paint.clone(), op).into_element();
                 }
                 if run {
@@ -75,7 +79,7 @@ fn open(handle: &AppHandle, op: BulkOp) {
     handle.update(move |s| s.open_bulk_preflight(op, &[]));
 }
 
-fn preflight_dialog(handle: AppHandle, op: BulkOp) -> impl IntoElement {
+pub(crate) fn preflight_dialog(handle: AppHandle, op: BulkOp) -> impl IntoElement {
     let t = theme();
     let scope = handle.peek(|s| s.bulk_scope());
     let (will_run, total) = handle.peek(|s| {
@@ -152,6 +156,22 @@ fn preflight_dialog(handle: AppHandle, op: BulkOp) -> impl IntoElement {
     });
     let cancel = handle.clone();
     let run = handle.clone();
+    let label_handle = handle.clone();
+    let label_scope = scope.clone();
+    let label = move || {
+        label_handle.read(|s| {
+            let preflight = s.bulk_preflight(op, &label_scope);
+            let command = s.ui.bulk_command.trim().to_string();
+            let destructive = op == BulkOp::Custom && s.bulk_command_is_destructive();
+            if destructive && s.ui.bulk_command_armed {
+                format!("Yes, run {command}")
+            } else {
+                format!("Run on {} of {}", preflight.will_run(), preflight.total())
+            }
+        })
+    };
+    let disabled_handle = handle.clone();
+    let disabled_scope = scope.clone();
     body = body.child(
         view()
             .flex_row()
@@ -166,14 +186,35 @@ fn preflight_dialog(handle: AppHandle, op: BulkOp) -> impl IntoElement {
             .child(button(
                 ButtonProps::new(format!("Run on {will_run} of {total}"))
                     .variant(ButtonVariant::Primary)
-                    .disabled(will_run == 0)
+                    .label_of(label)
+                    .disabled_if(move || {
+                        disabled_handle.read(|s| {
+                            let preflight = s.bulk_preflight(op, &disabled_scope);
+                            preflight.will_run() == 0
+                                || (op == BulkOp::Custom && s.ui.bulk_command.trim().is_empty())
+                        })
+                    })
                     .test_id(&test_ids::bulk("run"))
-                    .on_press(move || confirm_run(&run, op)),
+                    .on_press(move || {
+                        let (destructive, armed) = run.read(|s| {
+                            (
+                                op == BulkOp::Custom && s.bulk_command_is_destructive(),
+                                s.ui.bulk_command_armed,
+                            )
+                        });
+                        if destructive && !armed {
+                            run.update(|s| s.ui.bulk_command_armed = true);
+                        } else {
+                            confirm_run(&run, op);
+                        }
+                    }),
             )),
     );
     dialog(
         DialogProps::new("bulk-preflight", op.label())
             .width(760.0)
+            .hide_action(true)
+            .hide_cancel(true)
             .on_cancel({
                 let cancel = handle.clone();
                 move || cancel.update(|s| s.ui.bulk_op = None)
@@ -734,6 +775,8 @@ fn run_monitor(handle: AppHandle) -> impl IntoElement {
     dialog(
         DialogProps::new("bulk-monitor", title)
             .width(780.0)
+            .hide_action(true)
+            .hide_cancel(true)
             .child(body),
     )
     .into_element()
@@ -942,6 +985,8 @@ fn cherry_monitor(handle: AppHandle) -> impl IntoElement {
     dialog(
         DialogProps::new("cherry-monitor", "Cherry-pick across — live")
             .width(780.0)
+            .hide_action(true)
+            .hide_cancel(true)
             .child(body),
     )
     .into_element()
