@@ -20,68 +20,65 @@ fn real_line(rel: &str, needle: &str) -> usize {
 
 #[test]
 fn it_finds_a_named_symbol_in_a_named_file() {
-    let rows = ui_source("ui/widgets/rows.rs");
-    let declared = srcscan::declared_fns(&rows);
+    let row = ui_source("ui/row.rs");
+    let declared = srcscan::declared_fns(&row);
     assert!(
-        declared.contains(&"paint_row".to_owned()),
-        "`paint_row` is declared in ui/widgets/rows.rs today; the scanner found \
-         {declared:?}"
+        declared.contains(&"state_of".to_owned()),
+        "`state_of` is declared in ui/row.rs today; the scanner found {declared:?}"
     );
 
-    let at = real_line("ui/widgets/rows.rs", "pub fn paint_row(");
-    let line = rows.lines().nth(at - 1).expect("the declaration line");
+    let at = real_line("ui/row.rs", "pub fn state_of(");
+    let line = row.lines().nth(at - 1).expect("the declaration line");
     assert!(
-        srcscan::declares(line, "paint_row"),
-        "line {at} of ui/widgets/rows.rs declares `paint_row`: {line}"
+        srcscan::declares(line, "state_of"),
+        "line {at} of ui/row.rs declares `state_of`: {line}"
     );
     assert!(
-        !srcscan::declares(line, "paint_rail"),
-        "`paint_rail` is not declared on ui/widgets/rows.rs's `paint_row` line"
+        !srcscan::declares(line, "state"),
+        "`state` is not declared on ui/row.rs's `state_of` line"
     );
 
-    let body = srcscan::fn_code(&ui_source("ui/components.rs"), "row_shell");
+    let body = srcscan::fn_code(&ui_source("ui/card.rs"), "card");
     assert!(
-        body.contains("rect: egui::Rect"),
-        "`row_shell` takes the caller's rect; the body the scanner returned does \
-         not say so:\n{body}"
+        body.contains("impl IntoElement"),
+        "`card` returns an element; the body the scanner returned does not say \
+         so:\n{body}"
     );
     assert!(
         body.trim_end().ends_with('}'),
-        "`row_shell`'s body was read to its closing brace:\n{body}"
+        "`card`'s body was read to its closing brace:\n{body}"
     );
 
     assert!(
-        !srcscan::word_offsets(&ui_source("ui/widgets/mod.rs"), "paint_row").is_empty(),
-        "ui/widgets/mod.rs re-exports `paint_row`"
+        !srcscan::word_offsets(&ui_source("ui/mod.rs"), "row").is_empty(),
+        "ui/mod.rs re-exports `row`"
     );
 
-    let sites = srcscan::call_sites(ui_src(), "paint_row");
+    let sites = srcscan::call_sites(ui_src(), "state_of");
     assert!(
         sites.len() >= 2,
-        "`paint_row` is called from at least two screens; the scanner found {sites:?}"
+        "`state_of` is called from at least two places; the scanner found {sites:?}"
     );
     assert!(
-        srcscan::fns_using(&rows, "RowState").contains(&"paint_row".to_owned()),
-        "`paint_row` reads `RowState`"
+        srcscan::fns_using(&row, "RowState").contains(&"row_fill".to_owned()),
+        "`row_fill` reads `RowState`"
     );
 }
 
 #[test]
 fn it_does_not_find_a_name_that_was_never_declared() {
-    let never = "turbogit_git_paint_row_that_was_never_written";
-    let rows = ui_source("ui/widgets/rows.rs");
+    let never = "turbogit_git_state_of_that_was_never_written";
+    let row = ui_source("ui/row.rs");
     assert!(
-        !srcscan::declared_fns(&rows)
-            .iter()
-            .any(|name| name == never),
+        !srcscan::declared_fns(&row).iter().any(|name| name == never),
         "a name that was never declared came back as a declaration"
     );
     assert!(
-        srcscan::items_naming(&rows, never).is_empty(),
+        srcscan::items_naming(&row, never).is_empty(),
         "a name that was never declared matched a module item"
     );
     assert!(
-        srcscan::fns_using(&rows, never).is_empty(),
+        srcscan::fns_using(&row, never).is_empty(),
         "a name that was never declared matched a function"
     );
     assert!(
@@ -89,8 +86,8 @@ fn it_does_not_find_a_name_that_was_never_declared() {
         "a name that was never declared matched a call site"
     );
     assert!(
-        !srcscan::declared_fns(&rows).contains(&"row_shell".to_owned()),
-        "`row_shell` belongs to ui/components.rs, not to the row module"
+        !srcscan::declared_fns(&row).contains(&"card".to_owned()),
+        "`card` belongs to ui/card.rs, not to the row module"
     );
 }
 
@@ -98,13 +95,13 @@ fn it_does_not_find_a_name_that_was_never_declared() {
 fn the_projection_preserves_every_line_and_every_column() {
     for rel in [
         "theme.rs",
-        "ui/components.rs",
-        "ui/log_window.rs",
-        "ui/blame_view.rs",
-        "ui/settings_modal.rs",
-        "ui/icons.rs",
-        "ui/widgets/rows.rs",
-        "ui/widgets/mod.rs",
+        "ui/button.rs",
+        "ui/row.rs",
+        "ui/mod.rs",
+        "ui/card.rs",
+        "screens/log.rs",
+        "screens/shell.rs",
+        "screens/settings.rs",
     ] {
         let src = ui_source(rel);
         for mode in [Strings::Keep, Strings::Blank] {
@@ -126,20 +123,20 @@ fn the_projection_preserves_every_line_and_every_column() {
 
 #[test]
 fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
-    let rel = "ui/settings_modal.rs";
+    let rel = "screens/settings.rs";
     let at = real_line(rel, r#""release/*""#);
     let src = ui_source(rel);
 
-    let later = real_line(rel, "fn pattern_chip(");
+    let later = real_line(rel, "fn appearance_page(");
     assert!(
         later > at,
-        "the probe is only meaningful while `pattern_chip` is after the string"
+        "the probe is only meaningful while `appearance_page` is after the string"
     );
     let line = src.lines().nth(later - 1).expect("the later declaration");
     assert!(
-        srcscan::declares(line, "pattern_chip"),
-        "`pattern_chip` is declared at {rel}:{later} and the scanner still sees it \
-         although ui/settings_modal.rs:{at} holds `\"release/*\"`"
+        srcscan::declares(line, "appearance_page"),
+        "`appearance_page` is declared at {rel}:{later} and the scanner still sees \
+         it although screens/settings.rs:{at} holds `\"release/*\"`"
     );
     for (mode, what) in [
         (Strings::Keep, "code_with_literals"),
@@ -147,8 +144,8 @@ fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
     ] {
         let blanked = srcscan::blank_comments(&src, mode);
         assert!(
-            blanked.contains("fn pattern_chip("),
-            "{what} lost `fn pattern_chip(` after the `\"release/*\"` literal at \
+            blanked.contains("fn appearance_page("),
+            "{what} lost `fn appearance_page(` after the `\"release/*\"` literal at \
              {rel}:{at}"
         );
     }
@@ -156,105 +153,78 @@ fn a_block_comment_opener_inside_a_string_literal_is_not_one() {
 
 #[test]
 fn a_line_comment_opener_inside_a_string_literal_is_not_one() {
-    let rel = "ui/remotes_dialog.rs";
-    let at = real_line(rel, "https://");
-    let src = srcscan::code_with_literals(&ui_source(rel));
+    const FIXTURE: &str = "\
+fn hint() -> &'static str {
+    \"https://example.com\"
+}
+fn after_the_literal() -> u8 { 7 }
+";
+    let blanked = srcscan::code_with_literals(FIXTURE);
     assert!(
-        src.lines()
-            .nth(at - 1)
-            .expect("the hint line")
-            .contains(r#".hint_text("https://…")"#),
-        "ui/remotes_dialog.rs:{at} still holds its whole hint literal after \
-         comment blanking; a `//` inside a string literal is not a comment, and a \
-         scanner that believed it would blank the closing quote too"
+        blanked.contains("\"https://example.com\""),
+        "a `//` inside a string literal is not a comment: {blanked}"
+    );
+    assert!(
+        blanked.contains("fn after_the_literal("),
+        "the declaration after the literal survived: {blanked}"
     );
 }
 
 #[test]
 fn a_lifetime_is_not_a_char_literal() {
-    let rel = "ui/branch_tree_view.rs";
+    let rel = "screens/log.rs";
     let src = ui_source(rel);
-    let at = real_line(rel, "pub fn branch_tree(");
+    let at = real_line(rel, "fn find_commit<'a>(");
     assert!(
         src.lines()
             .nth(at - 1)
             .expect("the signature")
-            .contains("<'_>"),
-        "ui/branch_tree_view.rs:{at} still carries the `'_` lifetime"
+            .contains("<'a>"),
+        "screens/log.rs:{at} still carries the `'a` lifetime"
     );
     let blanked = srcscan::blank_lines(&src, Strings::Blank);
     for (name, needle) in [
-        ("keyboard_order", "pub fn keyboard_order<'a>("),
-        ("warm_tags", "pub fn warm_tags("),
+        ("bind_log_keys", "fn bind_log_keys("),
+        ("move_selection", "fn move_selection("),
     ] {
         let line = real_line(rel, needle);
         assert!(
             blanked[line - 1].contains(name),
-            "`{name}` is declared at {rel}:{line}, well after the `'_` lifetime on \
+            "`{name}` is declared at {rel}:{line}, well after the `'a` lifetime on \
              {rel}:{at}; a lifetime must not open a char literal"
         );
     }
-    let ch = real_line(rel, "std::iter::once(");
-    assert!(
-        blanked[ch - 1].contains("std::iter::once("),
-        "the char literal at {rel}:{ch} is still code after blanking"
-    );
 }
 
 #[test]
 fn a_byte_char_literal_is_not_a_comment_or_a_string() {
-    let rel = "ui/icons.rs";
-    let at = real_line(rel, "let mut last_cmd = b'");
-    let src = ui_source(rel);
-    let later = real_line(rel, "fn sample_cubic(");
-    assert!(later > at, "the probe is only meaningful while it is after");
+    const FIXTURE: &str = "\
+fn shift(c: char) -> char {
+    match c {
+        b'M' => b'L',
+        _ => c,
+    }
+}
+fn sample_cubic() -> u8 { 7 }
+";
     for (mode, what) in [
         (Strings::Keep, "code_with_literals"),
         (Strings::Blank, "code_only"),
     ] {
-        let blanked = srcscan::blank_comments(&src, mode);
+        let blanked = srcscan::blank_comments(FIXTURE, mode);
         assert!(
             blanked.contains("fn sample_cubic("),
-            "{what} lost `fn sample_cubic(` after the byte char literals at \
-             {rel}:{at}"
+            "{what} lost `fn sample_cubic(` after the byte char literals"
         );
     }
     assert!(
-        srcscan::code_only(&src).contains("b'M' => b'L',"),
+        srcscan::code_only(FIXTURE).contains("b'M' => b'L',"),
         "the implicit-repetition arm survived blanking"
     );
 }
 
 #[test]
 fn a_raw_string_body_is_not_scanned() {
-    let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("../turbogit-ui/tests/design_tokens.rs");
-    let src = srcscan::read_source(&real);
-    let open = src
-        .lines()
-        .position(|l| l.contains("r#\""))
-        .expect("design_tokens.rs carries a raw string")
-        + 1;
-    let blanked = srcscan::blank_lines(&src, Strings::Keep);
-    for (what, line) in [
-        ("the closing delimiter", "restore_workspace: false,"),
-        ("the const's own terminator", "\"#;"),
-        (
-            "the declaration after it",
-            "fn legacy_state_with_removed_theme_mode_still_loads(",
-        ),
-    ] {
-        let at = src
-            .lines()
-            .position(|l| l.contains(line))
-            .unwrap_or_else(|| panic!("design_tokens.rs no longer contains {line:?}"))
-            + 1;
-        assert!(
-            blanked[at - 1].contains(line.trim()),
-            "{what} at design_tokens.rs:{at} survived the raw string opened at \
-             design_tokens.rs:{open}"
-        );
-    }
-
     const FIXTURE: &str = r####"
 const BODY: &str = r#"a "quoted" // not a comment
 /* not a comment either */ still " code "#

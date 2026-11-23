@@ -218,11 +218,7 @@ fn perf_conflict_file_frame_budget() {
         state.refresh(turbogit_app::root_caches::Affected::All);
         state.drain_events();
         let root = state.multi.roots[0].id.clone();
-        turbogit_ui::screens::conflicts::open_resolver_in(
-            &mut state,
-            &root,
-            Path::new("conf.txt"),
-        );
+        turbogit_ui::screens::conflicts::open_resolver_in(&mut state, &root, Path::new("conf.txt"));
         state
     }))
     .expect("the nsh app mounts");
