@@ -58,7 +58,11 @@ nsh-engine = { workspace = true }
 nsh-testing = { workspace = true }
 tempfile = { workspace = true }
 test-support = { workspace = true, features = ["nsh"] }
+similar = { workspace = true }
+turbogit-domain = { workspace = true }
 turbogit-engine = { workspace = true }
+turbogit-engine-api = { workspace = true }
+turbogit-services = { workspace = true }
 
 [lints]
 workspace = true

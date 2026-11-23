@@ -58,7 +58,6 @@ turbogit-ui = { workspace = true }
 # cargo-running hook scripts, while `user-hooks` makes cargo-husky a pure
 # installer for the scripts the repo commits.
 cargo-husky = { version = "1.5.0", default-features = false, features = ["user-hooks"] }
-similar = { workspace = true }
 tempfile = { workspace = true }
 test-support = { workspace = true }
 turbogit-domain = { workspace = true }

@@ -4844,7 +4844,6 @@ name = "turbogit"
 version = "0.1.0"
 dependencies = [
  "cargo-husky",
- "similar",
  "tempfile",
  "test-support",
  "turbogit-domain",
@@ -4931,11 +4930,14 @@ dependencies = [
  "nsh-platform-windows",
  "nsh-testing",
  "serde_json",
+ "similar",
  "tempfile",
  "test-support",
  "turbogit-app",
  "turbogit-domain",
  "turbogit-engine",
+ "turbogit-engine-api",
+ "turbogit-services",
 ]
 
 [[package]]
