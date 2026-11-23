@@ -4,6 +4,7 @@
 //! [`screens`], one per surface, filled phase by phase.
 
 pub mod bridge;
+pub mod launch;
 pub mod screens;
 pub mod test_ids;
 pub mod theme;

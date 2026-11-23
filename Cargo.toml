@@ -61,11 +61,7 @@ warnings = "deny"
 unreachable_pub = "deny"
 
 [dependencies]
-eframe = { workspace = true }
-egui = { workspace = true }
-rfd = { workspace = true }
-turbogit-app = { workspace = true }
-turbogit-ui-egui = { workspace = true }
+turbogit-ui = { workspace = true }
 
 [dev-dependencies]
 # Installs `.cargo-husky/hooks/*` into `.git/hooks` on build (ADR-0028 D3).
