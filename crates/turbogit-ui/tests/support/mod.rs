@@ -19,7 +19,7 @@ use turbogit_app::recents::RecentProject;
 use turbogit_app::state::AppState;
 use turbogit_ui::{AppRoot, AppRootProps};
 
-/// The reference viewport the egui harness and the live lanes share.
+/// The reference viewport the harness and the live lanes share.
 pub const VIEWPORT: (f32, f32) = (1280.0, 820.0);
 
 /// The engine config the ported suites mount: `AppRoot` over the state the

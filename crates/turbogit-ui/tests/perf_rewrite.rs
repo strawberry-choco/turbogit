@@ -1,16 +1,15 @@
 //! The N5 perf fixture: a 1k-commit interactive rebase plan and a 1k-hunk
-//! conflict file, p95 frame build against the egui trunk's screens at the
-//! same window and display, interleaved.
+//! conflict file, p95 frame time for the nsh screens at 1280x820.
 //!
-//! Run with:
-//! `cargo test --release -p turbogit-ui-nsh --test perf_rewrite -- --ignored --nocapture --test-threads=1`
+//! The egui comparison arm retired with the crate in N7; the relative
+//! baseline lives on the `egui-final` tag. Run with:
+//! `cargo test --release -p turbogit-ui --test perf_rewrite -- --ignored --nocapture --test-threads=1`
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use egui_kittest::Harness;
 use tempfile::TempDir;
 use turbogit_app::state::AppState;
 
@@ -18,7 +17,6 @@ mod support;
 
 const COMMITS: usize = 1_000;
 const HUNKS: usize = 1_000;
-const VIEWPORT: egui::Vec2 = egui::vec2(1280.0, 820.0);
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -151,33 +149,23 @@ fn report(label: &str, values: &[Duration]) {
     );
 }
 
-fn interleaved(
-    mut head: nsh_testing::Headless,
-    mut trunk: Harness<'static, AppState>,
-) -> (Duration, Duration) {
+fn frames(app: &mut nsh_testing::Headless) -> Vec<Duration> {
     for _ in 0..20 {
-        head.next_frame(Duration::from_millis(16)).unwrap();
-        trunk.step();
+        app.next_frame(Duration::from_millis(16)).unwrap();
     }
     let frame = Duration::from_millis(16);
-    let mut head_frames = Vec::new();
-    let mut trunk_frames = Vec::new();
+    let mut samples = Vec::new();
     for _ in 0..40 {
         let start = Instant::now();
-        head.next_frame(frame).unwrap();
-        head_frames.push(start.elapsed());
-        let start = Instant::now();
-        trunk.step();
-        trunk_frames.push(start.elapsed());
+        app.next_frame(frame).unwrap();
+        samples.push(start.elapsed());
     }
-    report("head", &head_frames);
-    report("trunk", &trunk_frames);
-    (p95(&head_frames), p95(&trunk_frames))
+    samples
 }
 
 #[test]
 #[ignore = "manual perf harness; run with --ignored --nocapture --test-threads=1"]
-fn perf_rebase_plan_head_against_trunk() {
+fn perf_rebase_plan_frame_budget() {
     let tmp = tempfile::tempdir().unwrap();
     let (project, repo) = plan_repo(&tmp);
     let oldest = git(&repo, &["rev-list", "--reverse", "main..feature"])
@@ -189,11 +177,10 @@ fn perf_rebase_plan_head_against_trunk() {
 
     let head_project = project.clone();
     let head_repo = repo.clone();
-    let head_oldest = oldest.clone();
     let mut head = nsh_testing::Headless::start(support::app_config(move || {
         let mut state = AppState::for_roots(&head_project, std::slice::from_ref(&head_repo));
         let root = state.multi.roots[0].id.clone();
-        state.open_interactive_rebase(&root, &head_oldest);
+        state.open_interactive_rebase(&root, &oldest);
         state.refresh(turbogit_app::root_caches::Affected::All);
         state.drain_events();
         state
@@ -207,42 +194,20 @@ fn perf_rebase_plan_head_against_trunk() {
     })
     .expect("the 1k plan paints");
 
-    let mut trunk_state = AppState::for_roots(&project, std::slice::from_ref(&repo));
-    let root = trunk_state.multi.roots[0].id.clone();
-    trunk_state.open_interactive_rebase(&root, &oldest);
-    let mut fonts = false;
-    let mut trunk = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui_egui::theme::configure_style(ui.ctx());
-            if !fonts {
-                turbogit_ui_egui::theme::install_fonts(ui.ctx());
-                fonts = true;
-            }
-            state.drain_events();
-            egui::CentralPanel::default().show(ui, |ui| {
-                turbogit_ui_egui::ui::interactive_rebase::show(ui, state)
-            });
-        },
-        trunk_state,
-    );
-    trunk.set_size(VIEWPORT);
-
-    let (head_p95, trunk_p95) = interleaved(head, trunk);
-    let ceiling = trunk_p95 + Duration::from_millis(2);
+    let samples = frames(&mut head);
+    report("plan", &samples);
+    let head_p95 = p95(&samples);
     println!(
-        "plan rule: head p95 {:.2}ms <= trunk p95 {:.2}ms + 2ms = {:.2}ms; under 16.7ms: {}",
+        "frame budget: head p95 {:.2}ms; under 16.7ms: {}",
         head_p95.as_secs_f64() * 1000.0,
-        trunk_p95.as_secs_f64() * 1000.0,
-        ceiling.as_secs_f64() * 1000.0,
         head_p95 < Duration::from_micros(16_700),
     );
-    assert!(head_p95 <= ceiling);
     assert!(head_p95 < Duration::from_micros(16_700));
 }
 
 #[test]
 #[ignore = "manual perf harness; run with --ignored --nocapture --test-threads=1"]
-fn perf_conflict_file_head_against_trunk() {
+fn perf_conflict_file_frame_budget() {
     let tmp = tempfile::tempdir().unwrap();
     let (project, repo) = conflict_repo(&tmp);
 
@@ -268,47 +233,13 @@ fn perf_conflict_file_head_against_trunk() {
     })
     .expect("the resolver paints");
 
-    let mut trunk_state = AppState::for_roots(&project, std::slice::from_ref(&repo));
-    let root = trunk_state.multi.roots[0].id.clone();
-    let content = std::fs::read_to_string(repo.join("conf.txt")).unwrap();
-    let (segs, _) = turbogit_app::conflict::parse_conflict_markers(&content);
-    trunk_state.ui.conflict_segs = segs;
-    trunk_state.ui.conflict_res = vec![None; HUNKS];
-    trunk_state.ui.conflict_resolver_undo = vec![None; HUNKS];
-    trunk_state.ui.conflict_text = content;
-    trunk_state.ui.conflict_resolver_root = Some(root.clone());
-    trunk_state.ui.conflict_resolver_selected = Some(PathBuf::from("conf.txt"));
-    trunk_state.ui.conflict_resolver_open = true;
-    trunk_state.ui.merge_in_progress = true;
-    trunk_state.refresh(turbogit_app::root_caches::Affected::All);
-    trunk_state.drain_events();
-
-    let mut fonts = false;
-    let mut trunk = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui_egui::theme::configure_style(ui.ctx());
-            if !fonts {
-                turbogit_ui_egui::theme::install_fonts(ui.ctx());
-                fonts = true;
-            }
-            state.drain_events();
-            egui::CentralPanel::default().show(ui, |ui| {
-                turbogit_ui_egui::ui::conflict_resolver::render(ui, state)
-            });
-        },
-        trunk_state,
-    );
-    trunk.set_size(VIEWPORT);
-
-    let (head_p95, trunk_p95) = interleaved(head, trunk);
-    let ceiling = trunk_p95 + Duration::from_millis(2);
+    let samples = frames(&mut head);
+    report("conflict", &samples);
+    let head_p95 = p95(&samples);
     println!(
-        "conflict rule: head p95 {:.2}ms <= trunk p95 {:.2}ms + 2ms = {:.2}ms; under 16.7ms: {}",
+        "frame budget: head p95 {:.2}ms; under 16.7ms: {}",
         head_p95.as_secs_f64() * 1000.0,
-        trunk_p95.as_secs_f64() * 1000.0,
-        ceiling.as_secs_f64() * 1000.0,
         head_p95 < Duration::from_micros(16_700),
     );
-    assert!(head_p95 <= ceiling);
     assert!(head_p95 < Duration::from_micros(16_700));
 }

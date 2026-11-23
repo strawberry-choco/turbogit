@@ -11,7 +11,7 @@ use nsh_engine::{Clock, ColorScheme, EngineConfig, Environment, Idiom, Os, Size}
 use nsh_testing::Headless;
 use turbogit_app::state::AppState;
 
-/// The reference viewport the egui harness and the live lanes share.
+/// The reference viewport the harness and the live lanes share.
 pub const VIEWPORT: (f32, f32) = (1280.0, 820.0);
 
 /// The engine config both roots run under: the spike's shape, over the

@@ -8,19 +8,7 @@ publish = false
 turbogit-domain = { workspace = true }
 turbogit-engine-api = { workspace = true }
 
-[dependencies.turbogit-ui-egui]
-workspace = true
-optional = true
-
 [dependencies.turbogit-app]
-workspace = true
-optional = true
-
-[dependencies.egui]
-workspace = true
-optional = true
-
-[dependencies.egui_kittest]
 workspace = true
 optional = true
 
@@ -46,11 +34,11 @@ optional = true
 
 [dev-dependencies]
 tempfile = { workspace = true }
+turbogit-app = { workspace = true }
 turbogit-engine = { workspace = true }
 
 [features]
 default = []
-harness = ["dep:egui", "dep:egui_kittest", "dep:turbogit-ui-egui", "dep:turbogit-app", "dep:tempfile"]
 nsh = ["dep:nsh-core", "dep:nsh-engine", "dep:nsh-testing", "dep:turbogit-ui", "dep:turbogit-app", "dep:tempfile"]
 
 [lints]

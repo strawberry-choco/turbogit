@@ -77,7 +77,6 @@ fn the_two_repo_recipe_is_two_sibling_repositories_the_app_can_discover() {
         "the two are siblings, so neither discovery swallows the other: {alpha:?} / {beta:?}"
     );
 
-    #[cfg(feature = "harness")]
     {
         let state = turbogit_app::state::AppState::new(project.path().to_path_buf());
         let canon = |paths: Vec<&PathBuf>| -> Vec<PathBuf> {

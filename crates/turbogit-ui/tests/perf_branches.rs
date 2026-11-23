@@ -1,18 +1,17 @@
 //! The N4 branch-pane perf fixture, ported from the egui
 //! `perf_log_branches` and `perf_log_branch_filter` suites: one repository
 //! with 10k local branches, 15k remote-tracking branches, and 8k tags, then
-//! p95 frame time for the nsh Branches route against the egui trunk's branch
-//! pane, interleaved on the same window and display.
+//! p95 frame time for the nsh Branches route at 1280x820.
 //!
-//! Run with:
-//! `cargo test --release -p turbogit-ui-nsh --test perf_branches -- --ignored --nocapture --test-threads=1`
+//! The egui comparison arm retired with the crate in N7; the relative
+//! baseline lives on the `egui-final` tag. Run with:
+//! `cargo test --release -p turbogit-ui --test perf_branches -- --ignored --nocapture --test-threads=1`
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use egui_kittest::Harness;
 use tempfile::TempDir;
 use turbogit_app::state::{AppState, Tab};
 
@@ -21,7 +20,6 @@ mod support;
 const LOCAL: usize = 10_000;
 const REMOTE: usize = 10_000;
 const TAGS: usize = 8_000;
-const VIEWPORT: egui::Vec2 = egui::vec2(1280.0, 820.0);
 
 struct Seed {
     _tmp: TempDir,
@@ -99,59 +97,6 @@ fn seeded() -> Seed {
     Seed { _tmp: tmp, project }
 }
 
-fn leaked_config_dir() -> PathBuf {
-    let dir = tempfile::tempdir().expect("config dir");
-    let path = dir.path().to_path_buf();
-    std::mem::forget(dir);
-    path
-}
-
-fn spawned_state(seed: &Seed) -> AppState {
-    let state = AppState::launch_in(Some(seed.project.clone()), Some(leaked_config_dir()));
-    assert!(!state.multi.roots.is_empty(), "the repo is discovered");
-    state
-}
-
-fn wait_for_trunk_reads(state: &mut AppState) {
-    let root = state.multi.roots[0].id.clone();
-    state.request_branch_tags();
-    state.fetch_refs(root.clone());
-    let start = Instant::now();
-    loop {
-        state.drain_events();
-        if state.caches.tags_loaded(&root) && state.caches.refs_loaded(&root) {
-            return;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(60),
-            "the trunk reads never settled"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn trunk_harness(seed: &Seed) -> Harness<'static, AppState> {
-    let mut state = spawned_state(seed);
-    wait_for_trunk_reads(&mut state);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui_egui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui_egui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            egui::CentralPanel::default().show(ui, |ui| {
-                turbogit_ui_egui::ui::log_window::branches_pane(ui, state)
-            });
-        },
-        state,
-    );
-    harness.set_size(VIEWPORT);
-    harness
-}
-
 fn head_app(seed: &Seed) -> nsh_testing::Headless {
     let project = seed.project.clone();
     let repo = seed.project.join("alpha");
@@ -213,49 +158,29 @@ fn report(label: &str, values: &[Duration]) {
 
 #[test]
 #[ignore = "manual perf harness; run with --ignored --nocapture --test-threads=1"]
-fn perf_branches_head_against_trunk() {
+fn perf_branches_frame_budget() {
     let seed = seeded();
     let mut head = head_app(&seed);
-    let mut trunk = trunk_harness(&seed);
 
-    // One warm-up pass each, so font shaping and the first layout are not
-    // part of either sample.
     for _ in 0..20 {
         head.next_frame(Duration::from_millis(16)).unwrap();
-        trunk.step();
     }
 
     let frame = Duration::from_millis(16);
     let mut head_frames = Vec::new();
-    let mut trunk_frames = Vec::new();
     for _ in 0..40 {
         let start = Instant::now();
         head.next_frame(frame).unwrap();
         head_frames.push(start.elapsed());
-
-        let start = Instant::now();
-        trunk.step();
-        trunk_frames.push(start.elapsed());
     }
 
     report("head-branches", &head_frames);
-    report("trunk-branches-pane", &trunk_frames);
 
     let head_p95 = p95(&head_frames);
-    let trunk_p95 = p95(&trunk_frames);
-    let ceiling = trunk_p95 + Duration::from_millis(2);
     println!(
-        "rule: head p95 {:.2}ms <= trunk p95 {:.2}ms + 2ms = {:.2}ms; under 16.7ms: {}",
+        "frame budget: head p95 {:.2}ms; under 16.7ms: {}",
         head_p95.as_secs_f64() * 1000.0,
-        trunk_p95.as_secs_f64() * 1000.0,
-        ceiling.as_secs_f64() * 1000.0,
         head_p95 < Duration::from_micros(16_700),
-    );
-    assert!(
-        head_p95 <= ceiling,
-        "head p95 {:?} exceeds trunk p95 {:?} + 2ms",
-        head_p95,
-        trunk_p95
     );
     assert!(
         head_p95 < Duration::from_micros(16_700),

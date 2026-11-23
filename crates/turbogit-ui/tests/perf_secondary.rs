@@ -1,9 +1,9 @@
 //! The N6 perf fixture: cold start, idle CPU, and log scroll with the
-//! secondary surfaces mounted, against the egui trunk at the same window,
-//! display, and fixture.
+//! secondary surfaces mounted, at 1280x820.
 //!
-//! Run with:
-//! `cargo test --release -p turbogit-ui-nsh --test perf_secondary -- --ignored --nocapture --test-threads=1`
+//! The egui comparison arm retired with the crate in N7; the relative
+//! baseline lives on the `egui-final` tag. Run with:
+//! `cargo test --release -p turbogit-ui --test perf_secondary -- --ignored --nocapture --test-threads=1`
 //! `N6_IDLE_SECS` tunes the idle sample (default 300, the gate's five
 //! minutes).
 
@@ -12,14 +12,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use egui_kittest::Harness;
 use tempfile::TempDir;
 use turbogit_app::state::{AppState, Tab};
 
 mod support;
 
 const COMMITS: usize = 500;
-const VIEWPORT: egui::Vec2 = egui::vec2(1280.0, 820.0);
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -126,40 +124,24 @@ fn head(project: &Path, repo: &Path, commits: &[String], surfaces: bool) -> nsh_
     .expect("the nsh app mounts")
 }
 
-fn trunk(
-    project: &Path,
-    repo: &Path,
-    commits: &[String],
-    surfaces: bool,
-) -> Harness<'static, AppState> {
-    let state = state(project, repo, commits, surfaces);
-    let mut fonts = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui_egui::theme::configure_style(ui.ctx());
-            if !fonts {
-                turbogit_ui_egui::theme::install_fonts(ui.ctx());
-                fonts = true;
-            }
-            state.drain_events();
-            turbogit_ui_egui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(VIEWPORT);
-    harness
-}
-
 fn median(values: &[Duration]) -> Duration {
     let mut sorted = values.to_vec();
     sorted.sort();
     sorted[sorted.len() / 2]
 }
 
+fn p95(values: &[Duration]) -> Duration {
+    let mut sorted = values.to_vec();
+    sorted.sort();
+    let index = ((sorted.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
+    sorted[index.min(sorted.len() - 1)]
+}
+
 fn report(label: &str, values: &[Duration]) {
     println!(
-        "{label}: p50 {:.2}ms max {:.2}ms (n={})",
+        "{label}: p50 {:.2}ms p95 {:.2}ms max {:.2}ms (n={})",
         median(values).as_secs_f64() * 1000.0,
+        p95(values).as_secs_f64() * 1000.0,
         values
             .iter()
             .max()
@@ -178,29 +160,19 @@ fn perf_secondary_cold_start() {
     let (project, repo, commits) = fixture(&tmp);
 
     let mut head_times = Vec::new();
-    let mut trunk_times = Vec::new();
     for _ in 0..5 {
         let start = Instant::now();
         let mut app = head(&project, &repo, &commits, false);
         app.first_render().unwrap();
         head_times.push(start.elapsed());
-
-        let start = Instant::now();
-        let mut app = trunk(&project, &repo, &commits, false);
-        app.step();
-        trunk_times.push(start.elapsed());
     }
-    report("cold start head", &head_times);
-    report("cold start trunk", &trunk_times);
+    report("cold start", &head_times);
     let head = median(&head_times);
-    let base = median(&trunk_times);
-    println!(
-        "cold start rule: head {:.2}ms <= 1.5x trunk {:.2}ms = {:.2}ms",
-        head.as_secs_f64() * 1000.0,
-        base.as_secs_f64() * 1000.0,
-        base.as_secs_f64() * 1500.0
+    println!("cold start: {:.2}ms", head.as_secs_f64() * 1000.0);
+    assert!(
+        head.as_secs_f64() < 2.0,
+        "cold start {head:?} exceeds the 2s smoke ceiling"
     );
-    assert!(head.as_secs_f64() <= base.as_secs_f64() * 1.5);
 }
 
 #[test]
@@ -210,39 +182,25 @@ fn perf_secondary_log_scroll() {
     let (project, repo, commits) = fixture(&tmp);
     let mut head = head(&project, &repo, &commits, false);
     head.first_render().unwrap();
-    let mut trunk = trunk(&project, &repo, &commits, false);
 
     for _ in 0..20 {
         head.next_frame(Duration::from_millis(16)).unwrap();
-        trunk.step();
     }
 
     let mut head_frames = Vec::new();
-    let mut trunk_frames = Vec::new();
-    for n in 0..40 {
-        let cid = commits[(n * 7) % commits.len()].clone();
-
+    for _ in 0..40 {
         let _ = head.scroll("id:log:list", nsh_core::Points(180.0));
         let start = Instant::now();
         head.next_frame(Duration::from_millis(16)).unwrap();
         head_frames.push(start.elapsed());
-
-        trunk.state_mut().ui.log_scroll_to = Some(cid);
-        let start = Instant::now();
-        trunk.step();
-        trunk_frames.push(start.elapsed());
     }
-    report("log scroll head", &head_frames);
-    report("log scroll trunk", &trunk_frames);
+    report("log scroll", &head_frames);
     let head_p95 = p95(&head_frames);
-    let trunk_p95 = p95(&trunk_frames);
     println!(
-        "log scroll rule: head p95 {:.2}ms <= trunk p95 {:.2}ms + 2ms = {:.2}ms",
+        "frame budget: head p95 {:.2}ms; under 16.7ms: {}",
         head_p95.as_secs_f64() * 1000.0,
-        trunk_p95.as_secs_f64() * 1000.0,
-        (trunk_p95 + Duration::from_millis(2)).as_secs_f64() * 1000.0
+        head_p95 < Duration::from_micros(16_700),
     );
-    assert!(head_p95 <= trunk_p95 + Duration::from_millis(2));
     assert!(head_p95 < Duration::from_micros(16_700));
 }
 
@@ -253,33 +211,24 @@ fn perf_secondary_surfaces_open() {
     let (project, repo, commits) = fixture(&tmp);
     let mut head = head(&project, &repo, &commits, true);
     head.first_render().unwrap();
-    let mut trunk = trunk(&project, &repo, &commits, true);
 
     for _ in 0..20 {
         head.next_frame(Duration::from_millis(16)).unwrap();
-        trunk.step();
     }
     let mut head_frames = Vec::new();
-    let mut trunk_frames = Vec::new();
     for _ in 0..40 {
         let start = Instant::now();
         head.next_frame(Duration::from_millis(16)).unwrap();
         head_frames.push(start.elapsed());
-        let start = Instant::now();
-        trunk.step();
-        trunk_frames.push(start.elapsed());
     }
-    report("surfaces open head", &head_frames);
-    report("surfaces open trunk", &trunk_frames);
+    report("surfaces open", &head_frames);
     let head_p95 = p95(&head_frames);
-    let trunk_p95 = p95(&trunk_frames);
     println!(
-        "surfaces open rule: head p95 {:.2}ms <= trunk p95 {:.2}ms + 2ms = {:.2}ms",
+        "frame budget: head p95 {:.2}ms; under 16.7ms: {}",
         head_p95.as_secs_f64() * 1000.0,
-        trunk_p95.as_secs_f64() * 1000.0,
-        (trunk_p95 + Duration::from_millis(2)).as_secs_f64() * 1000.0
+        head_p95 < Duration::from_micros(16_700),
     );
-    assert!(head_p95 <= trunk_p95 + Duration::from_millis(2));
+    assert!(head_p95 < Duration::from_micros(16_700));
 }
 
 #[test]
@@ -293,19 +242,11 @@ fn perf_secondary_idle_cpu() {
     let (project, repo, commits) = fixture(&tmp);
     let mut head = head(&project, &repo, &commits, false);
     head.first_render().unwrap();
-    let mut trunk = trunk(&project, &repo, &commits, false);
 
     let head_cpu = idle_cpu(secs, || {
         head.next_frame(Duration::from_millis(16)).unwrap();
     });
-    let trunk_cpu = idle_cpu(secs, || {
-        trunk.step();
-    });
-    println!(
-        "idle CPU over {secs}s: head {:.3}% trunk {:.3}%",
-        head_cpu * 100.0,
-        trunk_cpu * 100.0
-    );
+    println!("idle CPU over {secs}s: head {:.3}%", head_cpu * 100.0);
     assert!(head_cpu <= 0.01, "head idle CPU over 1 percent: {head_cpu}");
 }
 
@@ -337,11 +278,4 @@ fn cpu_time() -> Duration {
         usage.ru_stime.tv_usec as u32 * 1000,
     );
     user + sys
-}
-
-fn p95(values: &[Duration]) -> Duration {
-    let mut sorted = values.to_vec();
-    sorted.sort();
-    let index = ((sorted.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
-    sorted[index.min(sorted.len() - 1)]
 }

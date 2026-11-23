@@ -1,9 +1,3 @@
-#[cfg(feature = "harness")]
-pub mod harness;
-
-#[cfg(feature = "harness")]
-pub mod wcag;
-
 #[cfg(feature = "nsh")]
 pub mod nsh_harness;
 
