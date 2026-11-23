@@ -51,6 +51,11 @@ pub const COUNTER: AdaptiveColor = AdaptiveColor::rgb(0xb36620, 0xe0883c);
 pub const LINK: AdaptiveColor = AdaptiveColor::rgb(0x2a63c9, 0x74a3e8);
 pub const ACCENT_TEXT: AdaptiveColor = AdaptiveColor::rgb(0x2c5ec4, 0x8bb5f5);
 
+/// The graph's idle rail: the structural line's data twin.
+pub const GRAPH_RAIL: AdaptiveColor = AdaptiveColor::rgb(0x4e5157, 0xd0d4da);
+/// A commit with no lane: the muted ink's data twin.
+pub const GRAPH_MUTED: AdaptiveColor = AdaptiveColor::rgb(0x8a8e96, 0x5d636d);
+
 /// The graph's lane rails, one color per lane column.
 pub const LANES: [AdaptiveColor; 4] = [
     AdaptiveColor::rgb(0x2a63c9, 0x3574f0),

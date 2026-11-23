@@ -17,7 +17,7 @@ pub const ROW_HEIGHT: f32 = 24.0;
 pub const STRIP_WIDTH: f32 = LANE_WIDTH * MAX_LANES as f32;
 
 /// The muted rail the idle lane columns carry, a step under any lane color.
-const RAIL: Rgba = nsh_core::color::rgb(0x4e5157);
+const RAIL: AdaptiveColor = data::GRAPH_RAIL;
 
 /// The lane column a lane index paints in.
 pub fn column_of(lane: usize) -> f32 {
@@ -26,16 +26,16 @@ pub fn column_of(lane: usize) -> f32 {
 
 /// One row's strip: the rails, then the commit's dot (a ring on a merge).
 pub fn lane_strip(lane: Option<usize>, merge: bool) -> Painter {
+    let is_dark = dark();
+    let rail = if is_dark { RAIL.dark } else { RAIL.light };
     let mut painter = Painter::new();
     for column in 0..MAX_LANES {
         let x = LANE_WIDTH * column as f32 + LANE_WIDTH / 2.0 - 1.0;
-        painter = painter
-            .fill_color(Hsla::from(RAIL))
-            .fill_rect(x, 0.0, 2.0, ROW_HEIGHT);
+        painter = painter.fill_color(rail).fill_rect(x, 0.0, 2.0, ROW_HEIGHT);
     }
     let adaptive = match lane {
         Some(lane) => data::lane(lane),
-        None => AdaptiveColor::rgb(0x8a8e96, 0x8a8e96),
+        None => data::GRAPH_MUTED,
     };
     let lane_color = if dark() {
         adaptive.dark
