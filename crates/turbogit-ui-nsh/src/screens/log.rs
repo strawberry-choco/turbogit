@@ -35,7 +35,7 @@ use crate::ui::tree::{TreeEntryProps, TreeProps, tree};
 
 /// The log's cadence: the reads, the display sync, the scope mirror, and
 /// the scroll intents serve off one tick.
-const TICK_MS: u64 = 120;
+const TICK_MS: u64 = 200;
 
 /// The pane widths the resizable frame starts at.
 const BRANCHES_WIDTH: f32 = 420.0;
@@ -1933,6 +1933,7 @@ fn file_row(handle: AppHandle, row_data: FileRowData) -> impl IntoElement {
     let t = theme();
     let select_handle = handle.clone();
     let diff_handle = handle.clone();
+    let blame_handle = handle.clone();
     let menu_handle = handle.clone();
     let menu_handle_2 = handle.clone();
     let FileRowData {
@@ -2022,6 +2023,29 @@ fn file_row(handle: AppHandle, row_data: FileRowData) -> impl IntoElement {
         ));
     view().flex_col().gap(px(2.0)).child(row_element).child(
         view().flex_row().gap(px(data::SPACING_X)).children([
+            button(
+                ButtonProps::new("Blame")
+                    .variant(ButtonVariant::Ghost)
+                    .size(crate::ui::ControlSize::Compact)
+                    .test_id(&test_ids::log("file-blame"))
+                    .on_press({
+                        let path = path.clone();
+                        move || {
+                            let path = path.clone();
+                            blame_handle.update(move |s| {
+                                if let Some((root, cid)) = s.ui.selected_commit.clone() {
+                                    s.ui.blame = Some(BlameTarget {
+                                        root,
+                                        path: path.clone(),
+                                        rev: cid,
+                                    });
+                                    s.ui.blame_caret_line = None;
+                                }
+                            });
+                        }
+                    }),
+            )
+            .into_element(),
             button(
                 ButtonProps::new("Open diff")
                     .variant(ButtonVariant::Ghost)
