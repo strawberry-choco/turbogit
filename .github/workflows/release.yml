@@ -60,7 +60,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p artifact
-          ditto -c -k --sequesterRsrc --keepParent "dist/TurboGit.app" "artifact/turbogit-${GITHUB_REF_NAME}-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/turbogit.app" "artifact/turbogit-${GITHUB_REF_NAME}-macos.zip"
 
       - name: Collect the Linux bundle
         if: runner.os == 'Linux'
