@@ -8,42 +8,81 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build (${{ matrix.os_name }})
+  bundle:
+    name: Bundle (${{ matrix.os_name }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            os_name: linux
+          - os: macos-latest
+            os_name: macos
+            target: macos
           - os: windows-latest
             os_name: windows
+            target: windows
+          - os: ubuntu-24.04
+            os_name: linux
+            target: linux
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release -p turbogit
 
-      - name: Package the binary (linux)
-        if: runner.os == 'Linux'
+      # The CLI and the crates share the 0.5 line; the installer links nsh
+      # into ~/.local/bin, which is not on PATH by default.
+      - name: Install nsh (unix)
+        if: runner.os != 'Windows'
+        env:
+          NSH_VERSION: v0.5.0
         run: |
-          mkdir -p dist
-          tar -czf "dist/turbogit-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" -C target/release turbogit
+          curl -fsSL https://nsh.dev/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Package the binary (windows)
+      - name: Install nsh (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path target/release/turbogit.exe -DestinationPath "dist/turbogit-$($env:GITHUB_REF_NAME)-windows-x86_64.zip"
+          $env:NSH_VERSION = 'v0.5.0'
+          irm https://nsh.dev/install.ps1 | iex
+          "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      # The nsh Linux backend needs GTK 4.14 and glibc 2.39, the Ubuntu 24.04
+      # floor (ADR-0035).
+      - name: Install Linux prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev clang
+
+      - name: Build the bundle
+        working-directory: crates/turbogit-ui
+        run: nsh package --target ${{ matrix.target }} --out "${{ github.workspace }}/dist"
+
+      - name: Zip the macOS app
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifact
+          ditto -c -k --sequesterRsrc --keepParent "dist/TurboGit.app" "artifact/turbogit-${GITHUB_REF_NAME}-macos.zip"
+
+      - name: Collect the Linux bundle
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifact
+          cp dist/*.tar.gz artifact/
+
+      - name: Collect the Windows bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item dist/*.zip artifact/
 
       - uses: actions/upload-artifact@v4
         with:
           name: turbogit-${{ matrix.os_name }}
-          path: dist/*
+          path: artifact/*
 
   release:
     name: Release notes and publish
-    needs: build
+    needs: bundle
     runs-on: ubuntu-latest
     steps:
       # Full history: the notes are generated from the commits up to the tag.
