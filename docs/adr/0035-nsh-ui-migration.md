@@ -8,19 +8,23 @@ operator's redesign review at N1)
 TurboGit's presentation layer is egui (`crates/turbogit-ui`) with kittest
 snapshots as the visual contract. The program wants natively rendered
 controls and native accessibility on macOS, Windows, and Linux, one
-shared `AppState`, and no abstraction between the UI and the app
-(`docs/nsh-migration-plan.md`). Native Shell (nsh) 0.5.0 is the chosen
-candidate: apps written entirely in Rust on a reactive engine that
-renders with each platform's own UI (AppKit, Win32/Direct2D, GTK 4), with
-headless testing on the real engine and a TSX screenshot lane for visual
-proof.
+shared `AppState`, and no abstraction between the UI and the app. Native
+Shell (nsh) 0.5.0 is the chosen candidate: apps written entirely in Rust
+on a reactive engine that renders with each platform's own UI (AppKit,
+Win32/Direct2D, GTK 4), with headless testing on the real engine and a
+TSX screenshot lane for visual proof.
 
-The N0 spike (`docs/nsh-spike-report.md`) had to prove the platform
-before any porting: the 100k log on a virtualized list with per-row
-canvas lanes, the 20k diff with a staged-line gutter, trees, tables, the
-editor and IME, the overlays, the `Rc<RefCell<AppState>>` bridge, the
-headless harness, screenshot tests, packaging on three desktops, and the
-frame-budget gate against the egui trunk baseline.
+The N0 spike had to prove the platform before any porting: the 100k log
+on a virtualized list with per-row canvas lanes, the 20k diff with a
+staged-line gutter, trees, tables, the editor and IME, the overlays, the
+`Rc<RefCell<AppState>>` bridge, the headless harness, screenshot tests,
+packaging on three desktops, and the frame-budget gate against the egui
+trunk baseline.
+
+The migration plan and the N0 spike report behind those two paragraphs
+were retired once the port landed, so the later sections cite them by
+name rather than by path; git holds both at the commit before their
+removal, and this record is the surviving account.
 
 ## Decision
 
