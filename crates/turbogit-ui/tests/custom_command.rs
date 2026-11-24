@@ -25,7 +25,7 @@ fn two_roots(project: &Project) -> Mounted {
 }
 
 fn open_custom_route(app: &mut Mounted) {
-    app.press("id:toolbar:n6-custom_command").unwrap();
+    support::open_surface(app, "Custom Command");
     app.wait_for("id:route:custom_command").unwrap();
 }
 

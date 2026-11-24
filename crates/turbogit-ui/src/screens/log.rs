@@ -27,6 +27,7 @@ use crate::screens::shell::TabSwitcher;
 use crate::test_ids;
 use crate::theme as data;
 use crate::ui::button::{ButtonProps, ButtonVariant, button};
+use crate::ui::icon::Icon;
 use crate::ui::input::{InputProps, input};
 use crate::ui::pane_header::{PaneHeaderProps, pane_header};
 use crate::ui::popover::{PopoverProps, popover};
@@ -463,7 +464,9 @@ fn commits_pane(
     view()
         .flex_1()
         .flex_col()
-        .bg(t.background)
+        .bg(t.card)
+        .border_x(px(1.0))
+        .border_color(data::DIVIDER)
         .child(pane_header(PaneHeaderProps::new("Commits")))
         .child(scope_chips(chips_handle, chips_filters))
         .child(
@@ -471,6 +474,8 @@ fn commits_pane(
                 .flex_row()
                 .items_center()
                 .gap(px(data::SPACING_X))
+                .px(px(data::PANEL_PADDING))
+                .py(px(data::SPACING_Y))
                 .child(
                     view().flex_1().child(input(
                         InputProps::new()
@@ -514,7 +519,9 @@ fn commit_row(handle: AppHandle, display: Signal<DisplayWindow>, at: Position) -
     let menu_handle = handle.clone();
     let menu_display = display;
     let row_accent = t.accent;
-    let row_background = t.background;
+    // The row sits on its pane's surface: an explicit fill would punch a
+    // darker well through the card under the list.
+    let row_background = AdaptiveColor::TRANSPARENT;
     let row_muted_ink = t.muted_foreground;
     let row_link_ink = data::LINK;
     let row_body_ink = t.foreground;
@@ -522,7 +529,9 @@ fn commit_row(handle: AppHandle, display: Signal<DisplayWindow>, at: Position) -
     view()
         .flex_row()
         .items_center()
+        .gap(px(6.0))
         .h(px(ROW_HEIGHT))
+        .px(px(8.0))
         .on_press(move || {
             press_handle.update_with(|s| {
                 let display = s.sync_log_display();
@@ -589,7 +598,9 @@ fn commit_row(handle: AppHandle, display: Signal<DisplayWindow>, at: Position) -
             })
             .text_size(px(data::TYPE_CONTROL))
             .text_color(row_muted_ink)
-            .w(px(84.0)),
+            .truncate()
+            .w(px(84.0))
+            .flex_shrink_0(),
         )
         .child(
             text(move || {
@@ -601,6 +612,7 @@ fn commit_row(handle: AppHandle, display: Signal<DisplayWindow>, at: Position) -
             })
             .text_size(px(data::TYPE_BODY))
             .text_color(row_body_ink)
+            .truncate()
             .flex_1(),
         )
         .child(ref_pill(handle.clone(), pill_display, at))
@@ -613,7 +625,9 @@ fn commit_row(handle: AppHandle, display: Signal<DisplayWindow>, at: Position) -
                 })
             })
             .text_size(px(data::TYPE_CONTROL))
-            .text_color(row_muted_ink),
+            .text_color(row_muted_ink)
+            .truncate()
+            .flex_shrink_0(),
         )
         .test_id(&id_display.with(|d| {
             d.row(at.index())
@@ -797,9 +811,13 @@ fn paging_footer(handle: AppHandle, display: Signal<DisplayWindow>) -> impl Into
         .items_center()
         .justify_end()
         .gap(px(data::SPACING_X))
+        .h(px(28.0))
+        .px(px(data::PANEL_PADDING))
+        .border_t(px(1.0))
+        .border_color(data::DIVIDER)
         .child(
             text(move || format!("{} shown", shown_display.with(|d| d.len())))
-                .text_size(px(data::TYPE_CONTROL))
+                .text_size(px(data::TYPE_CHIP))
                 .text_color(t.muted_foreground)
                 .test_id(&test_ids::log("shown")),
         )
@@ -963,6 +981,7 @@ fn hidden_jump_band(handle: AppHandle) -> impl IntoElement {
 
 /// The filter bar: the four dropdown popovers and Clear.
 fn filter_bar(handle: AppHandle, filters: Signal<FilterSnapshot>) -> impl IntoElement {
+    let t = theme();
     let branch_handle = handle.clone();
     let user_handle = handle.clone();
     let date_handle = handle.clone();
@@ -971,9 +990,12 @@ fn filter_bar(handle: AppHandle, filters: Signal<FilterSnapshot>) -> impl IntoEl
     view()
         .flex_row()
         .items_center()
-        .gap(px(data::SPACING_X))
+        .gap(px(2.0))
+        .h(px(34.0))
         .px(px(data::PANEL_PADDING))
-        .py(px(data::SPACING_Y))
+        .bg(t.card)
+        .border_t(px(1.0))
+        .border_color(data::DIVIDER)
         .child(branch_dropdown(branch_handle, filters))
         .child(user_dropdown(user_handle, filters))
         .child(date_dropdown(date_handle, filters))
@@ -1030,7 +1052,8 @@ fn filter_dropdown(
     content: impl Fn(AppHandle) -> AnyElement + 'static,
 ) -> impl IntoElement {
     let t = theme();
-    let (live_fill, rest_fill, caret_ink) = (t.accent, t.secondary, t.muted_foreground);
+    let (live_fill, rest_fill, caret_ink) =
+        (t.accent, AdaptiveColor::TRANSPARENT, t.muted_foreground);
     let value_of = Rc::new(value_of);
     let value_for_bg = value_of.clone();
     let trigger_filters = filters;
@@ -1042,8 +1065,8 @@ fn filter_dropdown(
         .flex_row()
         .items_center()
         .gap(px(4.0))
-        .px(px(data::DENSITY_DENSE_BUTTON_PAD_X))
-        .py(px(data::DENSITY_DENSE_BUTTON_PAD_Y))
+        .px(px(7.0))
+        .py(px(3.0))
         .rounded(px(data::CONTROL_RADIUS))
         .bg(move || {
             if value_for_bg(&bg_filters.get()).is_some() {
@@ -1053,15 +1076,17 @@ fn filter_dropdown(
             }
         })
         .text_size(px(data::TYPE_CONTROL))
+        .text_color(t.muted_foreground)
+        .hover(|s| s.bg(t.muted).text_color(t.foreground))
         .child(text(move || match value_of(&trigger_filters.get()) {
             Some(value) => format!("{base}: {value}"),
             None => base.to_string(),
         }))
-        .child(
-            text("▾")
-                .text_size(px(data::TYPE_CONTROL))
-                .text_color(caret_ink),
-        );
+        .child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::ChevronDown,
+            data::ICON_SM,
+            caret_ink,
+        ));
     popover(
         PopoverProps::new(trigger)
             .width(280.0)
@@ -1624,27 +1649,36 @@ fn branches_pane(handle: AppHandle) -> impl IntoElement {
     view()
         .flex_1()
         .flex_col()
-        .gap(px(data::SPACING_Y))
         .bg(t.card)
-        .p(px(8.0))
         .child(pane_header(PaneHeaderProps::new("Branches")))
         .child(
-            input(
-                InputProps::new()
-                    .placeholder("Search branches")
-                    .accessibility_label("Search branches")
-                    .on_change(move |text: &str| {
-                        let text = text.to_string();
-                        input_filter.set(text.clone());
-                        search_handle.update(move |s| s.ui.log_branch_filter = text);
-                    })
-                    .test_id(&test_ids::log("branch-search")),
-            )
-            .into_element(),
+            view()
+                .px(px(data::PANEL_PADDING))
+                .py(px(data::SPACING_Y))
+                .child(
+                    input(
+                        InputProps::new()
+                            .placeholder("Search branches")
+                            .accessibility_label("Search branches")
+                            .on_change(move |text: &str| {
+                                let text = text.to_string();
+                                input_filter.set(text.clone());
+                                search_handle.update(move |s| s.ui.log_branch_filter = text);
+                            })
+                            .test_id(&test_ids::log("branch-search")),
+                    )
+                    .into_element(),
+                ),
         )
-        .child(view().flex_1().child(dynamic(move || {
-            branch_tree(tree_handle.clone(), tree_filter)
-        })))
+        .child(
+            view()
+                .flex_1()
+                .px(px(6.0))
+                .pb(px(6.0))
+                .child(dynamic(move || {
+                    branch_tree(tree_handle.clone(), tree_filter)
+                })),
+        )
 }
 
 /// The tree the branches pane paints: one entry per root, its local
@@ -1652,6 +1686,7 @@ fn branches_pane(handle: AppHandle) -> impl IntoElement {
 /// A branch row's press names that root's branch: the name goes into the
 /// scope and the selection narrows to that root.
 fn branch_tree(handle: AppHandle, filter_signal: Signal<String>) -> impl IntoElement {
+    let t = theme();
     let filter = filter_signal.get().trim().to_lowercase();
     let (items, expansions) = handle.peek(|s| {
         let tags = s.caches.tags_by_root().clone();
@@ -1738,9 +1773,41 @@ fn branch_tree(handle: AppHandle, filter_signal: Signal<String>) -> impl IntoEle
     for id in expansions {
         props = props.default_expanded(id);
     }
-    let select_handle = handle;
+    let select_handle = handle.clone();
     props = props.on_select(move |id| {
         select_handle.update(|s| select_branch_row(s, id));
+    });
+    // The GUI tree paints the app's row; this is where the depth indent,
+    // the branch mark, and the group label's quieter ink come from.
+    let ink = t;
+    props = props.render_item(move |entry: &nsh_base::TreeEntry| {
+        let depth = entry.depth as f32;
+        let (mark, size, color) = match entry.depth {
+            0 => (Icon::Folder, data::ICON_SM, ink.foreground),
+            1 => (Icon::Layers, data::ICON_SM, ink.muted_foreground),
+            _ => (Icon::Branch, data::ICON_SM, ink.foreground),
+        };
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .pl(px(depth * data::INDENT))
+            .child(crate::ui::icon::icon(mark, size, color))
+            .child(
+                text(entry.label.clone())
+                    .text_size(px(match entry.depth {
+                        0 => data::TYPE_BODY,
+                        1 => data::TYPE_CHIP,
+                        _ => data::TYPE_BODY,
+                    }))
+                    .font_weight(match entry.depth {
+                        0 => FontWeight::SEMIBOLD,
+                        1 => FontWeight::SEMIBOLD,
+                        _ => FontWeight::NORMAL,
+                    })
+                    .text_color(color),
+            )
+            .into_element()
     });
     tree(props)
 }
@@ -1771,9 +1838,14 @@ fn right_column(handle: AppHandle) -> impl IntoElement {
     view()
         .flex_1()
         .flex_col()
-        .gap(px(8.0))
         .child(view().flex_1().child(files_pane(files_handle)))
-        .child(view().h(px(280.0)).child(details_pane(details_handle)))
+        .child(
+            view()
+                .h(px(280.0))
+                .border_t(px(1.0))
+                .border_color(data::DIVIDER)
+                .child(details_pane(details_handle)),
+        )
 }
 
 /// The changed-files pane: the selected commit's files with their status
@@ -1791,9 +1863,7 @@ fn files_pane(handle: AppHandle) -> impl IntoElement {
     view()
         .flex_1()
         .flex_col()
-        .gap(px(data::SPACING_Y))
         .bg(t.card)
-        .p(px(8.0))
         .child(pane_header(PaneHeaderProps::new("Changed files").count_of(
             move || {
                 count_handle.read(|s| {
@@ -1809,17 +1879,22 @@ fn files_pane(handle: AppHandle) -> impl IntoElement {
             },
         )))
         .child(
-            input(
-                InputProps::new()
-                    .placeholder("Filter changed files")
-                    .accessibility_label("Filter changed files")
-                    .on_change(move |text: &str| {
-                        let text = text.to_string();
-                        filter_handle.update(move |s| s.ui.log_file_filter = text);
-                    })
-                    .test_id(&test_ids::log("file-filter")),
-            )
-            .into_element(),
+            view()
+                .px(px(data::PANEL_PADDING))
+                .py(px(data::SPACING_Y))
+                .child(
+                    input(
+                        InputProps::new()
+                            .placeholder("Filter changed files")
+                            .accessibility_label("Filter changed files")
+                            .on_change(move |text: &str| {
+                                let text = text.to_string();
+                                filter_handle.update(move |s| s.ui.log_file_filter = text);
+                            })
+                            .test_id(&test_ids::log("file-filter")),
+                    )
+                    .into_element(),
+                ),
         )
         .child(when(
             {

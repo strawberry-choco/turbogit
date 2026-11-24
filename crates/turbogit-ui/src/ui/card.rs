@@ -47,12 +47,13 @@ impl Default for CardProps {
 }
 
 /// A card: the card surface, the card radius, the panel padding. No stroke:
-/// stroke means it floats, and a card does not float.
+/// a stroke means the region floats (ADR-0027 R2), and the surface tone plus
+/// the air already carry a card.
 pub fn card(props: CardProps) -> impl IntoElement {
     let t = theme();
     let mut column = view()
         .flex_col()
-        .gap(px(data::SPACING_Y))
+        .gap(px(data::SPACING_X))
         .rounded(px(data::CARD_RADIUS))
         .bg(t.card)
         .p(px(data::PANEL_PADDING));

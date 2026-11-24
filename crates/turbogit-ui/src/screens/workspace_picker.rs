@@ -21,6 +21,7 @@ use crate::ui::row::{RowProps, RowState, row};
 pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
     let t = theme();
     let trigger_handle = handle.clone();
+    let count_handle = handle.clone();
     let open = signal(false);
     let open_for_trigger = open;
     let open_for_change = open;
@@ -30,22 +31,48 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
         .test_id(&test_ids::workspace("switch"))
         .flex_row()
         .items_center()
-        .gap(px(data::SPACING_X))
-        .px(px(data::BUTTON_PAD_X))
-        .py(px(data::BUTTON_PAD_Y))
+        .gap(px(5.0))
+        .h(px(26.0))
+        .px(px(8.0))
         .rounded(px(data::CONTROL_RADIUS))
-        .bg(t.secondary)
-        .text_size(px(data::TYPE_CONTROL))
-        .text_color(t.foreground)
-        .child(text(move || {
-            SharedString::from(trigger_handle.read(|s| {
-                format!(
-                    "{} · {}",
-                    s.project_dir.display_name_or("<workspace>"),
-                    counted(s.multi.roots.len())
+        .bg(AdaptiveColor::TRANSPARENT)
+        .hover(|s| s.bg(t.muted))
+        .text_size(px(data::TYPE_CONTROL + 0.5))
+        .child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::Folder,
+            data::ICON_SM,
+            t.muted_foreground,
+        ))
+        .child(
+            text(move || {
+                SharedString::from(
+                    trigger_handle
+                        .read(|s| s.project_dir.display_name_or("<workspace>").to_string()),
                 )
-            }))
-        }));
+            })
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(t.foreground),
+        )
+        .child(
+            // One repo is the name's own fact; the count only earns space
+            // when the workspace holds several.
+            text(move || {
+                SharedString::from(count_handle.read(|s| {
+                    if s.multi.roots.len() > 1 {
+                        counted(s.multi.roots.len())
+                    } else {
+                        String::new()
+                    }
+                }))
+            })
+            .text_size(px(data::TYPE_CHIP))
+            .text_color(t.muted_foreground),
+        )
+        .child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::ChevronDown,
+            data::ICON_SM,
+            t.muted_foreground,
+        ));
     popover(
         PopoverProps::new(trigger)
             .width(320.0)
@@ -177,8 +204,8 @@ fn picker_body(handle: AppHandle, open: Signal<bool>) -> impl IntoElement {
 /// and re-dispatches nothing.
 fn current_row(handle: AppHandle, open: Signal<bool>) -> impl IntoElement {
     let t = theme();
-    let name_handle = handle.clone();
     let count_handle = handle.clone();
+    let name_handle = handle.clone();
     row(RowProps::new()
         .state(RowState::Default)
         .test_id(&test_ids::workspace("row-current"))

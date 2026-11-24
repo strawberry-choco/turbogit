@@ -31,8 +31,7 @@ fn project_with_commits(project: &Project) -> (PathBuf, PathBuf) {
 fn across(project: &Project, roots: &[PathBuf]) -> Mounted {
     let mut app = for_roots(project.path(), roots);
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-cherry_pick")
-        .expect("the cherry band");
+    support::open_surface(&mut app, "Cherry-pick");
     app.wait_for("id:route:cherry_pick")
         .expect("the cherry route");
     app.press("id:cherry:open-across").expect("open across");

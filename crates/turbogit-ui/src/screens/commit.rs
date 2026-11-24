@@ -15,6 +15,7 @@ use crate::test_ids;
 use crate::theme as data;
 use crate::ui::button::{ButtonProps, ButtonVariant, button};
 use crate::ui::checkbox::{CheckboxProps, CheckboxState, checkbox};
+use crate::ui::icon::Icon;
 use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::input::{InputProps, text_area};
 use crate::ui::pane_header::{PaneHeaderProps, pane_header};
@@ -122,8 +123,6 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
         .flex_col()
         .gap(px(data::SPACING_Y))
         .rounded(px(data::CARD_RADIUS))
-        .border(px(1.0))
-        .border_color(t.border)
         .bg(t.card)
         .test_id(&test_ids::route("commit"))
         .child(pane_header(
@@ -160,7 +159,7 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                         .gap(px(data::SPACING_X))
                         .child(popover(
                             PopoverProps::new(icon_button(
-                                IconButtonProps::new("⋯", "Commit card options")
+                                IconButtonProps::new(Icon::More, "Commit card options")
                                     .test_id(&test_ids::commit("options")),
                             ))
                             .width(300.0)
@@ -215,7 +214,7 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(data::SPACING_X))
+                        .gap(px(6.0))
                         .child(button(
                             ButtonProps::new("Commit")
                                 .variant(ButtonVariant::Primary)
@@ -235,10 +234,20 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                                     let push_handle = push_handle.clone();
                                     move || do_commit(&push_handle, true, generation)
                                 }),
-                        ))
+                        )),
+                )
+                .child(
+                    // The quiet verbs are a second line: the commit is the
+                    // one decision on this card, and four equal buttons made
+                    // it look like a choice among four.
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(2.0))
                         .child(button(
                             ButtonProps::new("Shelve…")
                                 .variant(ButtonVariant::Ghost)
+                                .size(crate::ui::ControlSize::Compact)
                                 .test_id(&test_ids::commit("shelve"))
                                 .on_press(move || {
                                     shelve_handle.update(|s| s.open_shelve_dialog(None))
@@ -247,6 +256,7 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                         .child(button(
                             ButtonProps::new("Stash…")
                                 .variant(ButtonVariant::Ghost)
+                                .size(crate::ui::ControlSize::Compact)
                                 .test_id(&test_ids::commit("stash"))
                                 .on_press(move || {
                                     stash_handle.update(|s| {
@@ -262,6 +272,7 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                         view()
                             .flex_row()
                             .items_center()
+                            .flex_wrap()
                             .gap(px(4.0))
                             .child(
                                 text("Recent:")

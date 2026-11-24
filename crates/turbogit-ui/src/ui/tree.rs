@@ -156,7 +156,7 @@ pub fn tree(props: TreeProps) -> impl IntoElement {
     let mut inner = base_tree()
         .items(items)
         .list_class("p-1")
-        .item_class("h-7 flex-row items-center rounded-sm px-2 hover:bg-muted selected:bg-accent");
+        .item_class("h-7 flex-row items-center rounded-sm pr-2 hover:bg-muted selected:bg-accent");
     if !props.default_expanded.is_empty() {
         inner = inner.default_expanded(props.default_expanded.clone());
     }

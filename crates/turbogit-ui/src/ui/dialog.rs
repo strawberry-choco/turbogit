@@ -177,9 +177,9 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
         Some(cancel) => view()
             .absolute()
             .inset_0()
-            .bg(t.background.opacity(0.4))
+            .bg(t.background.opacity(0.62))
             .on_press(move || cancel()),
-        None => view().absolute().inset_0().bg(t.background.opacity(0.4)),
+        None => view().absolute().inset_0().bg(t.background.opacity(0.62)),
     };
 
     let cancel_text = props.cancel_label.clone();
@@ -223,20 +223,22 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
     }
 
     let mut card = view()
-        .mt(px(96.0))
+        .mt(px(88.0))
         .self_center()
-        .w(px(props.width.unwrap_or(420.0)))
+        .w(px(props.width.unwrap_or(440.0)))
         .flex_col()
-        .gap(px(data::SPACING_Y))
+        .gap(px(data::SPACING_Y + 2.0))
         .rounded(px(data::CARD_RADIUS))
         .border(px(1.0))
-        .border_color(t.border)
+        .border_color(data::DIVIDER)
         .bg(t.card)
-        .p(px(data::PANEL_PADDING))
+        .shadow_xl()
+        .shadow_color(data::SCRIM.opacity(0.9))
+        .p(px(data::PANEL_PADDING + 4.0))
         .test_id(&test_ids::dialog(&name))
         .child(
             text(move || title.clone())
-                .text_size(px(data::TYPE_PANE_TITLE))
+                .text_size(px(data::TYPE_PANE_TITLE + 1.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.card_foreground),
         )
@@ -247,7 +249,9 @@ pub fn dialog(props: DialogProps) -> impl IntoElement {
         card = card.child(button(quiet));
     }
     if !(props.hide_action && props.hide_cancel) {
-        card = card.child(view().h(px(1.0)).bg(t.border)).child(footer);
+        card = card
+            .child(view().h(px(1.0)).bg(data::DIVIDER).mt(px(2.0)))
+            .child(view().flex_row().justify_end().child(footer));
     }
 
     let dialog_name = props.title.clone();

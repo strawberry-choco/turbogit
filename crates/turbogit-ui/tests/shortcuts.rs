@@ -95,12 +95,12 @@ fn an_unmodified_key_triggers_no_shortcut() {
 }
 
 #[test]
-fn the_route_paints_the_same_table() {
+fn the_shortcuts_window_paints_the_same_table() {
     let project = Project::new();
     let mut app = shell(&project);
     app.first_render().unwrap();
-    app.press("id:toolbar:n6-shortcuts").unwrap();
-    app.wait_for("id:route:shortcuts").unwrap();
+    app.press("id:toolbar:shortcuts").unwrap();
+    app.wait_for("id:dialog:shortcuts").unwrap();
     assert!(app.screen().shows("Shortcuts"));
     for Binding { display, .. } in KEYMAP {
         assert!(app.screen().shows(display), "the {display} key paints");

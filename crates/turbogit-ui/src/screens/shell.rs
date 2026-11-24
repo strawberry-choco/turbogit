@@ -21,10 +21,11 @@ use crate::screens::workspace_picker;
 use crate::screens::worktrees;
 use crate::test_ids;
 use crate::theme as data;
+use crate::ui::icon::Icon;
 use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::progress::{ProgressProps, progress};
 use crate::ui::row::{RowProps, RowState, row};
-use crate::ui::tab::{TabItem, TabsProps, tabs};
+use crate::ui::tab::{TabItem, TabsProps, TabsVariant, tabs};
 
 /// The status bar's height, the band the whole shell keeps.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
@@ -40,12 +41,13 @@ pub const TAB_TITLES: [(Tab, &str); 5] = [
 
 /// The shell body over a live state: the top bar, the content column, and
 /// the activity feed.
-pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
+pub fn shell_screen(
+    handle: AppHandle,
+    switcher: TabSwitcher,
+    sheet_route: Signal<Option<String>>,
+) -> impl IntoElement {
     let t = theme();
     let activity_expanded = signal(handle.peek(|s| s.ui.activity.expanded));
-    // The N5 and N6 surfaces have no tab of their own: this band opens their
-    // routes, and a tab press returns to the tab's own surface.
-    let sheet_route = signal(None::<String>);
 
     // The worktree and submodule caches fire like the egui shell's did: the
     // Worktrees and Submodules routes read them.
@@ -73,6 +75,7 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
                 .position(|(value, _)| *value == tab_for_index.get())
                 .unwrap_or(0)
         })
+        .variant(TabsVariant::Underline)
         .on_change(move |at| {
             if let Some((value, _)) = TAB_TITLES.get(at) {
                 tab_for_press.select(*value);
@@ -90,6 +93,7 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
                 content_handle.clone(),
                 &id,
                 content_switcher.clone(),
+                content_route,
             );
         }
         match switcher.signal().get() {
@@ -101,51 +105,6 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         }
     });
 
-    let mut sheet_band = view()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap(px(data::DENSITY_LIST_GAP))
-        .px(px(data::PANEL_PADDING))
-        .pb(px(data::SPACING_Y))
-        .test_id(&test_ids::toolbar("surfaces"));
-    for (n6, id, label) in [
-        (false, "rewrite", "Rewrite"),
-        (false, "conflicts", "Conflicts"),
-        (false, "rebase", "Rebase"),
-        (false, "rebase_editor", "Edit plan"),
-        (false, "cherry_pick", "Cherry"),
-        (false, "get_from_branch", "Get from"),
-        (false, "patches", "Patches"),
-        (false, "unshelve", "Unshelve…"),
-        (false, "bulk", "Bulk"),
-        (true, "blame", "Blame"),
-        (true, "settings", "Settings"),
-        (true, "shortcuts", "Shortcuts"),
-        (true, "palette", "Actions"),
-        (true, "custom_command", "Custom"),
-    ] {
-        let press_route = sheet_route;
-        let prefix = if n6 { "n6" } else { "n5" };
-        let band_id = test_ids::toolbar(&format!("{prefix}-{id}"));
-        sheet_band = sheet_band.child(
-            view()
-                .role(AccessibilityRole::Button)
-                .label(label)
-                .test_id(band_id.as_str())
-                .px(px(data::DENSITY_COMPACT_BUTTON_PAD_X))
-                .py(px(data::DENSITY_COMPACT_BUTTON_PAD_Y))
-                .rounded(px(data::CONTROL_RADIUS))
-                .bg(t.secondary)
-                .child(
-                    text(label)
-                        .text_size(px(data::TYPE_CHIP))
-                        .text_color(t.secondary_foreground),
-                )
-                .on_press(move || press_route.set(Some(id.to_string()))),
-        );
-    }
-
     let settings_handle = handle.clone();
     let shortcuts_handle = handle.clone();
     let palette_handle = handle.clone();
@@ -155,43 +114,53 @@ pub fn shell_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElemen
         .flex_col()
         .bg(t.background)
         .child(
-            view()
-                .flex_col()
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(data::SPACING_X))
-                        .px(px(data::PANEL_PADDING))
-                        .py(px(data::SPACING_Y))
-                        .child(strip)
-                        .child(view().flex_1())
-                        .child(icon_button(
-                            IconButtonProps::new("⚙", "Open settings")
-                                .test_id(&test_ids::toolbar("settings"))
-                                .on_press(move || crate::screens::settings::open(&settings_handle)),
-                        ))
-                        .child(icon_button(
-                            IconButtonProps::new("⌘", "Show shortcuts")
-                                .test_id(&test_ids::toolbar("shortcuts"))
-                                .on_press(move || {
-                                    shortcuts_handle.update(|s| s.ui.shortcuts_open = true)
-                                }),
-                        ))
-                        .child(icon_button(
-                            IconButtonProps::new("⌕", "Find actions")
-                                .test_id(&test_ids::toolbar("palette"))
-                                .on_press(move || {
-                                    palette_handle.update(|s| {
-                                        s.ui.command_query.clear();
-                                        s.ui.command_palette = true;
-                                    })
-                                }),
-                        ))
-                        .child(workspace_picker::picker_trigger(handle.clone()))
-                        .child(branch_picker::picker_trigger(handle.clone())),
-                )
-                .child(sheet_band),
+            view().flex_col().child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    // A minimum, not a fixed height: at a narrow window
+                    // the tabs wrap to a second row and the bar grows
+                    // with them instead of overlapping the band below.
+                    .min_h(px(data::TOP_BAR_HEIGHT))
+                    .px(px(data::PANEL_PADDING))
+                    .child(strip)
+                    .child(view().flex_1())
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .flex_shrink_0()
+                            .gap(px(2.0))
+                            .child(icon_button(
+                                IconButtonProps::new(Icon::Search, "Find actions")
+                                    .test_id(&test_ids::toolbar("palette"))
+                                    .on_press(move || {
+                                        palette_handle.update(|s| {
+                                            s.ui.command_query.clear();
+                                            s.ui.command_palette = true;
+                                        })
+                                    }),
+                            ))
+                            .child(icon_button(
+                                IconButtonProps::new(Icon::Command, "Show shortcuts")
+                                    .test_id(&test_ids::toolbar("shortcuts"))
+                                    .on_press(move || {
+                                        shortcuts_handle.update(|s| s.ui.shortcuts_open = true)
+                                    }),
+                            ))
+                            .child(icon_button(
+                                IconButtonProps::new(Icon::Settings, "Open settings")
+                                    .test_id(&test_ids::toolbar("settings"))
+                                    .on_press(move || {
+                                        crate::screens::settings::open(&settings_handle)
+                                    }),
+                            ))
+                            .child(view().w(px(1.0)).h(px(16.0)).mx(px(6.0)).bg(data::DIVIDER))
+                            .child(workspace_picker::picker_trigger(handle.clone()))
+                            .child(branch_picker::picker_trigger(handle.clone())),
+                    ),
+            ),
         )
         .child(content)
         .child(activity_panel(activity_handle, activity_expanded))
@@ -264,13 +233,15 @@ fn activity_panel(handle: AppHandle, expanded: Signal<bool>) -> impl IntoElement
         .flex_col()
         .test_id(&test_ids::activity("feed"))
         .bg(t.card)
+        .border_t(px(1.0))
+        .border_color(data::DIVIDER)
         .child(
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(data::SPACING_X))
+                .gap(px(6.0))
+                .h(px(26.0))
                 .px(px(data::PANEL_PADDING))
-                .py(px(DENSE_PAD_Y))
                 .child(
                     view()
                         .flex_row()
@@ -290,15 +261,22 @@ fn activity_panel(handle: AppHandle, expanded: Signal<bool>) -> impl IntoElement
                             toggle.set(next);
                             toggle_handle.update(move |s| s.ui.activity.expanded = next);
                         })
+                        .child({
+                            let t = t.clone();
+                            dynamic(move || {
+                                let name = if toggle.get() {
+                                    Icon::ChevronDown
+                                } else {
+                                    Icon::ChevronRight
+                                };
+                                crate::ui::icon::icon(name, data::ICON_SM, t.muted_foreground)
+                            })
+                        })
                         .child(
-                            text(move || if toggle.get() { "▾" } else { "▸" })
-                                .text_size(px(data::TYPE_CONTROL))
-                                .text_color(t.muted_foreground),
-                        )
-                        .child(
-                            text("LOG")
-                                .text_size(px(data::TYPE_CONTROL))
+                            text("ACTIVITY")
+                                .text_size(px(data::TYPE_SECTION))
                                 .font_weight(FontWeight::SEMIBOLD)
+                                .letter_spacing(px(0.6))
                                 .text_color(t.muted_foreground),
                         ),
                 )
@@ -524,26 +502,27 @@ pub fn status_bar(handle: AppHandle) -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(data::SPACING_X))
-        .h(px(STATUS_BAR_HEIGHT))
-        .px(px(8.0))
+        .gap(px(10.0))
+        .h(px(STATUS_BAR_HEIGHT + 2.0))
+        .px(px(10.0))
         .bg(t.card)
-        .border(px(1.0))
-        .border_color(t.border)
+        .border_t(px(1.0))
+        .border_color(data::DIVIDER)
         .test_id(&test_ids::status_bar())
         .child(
             text(move || {
                 version_handle.read(|s| {
+                    let n = s.multi.roots.len();
                     format!(
-                        "v{} · git {} · {} repos indexed",
+                        "v{} · git {} · {n} repo{} indexed",
                         env!("CARGO_PKG_VERSION"),
                         s.git_version,
-                        s.multi.roots.len(),
+                        if n == 1 { "" } else { "s" },
                     )
                 })
             })
-            .text_size(px(data::TYPE_CONTROL))
-            .text_color(t.foreground),
+            .text_size(px(data::TYPE_CHIP))
+            .text_color(t.muted_foreground),
         )
         .child(when(
             move || !inflight_cond.read(held_by).is_empty(),
@@ -564,8 +543,8 @@ pub fn status_bar(handle: AppHandle) -> impl IntoElement {
         ))
         .child(
             text(move || total_handle.read(|s| format!("{} total", s.multi.roots.len())))
-                .text_size(px(data::TYPE_CONTROL))
-                .text_color(t.foreground),
+                .text_size(px(data::TYPE_CHIP))
+                .text_color(t.muted_foreground),
         )
 }
 

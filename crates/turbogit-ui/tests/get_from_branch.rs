@@ -40,8 +40,7 @@ fn mounted(project: &Project, repo: &Path) -> Mounted {
     let roots = vec![repo.to_path_buf()];
     let mut app = for_roots(project.path(), &roots);
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-get_from_branch")
-        .expect("the get band");
+    support::open_surface(&mut app, "Get from Branch");
     app.wait_for("id:route:get_from_branch")
         .expect("the get route");
     app.press("id:get:open").expect("open the comparison");
@@ -143,8 +142,7 @@ fn a_detached_head_opens_nothing() {
     git(&repo, &["checkout", "-q", "--detach"]);
     let mut app = for_roots(project.path(), std::slice::from_ref(&repo));
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-get_from_branch")
-        .expect("the get band");
+    support::open_surface(&mut app, "Get from Branch");
     app.wait_for("id:route:get_from_branch").unwrap();
     app.press("id:get:open").expect("open");
     assert!(

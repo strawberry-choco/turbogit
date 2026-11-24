@@ -29,7 +29,7 @@ fn repo(project: &Project, name: &str, dirty: bool) -> PathBuf {
 fn bulk_tab(project: &Project, roots: &[PathBuf]) -> Mounted {
     let mut app = for_roots(project.path(), roots);
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-bulk").expect("the bulk band");
+    support::open_surface(&mut app, "Bulk Operations");
     app.wait_for("id:route:bulk").expect("the bulk route");
     app
 }

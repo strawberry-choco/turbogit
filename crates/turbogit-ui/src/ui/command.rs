@@ -111,9 +111,11 @@ pub fn command(props: CommandProps) -> impl IntoElement {
         .searchable(true)
         .filterable(true)
         .auto_focus(true)
+        .search_bar_class("p-2 border-b border-border")
+        .search_class("h-8 w-full rounded-md border border-input bg-background px-2 text-xs")
         .list_class("max-h-96 p-1")
-        .item_class("h-7 rounded-sm px-2 hover:bg-muted focus:bg-accent")
-        .group_class("px-2 py-1 text-xs")
+        .item_class("h-7 rounded-sm px-2 text-xs hover:bg-muted")
+        .group_class("px-2 py-1 text-xs text-muted-foreground")
         .separator_class("h-px bg-border");
     if let Some(query) = props.query {
         inner = inner.query(query);

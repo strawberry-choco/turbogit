@@ -146,7 +146,9 @@ pub fn row(props: RowProps) -> View {
     let mut content = view()
         .flex_row()
         .items_center()
+        .gap(px(6.0))
         .min_h(px(data::FILE_ROW_HEIGHT))
+        .px(px(data::CELL_GAP))
         .rounded(px(data::CONTROL_RADIUS))
         .bg(move || row_fill((props.state)()))
         .hover(move |s| {

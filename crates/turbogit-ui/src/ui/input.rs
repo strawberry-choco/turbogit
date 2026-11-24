@@ -177,7 +177,7 @@ impl InputCore {
         };
         let height = match self.size {
             ControlSize::Compact => data::DENSITY_COMMAND_ROW_HEIGHT + 8.0,
-            _ => data::FILE_ROW_HEIGHT,
+            _ => data::FILE_ROW_HEIGHT + 4.0,
         };
         let default_text = self
             .default_value_of
@@ -220,7 +220,8 @@ impl InputCore {
             .h(px(height))
             .bg(t.background)
             .border(px(1.0))
-            .border_color(t.input)
+            .border_color(data::DIVIDER)
+            .hover(|s| s.border_color(t.input))
             .focus_visible(|s| s.ring(px(data::RAIL_WIDTH)).ring_color(t.ring))
             .disabled_style(|s| s.opacity(0.45))
     }

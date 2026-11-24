@@ -6,7 +6,6 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::theme as data;
-use crate::ui::chip::{ChipProps, ChipVariant, chip};
 
 /// The props of [`pane_header`].
 pub struct PaneHeaderProps {
@@ -54,40 +53,45 @@ impl PaneHeaderProps {
     }
 }
 
-/// A pane header: title left, count chip and actions right, one hairline
-/// under the row.
+/// A pane header: title left, count and actions right, one hairline under
+/// the row. The title is a label on a band, not a page heading: a pane
+/// header is chrome and never outshouts the rows under it.
 pub fn pane_header(props: PaneHeaderProps) -> impl IntoElement {
     let t = theme();
     let mut row = view()
         .flex_row()
         .items_center()
-        .gap(px(data::CELL_GAP))
+        .gap(px(data::SPACING_X))
+        .h(px(data::PANE_HEADER_HEIGHT))
         .child(
             text(move || props.title.clone())
-                .text_size(px(data::TYPE_PANE_TITLE))
+                .text_size(px(data::TYPE_DETAIL_TITLE))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.foreground)
-                .flex_1(),
+                .text_color(t.foreground),
         );
     if let Some(count) = props.count.clone() {
-        row = row.child(chip(ChipProps::new(count).variant(ChipVariant::Raised)));
-    }
-    if let Some(count_of) = props.count_of.clone() {
-        let t = theme();
         row = row.child(
-            text(move || SharedString::from(count_of()))
-                .text_size(px(data::TYPE_CHIP))
+            text(move || count.clone())
+                .text_size(px(data::TYPE_CONTROL))
                 .text_color(t.muted_foreground),
         );
     }
+    if let Some(count_of) = props.count_of.clone() {
+        row = row.child(
+            text(move || SharedString::from(count_of()))
+                .text_size(px(data::TYPE_CONTROL))
+                .text_color(t.muted_foreground),
+        );
+    }
+    row = row.child(view().flex_1());
     for action in props.actions {
         row = row.child(action);
     }
-    let row = row.px(px(data::PANEL_PADDING)).py(px(data::SPACING_Y));
+    let row = row.px(px(data::PANEL_PADDING));
     let mut header = view()
         .flex_col()
         .child(row)
-        .child(view().h(px(1.0)).bg(t.border).mx(px(data::PANEL_PADDING)));
+        .child(view().h(px(1.0)).bg(data::DIVIDER));
     if let Some(id) = props.test_id.clone() {
         header = header.test_id(&id);
     }

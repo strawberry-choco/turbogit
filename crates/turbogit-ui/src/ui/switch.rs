@@ -61,7 +61,7 @@ fn track(checked: Rc<dyn Fn() -> bool>) -> impl IntoElement {
     let fill = checked.clone();
     let fill_color = t.clone();
     let thumb_checked = checked;
-    let thumb_color = t.background;
+    let thumb_color = t.primary_foreground;
     view()
         .relative()
         .w(px(28.0))

@@ -24,6 +24,7 @@ use crate::screens::{commit, diff_view, shelf};
 use crate::test_ids;
 use crate::theme as data;
 use crate::ui::checkbox::{CheckboxProps, CheckboxState, checkbox};
+use crate::ui::icon::Icon;
 use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::input::{InputProps, input};
 use crate::ui::pane_header::{PaneHeaderProps, pane_header};
@@ -325,11 +326,19 @@ pub fn changes_screen(handle: AppHandle) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
+                .h(px(40.0))
                 .px(px(data::PANEL_PADDING))
-                .py(px(data::SPACING_Y))
+                .border_b(px(1.0))
+                .border_color(data::DIVIDER)
                 .child(tabs(
                     TabsProps::new(items, move || body_subtab.get()).on_change(move |at| {
-                        strip_subtab.set(at);
+                        // A synchronous set from inside the pressed tab's own
+                        // style subscription aborts the handler; one turn
+                        // later the list is past that frame.
+                        let sub = strip_subtab;
+                        spawn(async move {
+                            sub.set(at);
+                        });
                         let value = match at {
                             1 => CommitSubTab::Shelf,
                             2 => CommitSubTab::Stash,
@@ -380,8 +389,6 @@ fn local_changes(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoE
                 .flex_1()
                 .flex_col()
                 .rounded(px(data::CARD_RADIUS))
-                .border(px(1.0))
-                .border_color(t.border)
                 .bg(t.card)
                 .child(diff_view::preview_pane(preview_handle)),
         )
@@ -418,8 +425,6 @@ fn changes_card(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoEl
         .flex_1()
         .flex_col()
         .rounded(px(data::CARD_RADIUS))
-        .border(px(1.0))
-        .border_color(t.border)
         .bg(t.card)
         .test_id(&test_ids::changes("card"))
         .child(pane_header(
@@ -427,7 +432,7 @@ fn changes_card(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoEl
                 .count_of(count)
                 .test_id(&test_ids::changes("header"))
                 .action(icon_button(
-                    IconButtonProps::new("⟳", "Refresh changes")
+                    IconButtonProps::new(Icon::Refresh, "Refresh changes")
                         .test_id(&test_ids::changes("refresh"))
                         .on_press({
                             let window = list_window;
@@ -439,7 +444,7 @@ fn changes_card(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoEl
                         }),
                 ))
                 .action(icon_button(
-                    IconButtonProps::new("⌄", "Expand all groups")
+                    IconButtonProps::new(Icon::ChevronDown, "Expand all groups")
                         .test_id(&test_ids::changes("expand-all"))
                         .on_press({
                             let expand_handle = expand_handle.clone();
@@ -466,7 +471,7 @@ fn changes_card(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoEl
                         }),
                 ))
                 .action(icon_button(
-                    IconButtonProps::new("↺", "Rollback")
+                    IconButtonProps::new(Icon::Undo, "Rollback")
                         .test_id(&test_ids::changes("rollback"))
                         .on_press(move || rollback_handle.update(discard_in_every_root)),
                 )),
@@ -504,11 +509,14 @@ fn changes_card(handle: AppHandle, window: Signal<ChangesWindow>) -> impl IntoEl
             .into_element()
         }))
         .child(when(
+            // A collapsed group is still rows: the message belongs to a clean
+            // tree (or a filter that matches nothing), not to a folded list.
             move || {
-                !empty_window
-                    .get()
-                    .iter()
-                    .any(|row| matches!(row, RowData::File(_)))
+                !empty_window.get().iter().any(|row| match row {
+                    RowData::File(_) => true,
+                    RowData::Group { count, .. } => *count > 0,
+                    RowData::Section { .. } => false,
+                })
             },
             {
                 let peek_handle = empty_handle.clone();
@@ -576,18 +584,27 @@ fn list_row_at(handle: AppHandle, window: Signal<ChangesWindow>, at: Position) -
                     let rows = press_handle.read(rows_of);
                     press_window.set(ChangesWindow(Arc::new(rows)));
                 })
+                .child(crate::ui::icon::icon(
+                    if expanded {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    },
+                    data::ICON_SM,
+                    t.muted_foreground,
+                ))
                 .child(
-                    text(format!("{} {root_name}", if expanded { "▾" } else { "▸" }))
+                    text(root_name)
                         .text_size(px(data::TYPE_CONTROL))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(t.foreground),
                 )
                 .child(
                     text(branch)
-                        .text_size(px(data::TYPE_CONTROL))
-                        .text_color(t.muted_foreground)
-                        .flex_1(),
+                        .text_size(px(data::TYPE_CHIP))
+                        .text_color(t.muted_foreground),
                 )
+                .child(view().flex_1())
                 .child(
                     text(count.to_string())
                         .text_size(px(data::TYPE_CHIP))
@@ -601,7 +618,9 @@ fn list_row_at(handle: AppHandle, window: Signal<ChangesWindow>, at: Position) -
             .child(
                 text(format!("{label} ({count})"))
                     .text_size(px(data::TYPE_SECTION))
-                    .text_color(data::STATE_WARNING),
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .letter_spacing(px(0.5))
+                    .text_color(t.muted_foreground),
             ))
         .into_element(),
         Some(RowData::File(file)) => file_row(handle, window, *file).into_element(),

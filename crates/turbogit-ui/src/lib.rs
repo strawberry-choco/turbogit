@@ -197,6 +197,10 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
     let n6_handle = handle.clone();
     let undo_handle = handle.clone();
     let tab = signal(handle.peek(|s| s.ui.tab));
+    // The one sheet route: the palette opens a surface page through it, and
+    // a tab press closes it. A signal, not state, so a route change repaints
+    // the content column alone.
+    let sheet_route = signal(None::<String>);
     let switcher = TabSwitcher::new(handle.clone(), tab);
     crate::screens::shortcuts::bind(&switcher, &handle);
     let shell_switcher = switcher.clone();
@@ -210,7 +214,9 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
                 move || welcome_cond.read(|s| s.show_welcome()),
                 move || welcome_screen(welcome_handle.clone()),
             )
-            .otherwise(move || shell_screen(shell_handle.clone(), shell_switcher.clone())),
+            .otherwise(move || {
+                shell_screen(shell_handle.clone(), shell_switcher.clone(), sheet_route)
+            }),
         )
         .child(banner_layer(banner_handle))
         .child(confirm_layer(confirm_handle))
@@ -221,7 +227,7 @@ pub fn app_shell(handle: AppHandle) -> impl IntoElement {
         ))
         .child(crate::screens::sync::sync_layer(sync_handle))
         .child(crate::screens::n5_layers(n5_handle))
-        .child(crate::screens::n6_layers(n6_handle, switcher))
+        .child(crate::screens::n6_layers(n6_handle, switcher, sheet_route))
         .child(crate::screens::rewrite::undo_banner(undo_handle))
         .child(status_bar(handle))
         .child(

@@ -279,8 +279,7 @@ fn the_rewrite_route_states_a_held_rebase() {
     std::fs::create_dir_all(repo.join(".git/rebase-merge")).unwrap();
     let mut app = for_roots(project.path(), std::slice::from_ref(&repo));
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-rewrite")
-        .expect("the rewrite band");
+    support::open_surface(&mut app, "Rewrite");
     app.wait_for("id:rewrite:gate")
         .expect("the gate states its reason");
     assert!(support::shows_part(

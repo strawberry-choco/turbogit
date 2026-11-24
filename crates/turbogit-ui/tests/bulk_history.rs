@@ -45,7 +45,7 @@ fn bulk_over(
 ) -> Mounted {
     let mut app = for_roots_seeded(project.path(), roots, seed);
     app.first_render().expect("the shell mounts");
-    app.press("id:toolbar:n5-bulk").expect("the bulk band");
+    support::open_surface(&mut app, "Bulk Operations");
     app.wait_for("id:route:bulk").expect("the bulk route");
     app
 }

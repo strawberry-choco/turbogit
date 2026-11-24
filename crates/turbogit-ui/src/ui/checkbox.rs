@@ -8,6 +8,7 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::theme as data;
+use crate::ui::icon::{Icon, icon};
 
 /// The checkbox's value, including the partial one a select-all holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -68,22 +69,27 @@ impl CheckboxProps {
 /// The indicator's fill and mark per state, from the chrome tokens.
 fn indicator(state: CheckboxState) -> impl IntoElement {
     let t = theme();
-    let (fill, mark, ink, edge) = match state {
-        CheckboxState::Unchecked => (AdaptiveColor::TRANSPARENT, "", t.input, t.input),
-        CheckboxState::Checked => (t.primary, "✓", t.primary_foreground, t.primary),
-        CheckboxState::Indeterminate => (t.primary, "–", t.primary_foreground, t.primary),
+    let (fill, edge) = match state {
+        CheckboxState::Unchecked => (AdaptiveColor::TRANSPARENT, t.input),
+        CheckboxState::Checked | CheckboxState::Indeterminate => (t.primary, t.primary),
     };
-    view()
+    let box_ = view()
         .flex_row()
         .items_center()
         .justify_center()
-        .w(px(data::TYPE_DETAIL_TITLE))
-        .h(px(data::TYPE_DETAIL_TITLE))
+        .w(px(14.0))
+        .h(px(14.0))
         .rounded(px(data::MARK_RADIUS))
         .bg(fill)
         .border(px(1.0))
-        .border_color(edge)
-        .child(text(mark).text_size(px(data::TYPE_CHIP)).text_color(ink))
+        .border_color(edge);
+    match state {
+        CheckboxState::Unchecked => box_,
+        CheckboxState::Checked => box_.child(icon(Icon::Check, 10.0, t.primary_foreground)),
+        CheckboxState::Indeterminate => {
+            box_.child(view().w(px(7.0)).h(px(1.5)).bg(t.primary_foreground))
+        }
+    }
 }
 
 /// A checkbox: the box answers the pointer with the muted band, the checked

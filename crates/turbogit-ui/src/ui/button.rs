@@ -177,16 +177,23 @@ pub fn button(props: ButtonProps) -> impl IntoElement {
         .disabled(move || disabled_of.as_ref().map_or(static_disabled, |read| read()))
         .flex_row()
         .items_center()
+        .gap(px(data::SPACING_Y))
         .rounded(px(data::CONTROL_RADIUS))
         .px(px(pad_x))
         .py(px(pad_y))
         .bg(fill)
         .text_size(px(size_type(props.size)))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(ink)
         .focus_visible(|s| s.ring(px(data::RAIL_WIDTH)).ring_color(t.ring))
         .hover(|s| s.bg(variant_hover(props.variant)))
         .active(|s| s.bg(variant_pressed(props.variant)))
         .disabled_style(|s| s.opacity(0.45));
+    // A filled secondary button needs an edge on the canvas, or it floats
+    // as a gray rectangle with no boundary.
+    if props.variant == ButtonVariant::Secondary {
+        inner = inner.border(px(1.0)).border_color(data::DIVIDER);
+    }
     if let Some(press) = props.on_press {
         inner = inner.on_press(press);
     }

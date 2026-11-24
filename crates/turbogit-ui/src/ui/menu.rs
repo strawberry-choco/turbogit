@@ -99,7 +99,7 @@ pub fn menu(props: MenuProps) -> impl IntoElement {
                 popup = popup.child(item);
             }
             MenuEntry::Separator => {
-                popup = popup.child(menu_separator().h(px(1.0)).my_1().bg(t.border));
+                popup = popup.child(menu_separator().h(px(1.0)).my_1().bg(data::DIVIDER));
             }
         }
     }

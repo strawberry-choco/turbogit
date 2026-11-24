@@ -108,7 +108,10 @@ fn the_route_lists_every_action_and_runs_it() {
     let project = Project::new();
     let mut app = shell(&project);
     app.first_render().unwrap();
-    app.press("id:toolbar:n6-palette").unwrap();
+    open_palette(&mut app);
+    app.type_text("label:Search actions", "All Actions")
+        .unwrap();
+    app.press("text:All Actions").unwrap();
     app.wait_for("id:route:palette").unwrap();
 
     for slug in ["settings", "branches", "go-to-log", "custom-all"] {

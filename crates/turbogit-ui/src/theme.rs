@@ -56,6 +56,16 @@ pub const GRAPH_RAIL: AdaptiveColor = AdaptiveColor::rgb(0x4e5157, 0xd0d4da);
 /// A commit with no lane: the muted ink's data twin.
 pub const GRAPH_MUTED: AdaptiveColor = AdaptiveColor::rgb(0x8a8e96, 0x5d636d);
 
+/// The hairline between regions. `border` is a control's own edge (a field
+/// that must read as editable); a divider only separates, so it sits a step
+/// darker and never competes with the content.
+pub const DIVIDER: AdaptiveColor = AdaptiveColor::rgb(0xd9dce2, 0x34373d);
+/// A pane's recessed band: a group header, a table's column head, the
+/// action rail. One step under the card, never a second surface color.
+pub const SUNKEN: AdaptiveColor = AdaptiveColor::rgb(0xeef0f3, 0x232529);
+/// The overlay a modal casts over the app.
+pub const SCRIM: AdaptiveColor = AdaptiveColor::rgb(0x3a3f47, 0x121316);
+
 /// The graph's lane rails, one color per lane column.
 pub const LANES: [AdaptiveColor; 4] = [
     AdaptiveColor::rgb(0x2a63c9, 0x3574f0),
@@ -114,17 +124,32 @@ impl RepoState {
     }
 }
 
-/// The type scale, in points: nine named steps, the chrome face reads them.
+/// The type scale, in points: ten named steps, the chrome face reads them.
+/// The body sits at 12: the rows are 26 high and a desktop git list reads
+/// at a glance, so the step above the body is a title (14), not a heading.
 pub const TYPE_SECTION: f32 = 9.0;
 pub const TYPE_CHIP: f32 = 10.0;
 pub const TYPE_CONTROL: f32 = 11.0;
 pub const TYPE_BODY: f32 = 12.0;
 pub const TYPE_DETAIL_TITLE: f32 = 13.0;
 pub const TYPE_GROUP_NAME: f32 = 12.5;
-pub const TYPE_PANE_TITLE: f32 = 16.0;
-pub const TYPE_WORDMARK: f32 = 42.0;
-pub const TYPE_TAGLINE: f32 = 14.0;
+pub const TYPE_PANE_TITLE: f32 = 14.0;
+pub const TYPE_WORDMARK: f32 = 22.0;
+pub const TYPE_TAGLINE: f32 = 13.0;
 pub const TYPE_STATISTIC: f32 = 22.0;
+
+/// The chrome bands' heights. The top bar carries the tabs and the two
+/// repository switches; the action band is a menu line, not a button row.
+pub const TOP_BAR_HEIGHT: f32 = 42.0;
+pub const ACTION_BAND_HEIGHT: f32 = 30.0;
+pub const PANE_HEADER_HEIGHT: f32 = 36.0;
+
+/// Icon sizes. An icon is a glyph, so it reads at the type size beside it:
+/// compact in a row, regular in a control, large in a panel head.
+pub const ICON_SM: f32 = 13.0;
+pub const ICON_MD: f32 = 15.0;
+pub const ICON_LG: f32 = 18.0;
+pub const ICON_XL: f32 = 22.0;
 
 /// Density: the paddings, spacings, and row heights the controls lay out by.
 pub const PANEL_PADDING: f32 = 12.0;
@@ -145,18 +170,19 @@ pub const DENSITY_COMMAND_ROW_HEIGHT: f32 = 14.0;
 pub const DENSITY_LIST_GAP: f32 = 2.0;
 
 /// Row heights: a file row and a group band in a list or tree.
-pub const FILE_ROW_HEIGHT: f32 = 24.0;
+pub const FILE_ROW_HEIGHT: f32 = 26.0;
 pub const GROUP_ROW_HEIGHT: f32 = 26.0;
 
 /// Radii per role. The chip keeps its compact corner, the badge its pill;
-/// neither merges with the other.
-pub const CHIP_RADIUS: f32 = 3.0;
-pub const CONTROL_RADIUS: f32 = 4.0;
+/// neither merges with the other. A control's corner is 5: soft enough to
+/// read as a control, square enough for a dense list.
+pub const CHIP_RADIUS: f32 = 4.0;
+pub const CONTROL_RADIUS: f32 = 5.0;
 pub const WINDOW_RADIUS: f32 = 8.0;
-pub const MENU_RADIUS: f32 = 6.0;
-pub const CARD_RADIUS: f32 = 8.0;
-pub const PILL_RADIUS: f32 = 9.0;
-pub const MARK_RADIUS: f32 = 2.0;
+pub const MENU_RADIUS: f32 = 8.0;
+pub const CARD_RADIUS: f32 = 10.0;
+pub const PILL_RADIUS: f32 = 999.0;
+pub const MARK_RADIUS: f32 = 3.0;
 
 /// The selection rail's width, and the text caret's. Two separate tokens:
 /// the rail means "this row is chosen", the caret means where the reader is.

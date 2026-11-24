@@ -189,7 +189,7 @@ fn the_route_paints_the_body_when_a_target_is_seeded() {
     let seed = seeded(&project);
     let mut app = blame_app(&seed, target(&seed, &seed.c2, "file.txt"));
     app.first_render().unwrap();
-    app.press("id:toolbar:n6-blame").unwrap();
+    support::open_surface(&mut app, "Blame");
     app.wait_for("id:route:blame").unwrap();
     app.wait_for("id:blame:body").unwrap();
 }

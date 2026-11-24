@@ -502,6 +502,14 @@ interior divider and one structural underline for a column header, so "one
 hairline, then content" is a claim about a number of rules rather than an opinion
 about a screenshot, and "one hairline" is the phrase a reviewer can check.
 
+The nsh port names the **content divider** in the data layer as
+`theme::DIVIDER`: `theme.json`'s `border` is a control's own edge (a field that
+must read as editable), and a divider only separates, so reusing `border` for
+both made every hairline as loud as a focused field. `theme::SUNKEN` is the
+recessed band a control or a grouped row sits on, and `theme::SCRIM` is the
+modal overlay's tone; neither is a content surface, so R2's stroke rule is
+untouched.
+
 `widgets::footer_rule` is the shared painter for the footer rule (crate-private,
 re-exported to sibling surface modules through `ui::widgets`), which
 `widgets::dialog_footer` delegates to, and which the interactive rebase editor's
@@ -700,6 +708,7 @@ nsh owner and is a gap, not a shared primitive.
 | --- | --- |
 | Chrome tokens, the one radius | `src/theme.json` (read by `nsh_base::theme()`) |
 | Data tokens: diff, status, state, ref accents, lanes, type, density, radii | `src/theme.rs` |
+| Icons (the inline-SVG set, stroked in `currentColor`) | `src/ui/icon.rs` |
 | General buttons and icon buttons | `src/ui/button.rs`, `src/ui/icon_button.rs` |
 | Inputs and text areas | `src/ui/input.rs` |
 | Checkbox and switch | `src/ui/checkbox.rs`, `src/ui/switch.rs` |

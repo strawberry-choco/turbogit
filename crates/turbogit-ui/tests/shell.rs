@@ -40,7 +40,7 @@ fn the_tab_strip_paints_the_five_tabs_and_the_status_aggregate() {
         assert!(app.screen().shows(label), "the strip paints {label}");
     }
     assert!(
-        shows_part(&app, "1 repos indexed"),
+        shows_part(&app, "1 repo indexed"),
         "the version line paints the indexed count"
     );
     assert!(shows_part(&app, "1 total"), "the aggregate total paints");
@@ -261,7 +261,7 @@ fn the_activity_feed_expands_clears_and_filters() {
     app.wait_for("text:1 total").unwrap();
 
     // Collapsed by default: the rows' controls are hidden, the chip paints.
-    assert!(app.screen().shows("LOG"));
+    assert!(app.screen().shows("ACTIVITY"));
     assert!(!app.screen().shows("Clear feed"));
 
     app.press("id:activity:toggle").unwrap();
@@ -288,7 +288,7 @@ fn the_activity_feed_expands_clears_and_filters() {
         |screen| !screen.shows("Clear feed"),
     )
     .unwrap();
-    assert!(app.screen().shows("LOG"), "the chip stays");
+    assert!(app.screen().shows("ACTIVITY"), "the chip stays");
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn the_shell_walks_every_tab_without_a_second_scroll_soul() {
     ] {
         app.press(&format!("id:tab:{slug}")).unwrap();
         app.wait_for("text:Commits").unwrap_or(()); // placeholder tabs name themselves
-        assert!(app.screen().shows("LOG"), "the chrome stays on {slug}");
+        assert!(app.screen().shows("ACTIVITY"), "the chrome stays on {slug}");
     }
     assert!(
         app.screen().shows("1 total"),

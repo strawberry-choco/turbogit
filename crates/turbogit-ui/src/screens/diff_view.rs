@@ -32,6 +32,7 @@ use crate::theme as data;
 use crate::ui::button::{ButtonProps, ButtonVariant, button};
 use crate::ui::checkbox::{CheckboxProps, CheckboxState, checkbox};
 use crate::ui::dialog::{DialogAction, DialogProps, dialog};
+use crate::ui::icon::{Icon, icon};
 use crate::ui::icon_button::{IconButtonProps, icon_button};
 use crate::ui::popover::{PopoverProps, popover};
 
@@ -538,9 +539,16 @@ pub fn preview_pane(handle: AppHandle) -> impl IntoElement {
             .justify_center()
             .test_id(&test_ids::diff("preview"))
             .child(
-                text("Select a changed file to preview its unified diff.")
-                    .text_size(px(data::TYPE_BODY))
-                    .text_color(t.muted_foreground),
+                view()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(data::SPACING_X))
+                    .child(icon(Icon::File, data::ICON_XL, t.muted_foreground))
+                    .child(
+                        text("Select a changed file to preview its unified diff.")
+                            .text_size(px(data::TYPE_BODY))
+                            .text_color(t.muted_foreground),
+                    ),
             )
             .into_element(),
     })

@@ -1,7 +1,8 @@
-//! The tab list over nsh-base's Tabs: the shell's five tabs and any pane's
-//! own tab row. The app owns which tab is current; a press mirrors it.
+//! The tab list: the shell's five primary tabs (an underline rail) and a
+//! pane's own secondary row (a segmented track). The app owns which tab is
+//! current; a press mirrors it.
 
-use nsh_base::{tab as base_tab, tabs as base_tabs, theme};
+use nsh_base::theme;
 use nsh_core::prelude::*;
 
 use crate::theme as data;
@@ -11,8 +12,7 @@ use crate::theme as data;
 pub struct TabItem {
     /// The value a press reports and the tab shows.
     pub label: SharedString,
-    /// The id UI tests press it by. The tab element takes no test id, so
-    /// the wrapper names the view that carries it.
+    /// The id UI tests press it by.
     pub test_id: Option<SharedString>,
 }
 
@@ -30,14 +30,28 @@ impl TabItem {
     }
 }
 
+/// How a tab list paints: the shell's top-level rail, or a pane's own
+/// segmented switch. Two roles, two shapes; neither is a third kind of
+/// button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabsVariant {
+    /// A quiet track with a raised current tab. A pane's sub-navigation.
+    #[default]
+    Segmented,
+    /// Flat labels over a hairline, the current one marked by a brand rule.
+    /// The window's primary navigation.
+    Underline,
+}
+
 /// The props of [`tabs`]. The current tab reads through a closure, so the
-/// app's signal drives the ink, the indicator, and the selected state.
+/// app's signal drives the ink and the marker.
 pub struct TabsProps {
     pub items: Vec<TabItem>,
     /// The current tab's index, read fresh on every render.
     pub selected: std::rc::Rc<dyn Fn() -> usize>,
     /// The press handler, the pressed tab's index.
     pub on_change: Option<std::rc::Rc<dyn Fn(usize) + 'static>>,
+    pub variant: TabsVariant,
 }
 
 impl TabsProps {
@@ -46,7 +60,13 @@ impl TabsProps {
             items,
             selected: std::rc::Rc::new(selected),
             on_change: None,
+            variant: TabsVariant::Segmented,
         }
+    }
+
+    pub fn variant(mut self, variant: TabsVariant) -> Self {
+        self.variant = variant;
+        self
     }
 
     pub fn on_change(mut self, on_change: impl Fn(usize) + 'static) -> Self {
@@ -55,75 +75,114 @@ impl TabsProps {
     }
 }
 
-/// A tab list: the muted band behind the tabs, the tab's ink steps up while
-/// current, the indicator travels under the selected tab.
+/// A tab list. The track (segmented) or the hairline (underline) belongs to
+/// the list; the current marker belongs to the tab.
 pub fn tabs(props: TabsProps) -> impl IntoElement {
     let t = theme();
+    let variant = props.variant;
     let on_change = props.on_change;
     let selected = props.selected;
     let items = props.items;
-    base_tabs().indicator_class("inset-y-1 rounded-sm").child(
-        view()
+
+    let list = match variant {
+        TabsVariant::Segmented => view()
             .flex_row()
             .flex_wrap()
             .self_start()
-            .gap_1()
-            .p_1()
-            .rounded(px(data::CONTROL_RADIUS))
-            .bg(t.muted)
-            .children(items.into_iter().enumerate().map(move |(at, item)| {
-                let value = item.label.clone();
-                // One clone per reader: each closure holds its own
-                // handle for the tab's lifetime.
-                let selected_for_tab = selected.clone();
-                let selected_for_ink = selected.clone();
-                let selected_for_a11y = selected.clone();
-                let t = t.clone();
-                let tab = base_tab()
-                    .selected(move || selected_for_tab() == at)
-                    .px_3()
-                    .py_1()
-                    .rounded(px(data::MARK_RADIUS))
-                    .focus_visible(|s| s.ring(px(data::RAIL_WIDTH)).ring_color(t.ring))
-                    .hover(|s| s.opacity(0.85));
-                let tab = tab.child(
-                    text(move || value.clone())
-                        .text_size(px(data::TYPE_CONTROL))
-                        .text_color(move || {
-                            if selected_for_ink() == at {
-                                t.foreground
-                            } else {
-                                t.muted_foreground
-                            }
-                        }),
-                );
-                // The tab element carries the press (the press walk
-                // stops at the first press-handling ancestor, which is
-                // the tab, not the wrapper); the wrapper names it.
-                let tab = match on_change.as_ref() {
-                    Some(on_change) => {
-                        let on_change = on_change.clone();
-                        tab.on_press(move || on_change(at))
-                    }
-                    None => tab,
-                };
-                let mut host = view()
-                    .flex_row()
-                    .accessibility_state(move || AccessibilityState {
-                        selected: selected_for_a11y() == at,
-                        ..AccessibilityState::default()
-                    });
-                if let Some(id) = item.test_id.clone() {
-                    // The press walk looks at the matched view and its
-                    // ancestors, never its children: a test id on the
-                    // wrapper only presses when the wrapper hears presses.
-                    if let Some(on_change) = on_change.as_ref() {
-                        let on_change = on_change.clone();
-                        host = host.on_press(move || on_change(at));
-                    }
-                    host = host.test_id(&id);
-                }
-                host.child(tab)
-            })),
-    )
+            .gap(px(2.0))
+            .p(px(2.0))
+            .rounded(px(data::MENU_RADIUS))
+            .bg(t.muted),
+        TabsVariant::Underline => view().flex_row().flex_wrap().gap(px(2.0)),
+    };
+
+    list.children(items.into_iter().enumerate().map(move |(at, item)| {
+        let value = item.label.clone();
+        let current_for_ink = selected.clone();
+        let current_for_state = selected.clone();
+        let current_for_tab = selected.clone();
+        let t = t.clone();
+        let tab = view()
+            .role(AccessibilityRole::Button)
+            .flex_row()
+            .items_center()
+            .gap(px(data::SPACING_X))
+            .rounded(px(match variant {
+                TabsVariant::Segmented => data::CONTROL_RADIUS,
+                TabsVariant::Underline => data::MARK_RADIUS,
+            }))
+            .focus_visible(|s| s.ring(px(data::RAIL_WIDTH)).ring_color(t.ring));
+        let tab = match variant {
+            TabsVariant::Segmented => {
+                let t_fill = t.clone();
+                let t_hover = t.clone();
+                let fill_state = current_for_tab.clone();
+                let hover_state = current_for_tab.clone();
+                tab.px(px(9.0))
+                    .py(px(4.0))
+                    .bg(move || {
+                        if fill_state() == at {
+                            t_fill.card
+                        } else {
+                            AdaptiveColor::TRANSPARENT
+                        }
+                    })
+                    .hover(move |s| {
+                        if hover_state() == at {
+                            s
+                        } else {
+                            s.bg(t_hover.card.opacity(0.5))
+                        }
+                    })
+            }
+            TabsVariant::Underline => {
+                let t_rule = t.clone();
+                let rule_state = current_for_tab.clone();
+                // No hover fill: on the primary rail a filled cell reads as
+                // the current tab, and the underline already says which one
+                // that is.
+                tab.h(px(data::TOP_BAR_HEIGHT - 1.0))
+                    .px(px(9.0))
+                    .border_b(px(2.0))
+                    .border_color(move || {
+                        if rule_state() == at {
+                            t_rule.primary
+                        } else {
+                            AdaptiveColor::TRANSPARENT
+                        }
+                    })
+            }
+        };
+        let tab = tab
+            .accessibility_state(move || AccessibilityState {
+                selected: current_for_state() == at,
+                ..AccessibilityState::default()
+            })
+            .child(
+                text(move || value.clone())
+                    .text_size(px(match variant {
+                        TabsVariant::Segmented => data::TYPE_BODY,
+                        TabsVariant::Underline => data::TYPE_GROUP_NAME,
+                    }))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(move || {
+                        if current_for_ink() == at {
+                            t.foreground
+                        } else {
+                            t.muted_foreground
+                        }
+                    }),
+            );
+        let tab = match on_change.as_ref() {
+            Some(on_change) => {
+                let on_change = on_change.clone();
+                tab.on_press(move || on_change(at))
+            }
+            None => tab,
+        };
+        match item.test_id.clone() {
+            Some(id) => tab.test_id(&id),
+            None => tab,
+        }
+    }))
 }

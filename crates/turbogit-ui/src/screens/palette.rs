@@ -57,10 +57,24 @@ pub enum Action {
     CreateBranchAll,
     StashAll,
     CustomAll,
+    /// The N5/N6 surfaces a command opens: the pages the migration's action
+    /// band used to host, now one searchable entry each.
+    SurfaceRewrite,
+    SurfaceConflicts,
+    SurfaceRebase,
+    SurfaceRebasePlan,
+    SurfaceCherryPick,
+    SurfaceGetFromBranch,
+    SurfacePatches,
+    SurfaceShelves,
+    SurfaceBulk,
+    SurfaceBlame,
+    SurfaceCustomCommand,
+    SurfaceActionList,
 }
 
 /// Every action, in palette order.
-pub const ACTIONS: [Action; 35] = [
+pub const ACTIONS: [Action; 47] = [
     Action::Refresh,
     Action::Fetch,
     Action::Pull,
@@ -96,6 +110,18 @@ pub const ACTIONS: [Action; 35] = [
     Action::CreateBranchAll,
     Action::StashAll,
     Action::CustomAll,
+    Action::SurfaceRewrite,
+    Action::SurfaceConflicts,
+    Action::SurfaceRebase,
+    Action::SurfaceRebasePlan,
+    Action::SurfaceCherryPick,
+    Action::SurfaceGetFromBranch,
+    Action::SurfacePatches,
+    Action::SurfaceShelves,
+    Action::SurfaceBulk,
+    Action::SurfaceBlame,
+    Action::SurfaceCustomCommand,
+    Action::SurfaceActionList,
 ];
 
 impl Action {
@@ -136,6 +162,18 @@ impl Action {
             Action::CreateBranchAll => "Create Branch in All Repositories",
             Action::StashAll => "Stash All Repositories",
             Action::CustomAll => "Custom Command in All Repositories",
+            Action::SurfaceRewrite => "Rewrite",
+            Action::SurfaceConflicts => "Conflicts",
+            Action::SurfaceRebase => "Rebase",
+            Action::SurfaceRebasePlan => "Edit Rebase Plan",
+            Action::SurfaceCherryPick => "Cherry-pick",
+            Action::SurfaceGetFromBranch => "Get from Branch",
+            Action::SurfacePatches => "Patches",
+            Action::SurfaceShelves => "Shelves",
+            Action::SurfaceBulk => "Bulk Operations",
+            Action::SurfaceBlame => "Blame",
+            Action::SurfaceCustomCommand => "Custom Command",
+            Action::SurfaceActionList => "All Actions",
         }
     }
 
@@ -177,19 +215,72 @@ impl Action {
             Action::CreateBranchAll => "create-branch-all",
             Action::StashAll => "stash-all",
             Action::CustomAll => "custom-all",
+            Action::SurfaceRewrite => "surface-rewrite",
+            Action::SurfaceConflicts => "surface-conflicts",
+            Action::SurfaceRebase => "surface-rebase",
+            Action::SurfaceRebasePlan => "surface-rebase-plan",
+            Action::SurfaceCherryPick => "surface-cherry-pick",
+            Action::SurfaceGetFromBranch => "surface-get-from-branch",
+            Action::SurfacePatches => "surface-patches",
+            Action::SurfaceShelves => "surface-shelves",
+            Action::SurfaceBulk => "surface-bulk",
+            Action::SurfaceBlame => "surface-blame",
+            Action::SurfaceCustomCommand => "surface-custom-command",
+            Action::SurfaceActionList => "surface-action-list",
         }
     }
 
     fn from_slug(slug: &str) -> Option<Action> {
         ACTIONS.iter().copied().find(|action| action.slug() == slug)
     }
+
+    /// The route a surface command opens; a verb names none.
+    fn surface_route(self) -> Option<&'static str> {
+        Some(match self {
+            Action::SurfaceRewrite => "rewrite",
+            Action::SurfaceConflicts => "conflicts",
+            Action::SurfaceRebase => "rebase",
+            Action::SurfaceRebasePlan => "rebase_editor",
+            Action::SurfaceCherryPick => "cherry_pick",
+            Action::SurfaceGetFromBranch => "get_from_branch",
+            Action::SurfacePatches => "patches",
+            Action::SurfaceShelves => "unshelve",
+            Action::SurfaceBulk => "bulk",
+            Action::SurfaceBlame => "blame",
+            Action::SurfaceCustomCommand => "custom_command",
+            Action::SurfaceActionList => "palette",
+            _ => return None,
+        })
+    }
+
+    /// The list group a command reads under.
+    fn group(self) -> &'static str {
+        if self.surface_route().is_some() {
+            "Surfaces"
+        } else {
+            "Actions"
+        }
+    }
 }
 
 /// Runs one entry through the state verbs it names.
-pub fn run(handle: &AppHandle, switcher: &TabSwitcher, action: Action) {
+pub fn run(
+    handle: &AppHandle,
+    switcher: &TabSwitcher,
+    route: Signal<Option<String>>,
+    action: Action,
+) {
+    if let Some(id) = action.surface_route() {
+        route.set(Some(id.to_string()));
+        return;
+    }
     match action {
-        Action::CommitTab => switcher.select(Tab::Commit),
+        Action::CommitTab => {
+            route.set(None);
+            switcher.select(Tab::Commit);
+        }
         Action::GoToLog => {
+            route.set(None);
             handle.update(|s| s.ui.welcome_visible = false);
             switcher.select(Tab::Log);
         }
@@ -198,9 +289,13 @@ pub fn run(handle: &AppHandle, switcher: &TabSwitcher, action: Action) {
                 s.ui.welcome_visible = false;
                 s.ui.focus_file_filter = true;
             });
+            route.set(None);
             switcher.select(Tab::Commit);
         }
-        Action::Branches => switcher.select(Tab::Branches),
+        Action::Branches => {
+            route.set(None);
+            switcher.select(Tab::Branches);
+        }
         Action::Settings => settings::open(handle),
         Action::CustomAll => {
             let custom = handle.clone();
@@ -244,7 +339,9 @@ fn run_state(state: &mut AppState, action: Action) {
         Action::Clone => {
             state.ui.toast = Some(Toast::info("Clone opens from the Welcome screen."));
         }
-        Action::OpenWelcome => state.ui.welcome_visible = true,
+        Action::OpenWelcome => {
+            state.ui.welcome_visible = true;
+        }
         Action::SwitchWorkspace => state.ui.workspace_picker_open = true,
         Action::StageHunk | Action::UnstageHunk => {
             let dir = if action == Action::StageHunk {
@@ -274,6 +371,20 @@ fn run_state(state: &mut AppState, action: Action) {
         Action::CreateBranchAll => fleet(state, turbogit_app::bulk_ops::BulkOp::CreateBranch),
         Action::StashAll => fleet(state, turbogit_app::bulk_ops::BulkOp::StashAll),
         Action::CustomAll => fleet(state, turbogit_app::bulk_ops::BulkOp::Custom),
+        // Surface commands never reach the state verbs: `run` opens their
+        // route before this match.
+        Action::SurfaceRewrite
+        | Action::SurfaceConflicts
+        | Action::SurfaceRebase
+        | Action::SurfaceRebasePlan
+        | Action::SurfaceCherryPick
+        | Action::SurfaceGetFromBranch
+        | Action::SurfacePatches
+        | Action::SurfaceShelves
+        | Action::SurfaceBulk
+        | Action::SurfaceBlame
+        | Action::SurfaceCustomCommand
+        | Action::SurfaceActionList => {}
         Action::CommitTab | Action::GoToLog | Action::FilterFiles | Action::Settings => {}
     }
 }
@@ -316,7 +427,11 @@ fn push_without_dialog(state: &mut AppState) {
 }
 
 /// The dialog layer: the filterable action list while `ui.command_palette`.
-pub fn layer(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
+pub fn layer(
+    handle: AppHandle,
+    switcher: TabSwitcher,
+    route: Signal<Option<String>>,
+) -> impl IntoElement {
     let show = handle.clone();
     when(
         move || show.read(|s| s.ui.command_palette),
@@ -325,6 +440,7 @@ pub fn layer(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
             let close = handle.clone();
             let select = handle.clone();
             let select_switcher = switcher.clone();
+            let select_route = route;
             let change = handle.clone();
             let list = command(
                 CommandProps::new(command_items())
@@ -343,7 +459,7 @@ pub fn layer(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
                             return;
                         };
                         select.update(|s| s.ui.command_palette = false);
-                        run(&select, &select_switcher, action);
+                        run(&select, &select_switcher, select_route, action);
                     }),
             );
             let cancel = handle.clone();
@@ -388,13 +504,17 @@ fn matches_query(query: &str, label: &str) -> bool {
 fn command_items() -> Vec<CommandItem> {
     ACTIONS
         .iter()
-        .map(|action| CommandItem::new(action.slug(), action.label()).group("Actions"))
+        .map(|action| CommandItem::new(action.slug(), action.label()).group(action.group()))
         .collect()
 }
 
 /// The route's screen: the action list as a page, each entry running its
 /// verb. The palette dialog is what a key and the toolbar open.
-pub fn palette_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
+pub fn palette_screen(
+    handle: AppHandle,
+    switcher: TabSwitcher,
+    route: Signal<Option<String>>,
+) -> impl IntoElement {
     let t = theme();
     let mut list = view()
         .flex_col()
@@ -404,6 +524,7 @@ pub fn palette_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElem
     for action in ACTIONS {
         let press = handle.clone();
         let press_switcher = switcher.clone();
+        let press_route = route;
         list = list.child(
             view()
                 .role(AccessibilityRole::Button)
@@ -413,7 +534,7 @@ pub fn palette_screen(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElem
                 .py(px(data::DENSITY_COMPACT_BUTTON_PAD_Y))
                 .rounded(px(data::CONTROL_RADIUS))
                 .hover(|s| s.bg(t.muted))
-                .on_press(move || run(&press, &press_switcher, action))
+                .on_press(move || run(&press, &press_switcher, press_route, action))
                 .child(
                     text(action.label())
                         .text_size(px(data::TYPE_CONTROL))

@@ -1155,6 +1155,7 @@ pub fn branches_screen(handle: AppHandle) -> impl IntoElement {
 
 /// The toolbar: search, the scope chip, settings, and New Branch.
 fn toolbar(handle: AppHandle) -> impl IntoElement {
+    let t = theme();
     let search_handle = handle.clone();
     let new_handle = handle.clone();
     let settings_handle = handle.clone();
@@ -1165,6 +1166,9 @@ fn toolbar(handle: AppHandle) -> impl IntoElement {
         .gap(px(data::SPACING_X))
         .px(px(data::PANEL_PADDING))
         .py(px(data::SPACING_Y))
+        .bg(t.card)
+        .border_b(px(1.0))
+        .border_color(data::DIVIDER)
         .child(
             view().flex_1().child(input(
                 InputProps::new()
@@ -1384,7 +1388,8 @@ fn settings_popover(handle: AppHandle) -> impl IntoElement {
     let settings_handle = handle.clone();
     let options = handle.peek(|s| s.ui.branches_view);
     let trigger = icon_button(
-        IconButtonProps::new("⚙", "Branch list settings").test_id(&test_ids::branches("settings")),
+        IconButtonProps::new(crate::ui::icon::Icon::Settings, "Branch list settings")
+            .test_id(&test_ids::branches("settings")),
     );
     let props = PopoverProps::new(trigger)
         .width(300.0)
@@ -1671,7 +1676,11 @@ fn paint_row(handle: AppHandle, entry: &nsh_base::TreeEntry, info: Option<RowInf
                         .items_center()
                         .gap(px(6.0))
                         .pl(px(indent))
-                        .child(text("⑂").text_size(px(data::TYPE_CONTROL)).text_color(ink))
+                        .child(crate::ui::icon::icon(
+                            crate::ui::icon::Icon::Branch,
+                            data::ICON_SM,
+                            ink,
+                        ))
                         .child(
                             text(label)
                                 .text_size(px(data::TYPE_CONTROL))

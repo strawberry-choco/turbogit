@@ -256,12 +256,17 @@ pub fn placeholder(id: &str) -> impl IntoElement {
 
 /// The screen a route id names: the built surfaces paint their real screens,
 /// an unbuilt route paints [`placeholder`].
-pub fn route_screen(handle: AppHandle, id: &str, switcher: TabSwitcher) -> AnyElement {
+pub fn route_screen(
+    handle: AppHandle,
+    id: &str,
+    switcher: TabSwitcher,
+    route: Signal<Option<String>>,
+) -> AnyElement {
     match id {
         "blame" => blame::blame_screen(handle, switcher).into_element(),
         "settings" => settings::settings_screen(handle).into_element(),
         "shortcuts" => shortcuts::shortcuts_screen(handle).into_element(),
-        "palette" => palette::palette_screen(handle, switcher).into_element(),
+        "palette" => palette::palette_screen(handle, switcher, route).into_element(),
         "custom_command" => custom_command::custom_command_screen(handle).into_element(),
         "changes" => changes::changes_screen(handle).into_element(),
         "commit" => commit::commit_screen(handle).into_element(),
@@ -305,13 +310,17 @@ pub fn n5_layers(handle: AppHandle) -> impl IntoElement {
 /// The N6 dialog layers, in paint order. Each owns the state that says it is
 /// open; none paints when its state is closed. The palette goes last so its
 /// result lands above the surface it opened.
-pub fn n6_layers(handle: AppHandle, switcher: TabSwitcher) -> impl IntoElement {
+pub fn n6_layers(
+    handle: AppHandle,
+    switcher: TabSwitcher,
+    route: Signal<Option<String>>,
+) -> impl IntoElement {
     view()
         .child(settings::layer(handle.clone()))
         .child(shortcuts::layer(handle.clone()))
         .child(custom_command::layer(handle.clone()))
         .child(blame::layer(handle.clone(), switcher.clone()))
-        .child(palette::layer(handle, switcher))
+        .child(palette::layer(handle, switcher, route))
 }
 
 /// A commit id's short form, the one spelling every row uses.

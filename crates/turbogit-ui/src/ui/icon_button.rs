@@ -4,13 +4,39 @@
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
-use super::{ControlSize, size_pad_x, size_pad_y};
+use super::{ControlSize, Icon};
 use crate::theme as data;
+
+/// What the button shows: one of the app's icons, or a text glyph for the
+/// few marks that have no drawing (a one-off arithmetic sign).
+#[derive(Debug, Clone)]
+pub enum Glyph {
+    Icon(Icon),
+    Text(SharedString),
+}
+
+impl From<Icon> for Glyph {
+    fn from(icon: Icon) -> Self {
+        Glyph::Icon(icon)
+    }
+}
+
+impl From<&str> for Glyph {
+    fn from(text: &str) -> Self {
+        Glyph::Text(SharedString::from(text.to_string()))
+    }
+}
+
+impl From<String> for Glyph {
+    fn from(text: String) -> Self {
+        Glyph::Text(SharedString::from(text))
+    }
+}
 
 /// The props of [`icon_button`].
 pub struct IconButtonProps {
-    /// The icon glyph.
-    pub icon: SharedString,
+    /// The glyph shown.
+    pub glyph: Glyph,
     /// What screen readers say: the icon alone is not a name.
     pub accessibility_label: SharedString,
     pub size: ControlSize,
@@ -22,12 +48,9 @@ pub struct IconButtonProps {
 }
 
 impl IconButtonProps {
-    pub fn new(
-        icon: impl Into<SharedString>,
-        accessibility_label: impl Into<SharedString>,
-    ) -> Self {
+    pub fn new(glyph: impl Into<Glyph>, accessibility_label: impl Into<SharedString>) -> Self {
         IconButtonProps {
-            icon: icon.into(),
+            glyph: glyph.into(),
             accessibility_label: accessibility_label.into(),
             size: ControlSize::default(),
             disabled: false,
@@ -63,12 +86,26 @@ impl IconButtonProps {
     }
 }
 
+/// The square edge of each size: a chrome icon is 26, a dense row's 22.
+fn edge(size: ControlSize) -> f32 {
+    match size {
+        ControlSize::Compact => 22.0,
+        ControlSize::Regular => 26.0,
+        ControlSize::Large => 30.0,
+    }
+}
+
 /// A ghost icon button: no fill at rest, the muted band on hover, the ring
 /// under the keyboard. The square edge is the icon's own shape, the control
 /// radius rounds it.
 pub fn icon_button(props: IconButtonProps) -> impl IntoElement {
     let t = theme();
-    let pad = (size_pad_x(props.size) + size_pad_y(props.size)) / 2.0;
+    let side = edge(props.size);
+    let icon_size = match props.size {
+        ControlSize::Compact => data::ICON_SM,
+        ControlSize::Regular => data::ICON_MD,
+        ControlSize::Large => data::ICON_LG,
+    };
     let mut inner = view()
         .role(AccessibilityRole::Button)
         .optional_label(Some(props.accessibility_label.clone()))
@@ -80,9 +117,9 @@ pub fn icon_button(props: IconButtonProps) -> impl IntoElement {
         .flex_row()
         .items_center()
         .justify_center()
+        .w(px(side))
+        .h(px(side))
         .rounded(px(data::CONTROL_RADIUS))
-        .px(px(pad))
-        .py(px(pad))
         .bg(AdaptiveColor::TRANSPARENT)
         .text_size(px(data::TYPE_CONTROL))
         .text_color(t.muted_foreground)
@@ -93,7 +130,10 @@ pub fn icon_button(props: IconButtonProps) -> impl IntoElement {
     if let Some(press) = props.on_press {
         inner = inner.on_press(press);
     }
-    inner = inner.child(text(move || props.icon.clone()));
+    inner = match props.glyph {
+        Glyph::Icon(name) => inner.child(super::icon::icon_current(name, icon_size)),
+        Glyph::Text(mark) => inner.child(text(move || mark.clone())),
+    };
     if let Some(id) = props.test_id {
         inner = inner.test_id(&id);
     }

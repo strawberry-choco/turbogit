@@ -141,20 +141,31 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
     let trigger = view()
         .flex_row()
         .items_center()
-        .gap(px(4.0))
-        .px(px(data::DENSITY_COMPACT_BUTTON_PAD_X))
-        .py(px(data::DENSITY_COMPACT_BUTTON_PAD_Y))
+        .gap(px(5.0))
+        .h(px(26.0))
+        .px(px(8.0))
         .rounded(px(data::CONTROL_RADIUS))
-        .bg(t.secondary)
+        .bg(AdaptiveColor::TRANSPARENT)
+        .hover(|s| s.bg(t.muted))
         .role(AccessibilityRole::Button)
         .label(move || SharedString::from(format!("Branch: {}", label())))
         .test_id(&test_ids::picker("trigger"))
+        .child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::Branch,
+            data::ICON_SM,
+            t.muted_foreground,
+        ))
         .child(
-            text("⑂")
-                .text_size(px(data::TYPE_CONTROL))
-                .text_color(t.muted_foreground),
+            text(move || SharedString::from(label_text()))
+                .text_size(px(data::TYPE_CONTROL + 0.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(t.foreground),
         )
-        .child(text(move || SharedString::from(label_text())).text_size(px(data::TYPE_CONTROL)));
+        .child(crate::ui::icon::icon(
+            crate::ui::icon::Icon::ChevronDown,
+            data::ICON_SM,
+            t.muted_foreground,
+        ));
     let body_handle = handle.clone();
     let open_write = open;
     let popover_handle = handle.clone();

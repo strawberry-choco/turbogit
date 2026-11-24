@@ -313,12 +313,12 @@ fn incoming_check_is_a_toggle_with_an_interval_selector() {
 }
 
 #[test]
-fn the_route_settings_screen_paints_the_same_categories() {
+fn the_settings_dialog_paints_the_same_categories() {
     let project = Project::new();
     let (mut app, _repo) = shell(&project);
     app.first_render().unwrap();
-    app.press("id:toolbar:n6-settings").unwrap();
-    app.wait_for("id:route:settings").unwrap();
+    app.press("id:toolbar:settings").unwrap();
+    app.wait_for("id:dialog:settings").unwrap();
     app.wait_for("id:settings:body").unwrap();
     assert!(
         app.screen().selected("id:tab:Commit").unwrap(),

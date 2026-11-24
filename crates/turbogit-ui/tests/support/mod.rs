@@ -383,6 +383,19 @@ pub fn open_group(app: &mut Headless, name: &str) {
         .expect("the group stays");
 }
 
+/// Runs the palette command `label`: the entry point the shell's action
+/// band used to carry for the N5/N6 surfaces.
+pub fn open_surface(app: &mut Headless, label: &str) {
+    app.press("id:toolbar:palette")
+        .expect("the palette trigger");
+    app.wait_for("id:dialog:command-palette")
+        .expect("the palette opens");
+    app.type_text("label:Search actions", label)
+        .expect("the query types");
+    app.press(&format!("text:{label}"))
+        .expect("the command runs");
+}
+
 /// The staged patch of `repo`, as `git diff --cached` prints it.
 pub fn staged_patch(repo: &Path) -> String {
     git(repo, &["diff", "--cached"])
