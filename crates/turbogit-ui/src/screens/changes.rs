@@ -175,13 +175,14 @@ struct FileRow {
     location: String,
 }
 
-/// The held row set the list binds to; equal windows compare by allocation.
+/// The held row set the list binds to: equal windows are equal rows, so the
+/// idle tick that rebuilds them every 120ms does not rebuild the list.
 #[derive(Clone)]
 struct ChangesWindow(Arc<Vec<RowData>>);
 
 impl PartialEq for ChangesWindow {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
     }
 }
 
@@ -303,6 +304,11 @@ pub fn changes_screen(handle: AppHandle) -> impl IntoElement {
     let tick_window = window;
     set_interval(Duration::from_millis(TICK_MS), move || {
         let rows = tick.read(rows_of);
+        // The fresh allocation is harmless only because a window compares by
+        // its rows. Compare by allocation instead and every tick rebuilds the
+        // list's cells, and the host loses the native view of the cell it is
+        // rebuilding: the first row, a lone repository's group, stopped taking
+        // presses and stopped reaching the accessibility tree.
         tick_window.set(ChangesWindow(Arc::new(rows)));
     });
 
@@ -1023,4 +1029,40 @@ pub fn preview_nav(handle: &AppHandle, change: &ChangeRef, delta: isize) {
 /// The toast a failed discard or stage lands; the shared severity map.
 pub fn toast_color(kind: ToastKind) -> AdaptiveColor {
     crate::ui::toast::kind_color(kind)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(expanded: bool) -> Vec<RowData> {
+        vec![RowData::Group {
+            root_name: "alpha".to_owned(),
+            branch: "main".to_owned(),
+            count: 1,
+            expanded,
+        }]
+    }
+
+    /// The tick hands the list a window it rebuilt from scratch; a window
+    /// whose rows did not change has to compare equal to the one on screen,
+    /// or the list re-makes its cells on every tick and the host loses the
+    /// first row's native view.
+    #[test]
+    fn a_window_rebuilt_from_the_same_rows_compares_equal() {
+        let held = ChangesWindow(Arc::new(group(false)));
+        let ticked = ChangesWindow(Arc::new(group(false)));
+        assert!(!Arc::ptr_eq(&held.0, &ticked.0), "one allocation each");
+        assert!(
+            held == ticked,
+            "the tick's window matches the one on screen"
+        );
+    }
+
+    #[test]
+    fn a_window_whose_rows_moved_compares_unequal() {
+        let collapsed = ChangesWindow(Arc::new(group(false)));
+        let expanded = ChangesWindow(Arc::new(group(true)));
+        assert!(collapsed != expanded, "the group opened");
+    }
 }
