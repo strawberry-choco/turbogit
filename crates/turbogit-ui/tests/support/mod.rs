@@ -383,16 +383,21 @@ pub fn open_group(app: &mut Headless, name: &str) {
         .expect("the group stays");
 }
 
-/// Runs the palette command `label`: the entry point the shell's action
-/// band used to carry for the N5/N6 surfaces.
+/// Opens the surface whose palette command reads `label`: the entry point the
+/// shell's action band used to carry for the N5/N6 surfaces.
+///
+/// The press is the row's label, not a test id: nsh-base's command renders the
+/// dialog's rows itself and gives them none. It is scoped to the dialog because
+/// the same label names a control behind it (`Blame` is also the changes pane's
+/// footer), and a press on two matches fails.
 pub fn open_surface(app: &mut Headless, label: &str) {
     app.press("id:toolbar:palette")
         .expect("the palette trigger");
     app.wait_for("id:dialog:command-palette")
         .expect("the palette opens");
-    app.type_text("label:Search actions", label)
+    app.type_text("id:palette:search", label)
         .expect("the query types");
-    app.press(&format!("text:{label}"))
+    app.press(&format!("id:dialog:command-palette >> text:{label}"))
         .expect("the command runs");
 }
 
