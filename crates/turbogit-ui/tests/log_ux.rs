@@ -222,3 +222,115 @@ fn the_details_pane_names_its_empty_state_and_the_files_pane_theirs() {
             .shows("Select a commit to see its changed files.")
     );
 }
+
+/// A painted frame, in the root's points.
+struct Frame {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+fn frame(app: &support::Mounted, id: &str) -> Frame {
+    let node = app
+        .screen()
+        .layout_nodes()
+        .into_iter()
+        .find(|node| node.test_id.as_deref() == Some(id))
+        .unwrap_or_else(|| panic!("{id} paints"));
+    Frame {
+        x: node.bounds.origin.x.0,
+        y: node.bounds.origin.y.0,
+        w: node.bounds.size.width.0,
+        h: node.bounds.size.height.0,
+    }
+}
+
+fn title_x(app: &support::Mounted, title: &str) -> f32 {
+    app.screen()
+        .layout_nodes()
+        .into_iter()
+        .find(|node| {
+            node.text
+                .as_ref()
+                .is_some_and(|text| text.text.visible_text() == title)
+        })
+        .unwrap_or_else(|| panic!("the {title} title paints"))
+        .bounds
+        .origin
+        .x
+        .0
+}
+
+/// Every log section is a surface on the background, never a slice of one
+/// band: the three columns part by the same gutter the Changes tab keeps
+/// between its cards, and the resizable handle sits in that gap.
+#[test]
+fn the_log_columns_part_by_background_gutters() {
+    let project = Project::new();
+    let repo = log_repo(project.path(), "alpha", 3);
+    let app = log_app(&project, &[repo]);
+
+    let gutter = turbogit_ui::theme::PANEL_PADDING;
+    let (branches, commits, files) = (
+        frame(&app, "log:branches-pane"),
+        frame(&app, "log:commits-pane"),
+        frame(&app, "log:files-pane"),
+    );
+    for (left, right) in [(&branches, &commits), (&commits, &files)] {
+        let between = right.x - (left.x + left.w);
+        assert!(
+            (between - gutter).abs() <= 1.0,
+            "the columns part by the background gutter: {between}"
+        );
+    }
+    let (from_left, from_right) = (
+        branches.x,
+        test_support::nsh_harness::VIEWPORT.0 - (files.x + files.w),
+    );
+    assert!(
+        (from_left - gutter).abs() <= 1.0 && (from_right - gutter).abs() <= 1.0,
+        "the outer columns part from the route edges by the gutter: {from_left} and {from_right}"
+    );
+}
+
+/// The Changes tab's rhythm inside the right column: its two surfaces part by
+/// the panel gutter, and each title sits one gutter inside the surface it
+/// names. The pane header owns that gutter, so the padding lives on the
+/// section's body and never above its header.
+#[test]
+fn the_right_column_sections_share_one_gutter_and_one_gap() {
+    let project = Project::new();
+    let repo = log_repo(project.path(), "alpha", 3);
+    let app = log_app(&project, &[repo]);
+
+    let gutter = turbogit_ui::theme::PANEL_PADDING;
+    let (files, details) = (
+        frame(&app, "log:files-pane"),
+        frame(&app, "log:details-pane"),
+    );
+    let gap = details.y - (files.y + files.h);
+    assert!(
+        (gap - gutter).abs() <= 1.0,
+        "the sections part by the background gutter: {gap}"
+    );
+
+    let (files_title, details_title) = (
+        title_x(&app, "Changed files"),
+        title_x(&app, "Commit details"),
+    );
+    assert!(
+        (files_title - (files.x + gutter)).abs() <= 1.0,
+        "the files title sits one gutter inside its surface: {files_title} against {}",
+        files.x
+    );
+    assert!(
+        (details_title - files_title).abs() <= 1.0,
+        "the two titles share one gutter: {files_title} against {details_title}"
+    );
+    let body_x = title_x(&app, "Select a commit…");
+    assert!(
+        (body_x - details_title).abs() <= 1.0,
+        "the body under a header keeps the header's gutter: {body_x} against {details_title}"
+    );
+}

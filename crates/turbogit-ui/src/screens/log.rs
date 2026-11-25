@@ -143,6 +143,12 @@ pub fn log_screen(handle: AppHandle, _switcher: TabSwitcher) -> impl IntoElement
     let commits_display = display;
     let commits_filters = filters;
     let commits_list = list;
+    let commits = commits_pane(
+        commits_handle,
+        commits_display,
+        commits_filters,
+        commits_list,
+    );
 
     view()
         .flex_1()
@@ -150,31 +156,34 @@ pub fn log_screen(handle: AppHandle, _switcher: TabSwitcher) -> impl IntoElement
         .bg(t.background)
         .test_id(&test_ids::route("log"))
         .child(
-            nsh_base::h_resizable()
-                .flex_1()
-                .child(
-                    nsh_base::resizable_panel()
-                        .size_range(Points(BRANCHES_MIN_WIDTH)..Points(BRANCHES_WIDTH))
-                        .child(branches_pane(branches_handle).into_element()),
-                )
-                .child(
-                    nsh_base::resizable_panel().child(
-                        commits_pane(
-                            commits_handle,
-                            commits_display,
-                            commits_filters,
-                            commits_list,
-                        )
-                        .into_element(),
+            view().flex_1().p(px(COLUMN_GUTTER)).child(
+                nsh_base::h_resizable()
+                    .flex_1()
+                    .child(
+                        nsh_base::resizable_panel()
+                            .size_range(Points(BRANCHES_MIN_WIDTH)..Points(BRANCHES_WIDTH))
+                            .child(column(branches_pane(branches_handle))),
+                    )
+                    .child(nsh_base::resizable_panel().child(column(commits)))
+                    .child(
+                        nsh_base::resizable_panel()
+                            .size_range(Points(FILES_MIN_WIDTH)..Points(FILES_WIDTH))
+                            .child(column(right_column(right_handle))),
                     ),
-                )
-                .child(
-                    nsh_base::resizable_panel()
-                        .size_range(Points(FILES_MIN_WIDTH)..Points(FILES_WIDTH))
-                        .child(right_column(right_handle).into_element()),
-                ),
+            ),
         )
         .child(filter_bar(bar_handle, bar_filters))
+}
+
+/// Half the gutter between two columns. Each column contributes one side, so
+/// two neighbours part by `PANEL_PADDING` of background, and a column parts
+/// from the route edge by the same. The resizable handle sits in that gap.
+const COLUMN_GUTTER: f32 = data::PANEL_PADDING / 2.0;
+
+/// One log column: its surface inset into the resizable panel, so the sections
+/// sit on the background as separate surfaces instead of sharing a hairline.
+fn column(pane: impl IntoElement) -> impl IntoElement {
+    view().flex_1().p(px(COLUMN_GUTTER)).child(pane)
 }
 
 /// The reads the commits pane's listing needs, the egui `ensure_log_data`.
@@ -465,8 +474,8 @@ fn commits_pane(
         .flex_1()
         .flex_col()
         .bg(t.card)
-        .border_x(px(1.0))
-        .border_color(data::DIVIDER)
+        .rounded(px(data::CARD_RADIUS))
+        .test_id(&test_ids::log("commits-pane"))
         .child(pane_header(PaneHeaderProps::new("Commits")))
         .child(scope_chips(chips_handle, chips_filters))
         .child(
@@ -1650,6 +1659,8 @@ fn branches_pane(handle: AppHandle) -> impl IntoElement {
         .flex_1()
         .flex_col()
         .bg(t.card)
+        .rounded(px(data::CARD_RADIUS))
+        .test_id(&test_ids::log("branches-pane"))
         .child(pane_header(PaneHeaderProps::new("Branches")))
         .child(
             view()
@@ -1831,21 +1842,18 @@ fn select_branch_row(state: &mut AppState, id: &str) {
     state.ui.log_selected_file = None;
 }
 
-/// The right column: the changed files above, the commit details below.
+/// The right column: the changed files above, the commit details below, as
+/// two surfaces parted by the panel gutter (not a hairline: each section's
+/// pane header already draws its own).
 fn right_column(handle: AppHandle) -> impl IntoElement {
     let files_handle = handle.clone();
     let details_handle = handle.clone();
     view()
         .flex_1()
         .flex_col()
-        .child(view().flex_1().child(files_pane(files_handle)))
-        .child(
-            view()
-                .h(px(280.0))
-                .border_t(px(1.0))
-                .border_color(data::DIVIDER)
-                .child(details_pane(details_handle)),
-        )
+        .gap(px(data::PANEL_PADDING))
+        .child(files_pane(files_handle))
+        .child(view().h(px(280.0)).child(details_pane(details_handle)))
 }
 
 /// The changed-files pane: the selected commit's files with their status
@@ -1864,6 +1872,8 @@ fn files_pane(handle: AppHandle) -> impl IntoElement {
         .flex_1()
         .flex_col()
         .bg(t.card)
+        .rounded(px(data::CARD_RADIUS))
+        .test_id(&test_ids::log("files-pane"))
         .child(pane_header(PaneHeaderProps::new("Changed files").count_of(
             move || {
                 count_handle.read(|s| {
@@ -1905,6 +1915,7 @@ fn files_pane(handle: AppHandle) -> impl IntoElement {
                 text("Select a commit to see its changed files.")
                     .text_size(px(data::TYPE_BODY))
                     .text_color(pane_muted_ink)
+                    .p(px(data::PANEL_PADDING))
             },
         ))
         .child(each(
@@ -1986,6 +1997,7 @@ fn files_pane(handle: AppHandle) -> impl IntoElement {
                 text("No changed files.")
                     .text_size(px(data::TYPE_BODY))
                     .text_color(pane_muted_ink)
+                    .p(px(data::PANEL_PADDING))
             },
         ))
 }
@@ -2197,39 +2209,45 @@ fn details_pane(handle: AppHandle) -> impl IntoElement {
     view()
         .flex_1()
         .flex_col()
-        .gap(px(data::SPACING_Y))
         .bg(t.card)
-        .p(px(8.0))
+        .rounded(px(data::CARD_RADIUS))
+        .test_id(&test_ids::log("details-pane"))
         .child(pane_header(PaneHeaderProps::new("Commit details")))
-        .child(when(
-            {
-                let selection_handle = selection_handle;
-                move || selection_handle.read(|s| s.ui.selected_commit.is_none())
-            },
-            move || {
-                text("Select a commit…")
-                    .text_size(px(data::TYPE_CONTROL))
-                    .text_color(detail_muted_ink)
-            },
-        ))
         .child(
-            text(move || {
-                subject_handle.read(|s| {
-                    s.ui.selected_commit
-                        .as_ref()
-                        .and_then(|(root, cid)| find_commit(s, root, cid))
-                        .map(|commit| commit.subject().to_string())
-                        .unwrap_or_default()
-                })
-            })
-            .text_size(px(data::TYPE_DETAIL_TITLE))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(detail_ink),
-        )
-        .child(
-            text(move || {
-                facts_handle.read(|s| {
-                    s.ui.selected_commit
+            view()
+                .flex_col()
+                .gap(px(data::SPACING_Y))
+                .px(px(data::PANEL_PADDING))
+                .pt(px(data::SPACING_Y))
+                .child(when(
+                    {
+                        let selection_handle = selection_handle;
+                        move || selection_handle.read(|s| s.ui.selected_commit.is_none())
+                    },
+                    move || {
+                        text("Select a commit…")
+                            .text_size(px(data::TYPE_CONTROL))
+                            .text_color(detail_muted_ink)
+                    },
+                ))
+                .child(
+                    text(move || {
+                        subject_handle.read(|s| {
+                            s.ui.selected_commit
+                                .as_ref()
+                                .and_then(|(root, cid)| find_commit(s, root, cid))
+                                .map(|commit| commit.subject().to_string())
+                                .unwrap_or_default()
+                        })
+                    })
+                    .text_size(px(data::TYPE_DETAIL_TITLE))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(detail_ink),
+                )
+                .child(
+                    text(move || {
+                        facts_handle.read(|s| {
+                            s.ui.selected_commit
                         .as_ref()
                         .and_then(|(root, cid)| find_commit(s, root, cid))
                         .map(|commit| {
@@ -2254,81 +2272,85 @@ fn details_pane(handle: AppHandle) -> impl IntoElement {
                             )
                         })
                         .unwrap_or_default()
-                })
-            })
-            .text_size(px(data::TYPE_BODY))
-            .text_color(t.card_foreground),
-        )
-        .child(
-            text(move || {
-                churn_handle.read(|s| {
-                    s.ui.selected_commit
-                        .as_ref()
-                        .and_then(|(root, cid)| s.caches.file_stats_for(root, cid))
-                        .map(|stats| {
-                            let added: usize = stats.iter().filter_map(|f| f.insertions).sum();
-                            let removed: usize = stats.iter().filter_map(|f| f.deletions).sum();
-                            format!("+{added} −{removed}")
                         })
-                        .unwrap_or_default()
-                })
-            })
-            .text_size(px(data::TYPE_CONTROL))
-            .text_color(data::STATE_SUCCESS)
-            .test_id(&test_ids::log("churn")),
-        )
-        .child(
-            text(move || {
-                body_handle.read(|s| {
-                    s.ui.selected_commit
-                        .as_ref()
-                        .and_then(|(root, cid)| find_commit(s, root, cid))
-                        .map(|commit| {
-                            commit
-                                .message
-                                .lines()
-                                .skip(1)
-                                .filter(|line| !line.trim().is_empty())
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default()
-                })
-            })
-            .text_size(px(data::TYPE_BODY))
-            .text_color(detail_ink),
-        )
-        .child(when(
-            move || {
-                parent_cond.read(|s| {
-                    s.ui.selected_commit
-                        .as_ref()
-                        .and_then(|(root, cid)| find_commit(s, root, cid))
-                        .is_some_and(|commit| !commit.parents.is_empty())
-                })
-            },
-            move || {
-                let parent_handle = parent_press.clone();
-                button(
-                    ButtonProps::new("Select parent")
-                        .variant(ButtonVariant::Secondary)
-                        .test_id(&test_ids::log("select-parent"))
-                        .on_press(move || {
-                            parent_handle.update(|s| {
-                                if let Some((root, cid)) = s.ui.selected_commit.clone()
-                                    && let Some(parent) = find_commit(s, &root, &cid)
-                                        .and_then(|c| c.parents.first().cloned())
-                                {
-                                    s.ui.selected_commit = Some((root.clone(), parent.clone()));
-                                    s.ui.log_selected_file = None;
-                                    s.ui.log_scroll_to = Some(parent);
-                                }
-                            });
-                        }),
+                    })
+                    .text_size(px(data::TYPE_BODY))
+                    .text_color(t.card_foreground),
                 )
-                .into_element()
-            },
-        ))
+                .child(
+                    text(move || {
+                        churn_handle.read(|s| {
+                            s.ui.selected_commit
+                                .as_ref()
+                                .and_then(|(root, cid)| s.caches.file_stats_for(root, cid))
+                                .map(|stats| {
+                                    let added: usize =
+                                        stats.iter().filter_map(|f| f.insertions).sum();
+                                    let removed: usize =
+                                        stats.iter().filter_map(|f| f.deletions).sum();
+                                    format!("+{added} −{removed}")
+                                })
+                                .unwrap_or_default()
+                        })
+                    })
+                    .text_size(px(data::TYPE_CONTROL))
+                    .text_color(data::STATE_SUCCESS)
+                    .test_id(&test_ids::log("churn")),
+                )
+                .child(
+                    text(move || {
+                        body_handle.read(|s| {
+                            s.ui.selected_commit
+                                .as_ref()
+                                .and_then(|(root, cid)| find_commit(s, root, cid))
+                                .map(|commit| {
+                                    commit
+                                        .message
+                                        .lines()
+                                        .skip(1)
+                                        .filter(|line| !line.trim().is_empty())
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                })
+                                .unwrap_or_default()
+                        })
+                    })
+                    .text_size(px(data::TYPE_BODY))
+                    .text_color(detail_ink),
+                )
+                .child(when(
+                    move || {
+                        parent_cond.read(|s| {
+                            s.ui.selected_commit
+                                .as_ref()
+                                .and_then(|(root, cid)| find_commit(s, root, cid))
+                                .is_some_and(|commit| !commit.parents.is_empty())
+                        })
+                    },
+                    move || {
+                        let parent_handle = parent_press.clone();
+                        button(
+                            ButtonProps::new("Select parent")
+                                .variant(ButtonVariant::Secondary)
+                                .test_id(&test_ids::log("select-parent"))
+                                .on_press(move || {
+                                    parent_handle.update(|s| {
+                                        if let Some((root, cid)) = s.ui.selected_commit.clone()
+                                            && let Some(parent) = find_commit(s, &root, &cid)
+                                                .and_then(|c| c.parents.first().cloned())
+                                        {
+                                            s.ui.selected_commit =
+                                                Some((root.clone(), parent.clone()));
+                                            s.ui.log_selected_file = None;
+                                            s.ui.log_scroll_to = Some(parent);
+                                        }
+                                    });
+                                }),
+                        )
+                        .into_element()
+                    },
+                )),
+        )
 }
 
 /// Opens the commit context menu at the pointer: the facts the gating
