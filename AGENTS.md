@@ -36,8 +36,7 @@ TurboGit is a Cargo workspace whose presentation layer is Native Shell (nsh)
 - `src/`, composition root only: `main.rs` launches `turbogit_ui::launch`;
   `lib.rs` carries no code.
 - `tests/`, the root's cross-layer suites (`patch_value`, `port_discipline`).
-- `docs/`, product spec, ADRs, architecture notes.
-- `research/`, competitive research and UX findings.
+- `docs/`, ADRs, architecture notes, and the design system's roles.
 
 Dependencies flow strictly downward: domain ← engine-api ← {engine, services}
 ← app ← ui, with the root composition root above ui. Every shared version lives

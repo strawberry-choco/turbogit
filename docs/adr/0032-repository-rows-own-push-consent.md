@@ -57,11 +57,11 @@ owns its own yes or no.
   `push_roots` used `root.current_branch`, so the merged batch path would otherwise silently push
   HEAD instead of what was clicked. The request also stops cloning whole `Root` snapshots.
 - **The dialog no longer opens with every registered repository consented.** `PushScope::default()`
-  is `All`, so four of five paths that opened it had been consenting everything, and
-  `docs/spec/rebased-parity.md` §5.6 recorded a ThisRepo default that did not exist. A developer who
-  always pushes all seven repositories now ticks seven boxes. That is the reference's rule and the
-  direction the complaint pointed, but it is a real ergonomic loss on the push-everything path, and
-  the reference's own mitigation is an advanced setting this app does not have.
+  is `All`, so four of five paths that opened it had been consenting everything, and the retired
+  parity spec's §5.6 recorded a ThisRepo default that did not exist. A developer who always pushes
+  all seven repositories now ticks seven boxes. That is the reference's rule and the direction the
+  complaint pointed, but it is a real ergonomic loss on the push-everything path, and the
+  reference's own mitigation is an advanced setting this app does not have.
 - A first-push repository lists **zero** commits, because `outgoing_per_root` answers empty when
   there is no upstream to be ahead of. In a row-based model that would silently drop precisely the
   repository most in need of pushing, so the row says `first push — its commits cannot be listed`
@@ -69,9 +69,9 @@ owns its own yes or no.
 - Force push stays an options checkbox for now; the reference's item on a `Push ▾` split primary is
   **deferred, not rejected**. What did change is where protection is enforced: it used to disable
   the whole primary button, and it now refuses force per repository at the engine while plain
-  `Push` stays live. `docs/spec/rebased-parity.md` §4.6 recorded the reference as making force
+  `Push` stays live. The retired parity spec's §4.6 recorded the reference as making force
   "absent" on a protected branch; the shipped product keeps it **visible and disabled** with a
-  tooltip naming the setting, and the spec is corrected rather than the code following the claim.
+  tooltip naming the setting, and the spec was corrected rather than the code following the claim.
 - **Push disables on an empty payload, not an empty consent set.** A consented row whose obstacle
   blocks the push never reaches `PushPlan::targets`, so the first rule would still have let the
   dialog dispatch a batch of zero and report it a success — the original defect, one layer down.

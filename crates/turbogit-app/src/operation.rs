@@ -194,7 +194,7 @@ pub struct PushRequest {
     pub selected_oldest: Option<String>,
     /// Consent rows that never reach git, each with the reason it refused. The
     /// reference's rule for these is **skip and name, do not fail** — the same
-    /// theory of failure `docs/spec/rebased-parity.md` §4.6 records for the sync
+    /// theory of failure the retired parity spec's §4.6 records for the sync
     /// family and deliberately does NOT unify with the branch-rollback family,
     /// where one failed root fails the run. So a row here adds a sentence to the
     /// outcome and changes nothing about the batch's success or its order.

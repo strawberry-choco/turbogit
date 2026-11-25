@@ -244,12 +244,11 @@ is the other wrong answer. A third option, reporting the unborn repository as an
 empty diff, only hides the question.
 
 This reverses what this record first carried, and it also corrects the citation
-used to justify it. The spec row
+used to justify it. The retired parity spec's row
 `an_unborn_repository_reads_as_nothing_committed_rather_than_as_an_error`
-(`docs/spec/rebased-parity.md:872`) is a commit-listing row: it
-governs how the log reads an unborn HEAD, which `cli.rs` and `git2_exec.rs` answer
-as no history, and it never governed the diff read. Nothing in the spec asked the
-preview to answer on an unborn branch.
+(§4.7) is a commit-listing row: it governs how the log reads an unborn HEAD,
+which `cli.rs` and `git2_exec.rs` answer as no history, and it never governed the
+diff read. Nothing in that spec asked the preview to answer on an unborn branch.
 
 Pinned by `crates/turbogit-engine/tests/unborn_combined_diff.rs`, which holds the
 refusal, the exact sentence, the agreement between both adapters, the committed
