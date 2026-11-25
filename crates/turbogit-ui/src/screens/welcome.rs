@@ -641,42 +641,54 @@ fn getting_started() -> impl IntoElement {
     )
 }
 
-/// The changelog modal the hero's What's new opens.
+/// The changelog modal the hero's What's new opens. It only reports, so it
+/// carries one `Close`, in the cancel slot the palette's report dialogs use:
+/// that is the slot Escape and the outside press dismiss through, and a
+/// footer button with no handler is a dead control.
 fn changelog_layer(open: Signal<bool>) -> impl IntoElement {
-    let t = theme();
     when(
         move || open.get(),
         move || {
-            let close_for_action = open;
+            let dismiss = open;
             dialog(
                 DialogProps::new("whats-new", "What's New")
-                    .action("Close")
-                    .on_action(move || close_for_action.set(false))
-                    .child(
-                        view().flex_col().gap(px(data::SPACING_Y)).children(
-                            CHANGELOG
-                                .iter()
-                                .map(|(version, note)| {
-                                    view()
-                                        .flex_row()
-                                        .gap(px(data::SPACING_X))
-                                        .child(
-                                            text(*version)
-                                                .text_size(px(data::TYPE_BODY))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(t.primary),
-                                        )
-                                        .child(
-                                            text(*note)
-                                                .text_size(px(data::TYPE_BODY))
-                                                .text_color(t.card_foreground),
-                                        )
-                                        .into_element()
-                                })
-                                .collect::<Vec<_>>(),
-                        ),
-                    ),
+                    .cancel_label("Close")
+                    .hide_action(true)
+                    .on_cancel(move || dismiss.set(false))
+                    .child(changelog_body()),
             )
         },
+    )
+}
+
+/// One row per note: the release on the left, the sentence in the width
+/// that is left. A note without that width lays out at its full length and
+/// paints past the card's edge, over the page behind the dialog.
+fn changelog_body() -> impl IntoElement {
+    let t = theme();
+    view().flex_col().gap(px(data::SPACING_Y)).children(
+        CHANGELOG
+            .iter()
+            .map(|(version, note)| {
+                view()
+                    .flex_row()
+                    .items_start()
+                    .gap(px(data::SPACING_X))
+                    .child(
+                        text(*version)
+                            .text_size(px(data::TYPE_BODY))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.primary),
+                    )
+                    .child(
+                        text(*note)
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(data::TYPE_BODY))
+                            .text_color(t.card_foreground),
+                    )
+                    .into_element()
+            })
+            .collect::<Vec<_>>(),
     )
 }

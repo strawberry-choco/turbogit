@@ -48,6 +48,9 @@ pub struct DialogProps {
     /// True styles the action destructive (a discard, a delete).
     pub destructive: bool,
     pub on_action: Option<std::rc::Rc<dyn Fn() + 'static>>,
+    /// The one handler behind every dismissal: the cancel button, Escape,
+    /// and the outside press. A dialog that shows its footer must set it,
+    /// or those three are dead controls.
     pub on_cancel: Option<std::rc::Rc<dyn Fn() + 'static>>,
     /// Extra footer verbs; non-empty replaces the single action, and the
     /// cancel moves last so a confirm reads in prompt order.

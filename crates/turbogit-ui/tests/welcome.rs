@@ -459,9 +459,64 @@ fn hero_whats_new_opens_and_closes_the_changelog_overlay() {
     app.press("id:welcome:whats-new").unwrap();
     app.wait_for("text:What's New").unwrap();
 
-    app.press("id:dialog:whats-new:action").unwrap();
+    app.press("id:dialog:whats-new:cancel").unwrap();
     app.wait_for_gone("text:What's New", std::time::Duration::from_secs(5))
         .unwrap();
+
+    // The dialog only reports: Escape dismisses it, the way it dismisses
+    // every other dialog in the app.
+    app.press("id:welcome:whats-new").unwrap();
+    app.wait_for("text:What's New").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("text:What's New", std::time::Duration::from_secs(5))
+        .unwrap();
+}
+
+/// A note is a sentence, not a label: it takes the width the version leaves
+/// and wraps there. Without that it lays out at its full length and paints
+/// past the card's edge, over the page behind the dialog.
+#[test]
+fn the_changelog_notes_stay_inside_the_card() {
+    let (mut app, _config) = support::welcome_app_standalone();
+    app.first_render().unwrap();
+    app.press("id:welcome:whats-new").unwrap();
+    app.wait_for("id:dialog:whats-new").unwrap();
+
+    let nodes = app.screen().layout_nodes();
+    let card = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("dialog:whats-new"))
+        .expect("the changelog card paints");
+    let right = card.bounds.origin.x.0 + card.bounds.size.width.0;
+    let parents: std::collections::HashMap<_, _> =
+        nodes.iter().map(|node| (node.id, node.parent)).collect();
+    let inside_card = |mut id| {
+        while let Some(parent) = parents.get(&id) {
+            if *parent == card.id {
+                return true;
+            }
+            id = *parent;
+        }
+        false
+    };
+
+    let mut notes = 0;
+    for node in &nodes {
+        let Some(text) = &node.text else { continue };
+        if !inside_card(node.id) {
+            continue;
+        }
+        let painted = text.text.text.as_str();
+        if painted.starts_with('•') {
+            notes += 1;
+        }
+        let reaches = node.bounds.origin.x.0 + node.bounds.size.width.0;
+        assert!(
+            reaches <= right + 1.0,
+            "`{painted}` reaches {reaches}, past the card's {right}"
+        );
+    }
+    assert_eq!(notes, 4, "every changelog note paints");
 }
 
 #[test]
