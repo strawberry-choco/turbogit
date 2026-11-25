@@ -20,6 +20,12 @@ pub enum ButtonVariant {
     Ghost,
     /// The destructive fill, white ink.
     Danger,
+    /// The destructive verb that must not shout: no fill at rest, danger
+    /// ink, the muted band answers the pointer. A list of twenty rows can
+    /// afford one of these per row; it cannot afford twenty [`Danger`] fills.
+    ///
+    /// [`Danger`]: ButtonVariant::Danger
+    DangerGhost,
 }
 
 /// The props of [`button`].
@@ -119,6 +125,7 @@ fn variant_colors(variant: ButtonVariant) -> (AdaptiveColor, AdaptiveColor) {
         ButtonVariant::Secondary => (t.secondary, t.secondary_foreground),
         ButtonVariant::Ghost => (AdaptiveColor::TRANSPARENT, t.foreground),
         ButtonVariant::Danger => (t.destructive, t.primary_foreground),
+        ButtonVariant::DangerGhost => (AdaptiveColor::TRANSPARENT, t.destructive),
     }
 }
 
@@ -130,6 +137,7 @@ fn variant_hover(variant: ButtonVariant) -> AdaptiveColor {
         ButtonVariant::Secondary => t.muted,
         ButtonVariant::Ghost => t.muted,
         ButtonVariant::Danger => t.destructive.map(|c| c.darken(0.12)),
+        ButtonVariant::DangerGhost => t.muted,
     }
 }
 
@@ -141,6 +149,7 @@ fn variant_pressed(variant: ButtonVariant) -> AdaptiveColor {
         ButtonVariant::Secondary => t.accent,
         ButtonVariant::Ghost => t.accent,
         ButtonVariant::Danger => t.destructive.map(|c| c.darken(0.24)),
+        ButtonVariant::DangerGhost => t.accent,
     }
 }
 

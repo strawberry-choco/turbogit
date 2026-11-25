@@ -220,6 +220,32 @@ fn the_stash_pane_lists_the_roots_entries() {
 }
 
 #[test]
+fn the_stash_pane_states_keep_and_drop_once() {
+    let project = Project::new();
+    let repo = repo(&project, "alpha");
+    park_edit(&repo, "half-done", "half-done work\n");
+    let mut app = stash_app(&project, std::slice::from_ref(&repo));
+    app.wait_for("text:stash@{0}")
+        .expect("the entry paints before its verbs are read");
+
+    assert!(
+        in_pane(&app, "Apply keeps the entry"),
+        "the header states the keep/drop rule once: {:?}",
+        app.screen().texts()
+    );
+    assert!(
+        !in_pane(&app, "Apply Stash"),
+        "and no row repeats it: {:?}",
+        app.screen().texts()
+    );
+    assert!(
+        app.screen().texts().contains(&"Pop"),
+        "the row's middle verb is the bare word: {:?}",
+        app.screen().texts()
+    );
+}
+
+#[test]
 fn apply_stash_puts_the_work_back_and_keeps_the_entry() {
     let project = Project::new();
     let repo = repo(&project, "alpha");

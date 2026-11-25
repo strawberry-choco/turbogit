@@ -25,6 +25,12 @@ const SHELF_EMPTY: &str = "Nothing is shelved in this repository. Use “Shelve�
 const STASH_EMPTY: &str = "Nothing is stashed in this repository. Use “Stash…” to park every \
                           uncommitted change, in or out of this application.";
 
+/// The one place the stash row's verbs are explained. Spelled on every row,
+/// the parentheticals read as "this is what happens to my changes" — and pop
+/// keeps the changes — while pushing each message onto a second line.
+const STASH_VERB_LEGEND: &str =
+    "Apply keeps the entry · Pop applies and drops it · Delete discards the changes too";
+
 /// One shelf row and its repository.
 #[derive(Clone, Debug, PartialEq)]
 struct ShelfRow {
@@ -363,6 +369,17 @@ pub fn stash_pane(handle: AppHandle) -> impl IntoElement {
                         }),
                 )),
         ))
+        // Under the header's hairline rather than in it: the header's slot
+        // vocabulary is fixed (ADR-0027 R7), so the pane body carries this.
+        .child(
+            text(STASH_VERB_LEGEND)
+                .text_size(px(data::TYPE_CONTROL))
+                .text_color(t.muted_foreground)
+                .w_full()
+                .truncate()
+                .px(px(data::PANEL_PADDING))
+                .py(px(data::SPACING_Y)),
+        )
         .child(each(
             move || row_window.with(|rows| rows.as_slice().to_vec()),
             |row| format!("{}:{}", row.root_name, row.index),
@@ -419,7 +436,7 @@ fn stash_row_view(handle: AppHandle, row: StashRow) -> impl IntoElement {
                 .flex_1(),
         )
         .child(button(
-            ButtonProps::new("Apply Stash (keeps)")
+            ButtonProps::new("Apply")
                 .variant(ButtonVariant::Secondary)
                 .size(crate::ui::ControlSize::Compact)
                 .test_id(&test_ids::shelf(format!("apply:{index}")))
@@ -433,8 +450,8 @@ fn stash_row_view(handle: AppHandle, row: StashRow) -> impl IntoElement {
                 }),
         ))
         .child(button(
-            ButtonProps::new("Pop Stash (removes)")
-                .variant(ButtonVariant::Danger)
+            ButtonProps::new("Pop")
+                .variant(ButtonVariant::Ghost)
                 .size(crate::ui::ControlSize::Compact)
                 .test_id(&test_ids::shelf(format!("pop:{index}")))
                 .on_press(move || {
@@ -444,8 +461,8 @@ fn stash_row_view(handle: AppHandle, row: StashRow) -> impl IntoElement {
                 }),
         ))
         .child(button(
-            ButtonProps::new("Delete Stash")
-                .variant(ButtonVariant::Ghost)
+            ButtonProps::new("Delete")
+                .variant(ButtonVariant::DangerGhost)
                 .size(crate::ui::ControlSize::Compact)
                 .test_id(&test_ids::shelf(format!("delete:{index}")))
                 .on_press(move || {
