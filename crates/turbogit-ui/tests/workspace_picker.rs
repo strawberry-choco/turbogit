@@ -154,3 +154,131 @@ fn a_workspace_recent_row_announces_its_repo_count() {
     app.press("id:workspace:row:ws").unwrap();
     app.wait_for("text:2 total").unwrap();
 }
+
+const LONG_WORKSPACE: &str = "acme-platform-monorepo-with-a-very-long-name";
+
+/// Whether `id` sits inside `ancestor`: the top bar paints the open
+/// workspace's name and the changes list paints branch names, so a cell is
+/// found by where it hangs, not by its text alone.
+fn under(
+    nodes: &[nsh_testing::LayoutNode],
+    mut id: nsh_core::NodeId,
+    ancestor: nsh_core::NodeId,
+) -> bool {
+    let parents: std::collections::HashMap<_, _> =
+        nodes.iter().map(|node| (node.id, node.parent)).collect();
+    while let Some(parent) = parents.get(&id) {
+        if *parent == ancestor {
+            return true;
+        }
+        id = *parent;
+    }
+    false
+}
+
+/// The trigger shares the top bar's right-hand cluster with the branch
+/// picker, and that cluster never shrinks, so the project name is the cell
+/// that gives way: the trigger is cut at `WORKSPACE_TRIGGER_MAX_WIDTH` and the
+/// cluster stays inside the window.
+#[test]
+fn a_long_workspace_name_is_cut_in_the_trigger() {
+    let project = Project::new();
+    let repo = project.seed_repo(LONG_WORKSPACE);
+    let mut app = support::launched(&repo);
+    app.first_render().unwrap();
+
+    let nodes = app.screen().layout_nodes();
+    let trigger = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("workspace:switch"))
+        .expect("the trigger paints");
+    let viewport = test_support::nsh_harness::VIEWPORT.0;
+    let reaches = trigger.bounds.origin.x.0 + trigger.bounds.size.width.0;
+    assert!(
+        reaches <= viewport,
+        "the trigger reaches {reaches}, past the {viewport} pt window"
+    );
+    assert!(
+        trigger.bounds.size.width.0
+            <= turbogit_ui::screens::workspace_picker::WORKSPACE_TRIGGER_MAX_WIDTH + 1.0,
+        "the trigger is capped, not laid out at the folder's full width: {}",
+        trigger.bounds.size.width.0
+    );
+
+    let label = nodes
+        .iter()
+        .filter(|node| {
+            node.text
+                .as_ref()
+                .is_some_and(|t| t.text.text == LONG_WORKSPACE)
+        })
+        .find(|node| under(&nodes, node.id, trigger.id))
+        .expect("the project name paints in the trigger");
+    let text = label.text.as_ref().expect("the label is a text view");
+    assert!(
+        label.bounds.size.width.0
+            <= turbogit_ui::screens::workspace_picker::WORKSPACE_LABEL_MAX_WIDTH + 1.0,
+        "the label paints inside its cap: {}",
+        label.bounds.size.width.0
+    );
+    assert_eq!(text.text.max_lines, 1, "the label paints on one line");
+    assert_eq!(
+        text.text.ellipsize,
+        nsh_core::EllipsizeMode::Tail,
+        "the cut end carries the ellipsis"
+    );
+}
+
+/// A repository count rides inside the same capped trigger and the name's cap
+/// gives way by exactly the count's slot, so the chevron stays inside the
+/// button instead of being pushed past its clamped edge.
+#[test]
+fn a_long_workspace_name_leaves_room_for_the_repo_count() {
+    let project = Project::new();
+    let dir = project.path().join(LONG_WORKSPACE);
+    std::fs::create_dir_all(&dir).expect("the workspace dir");
+    support::seeded_repo(&dir, "alpha");
+    support::seeded_repo(&dir, "beta");
+    let mut app = support::launched(&dir);
+    app.first_render().unwrap();
+
+    let nodes = app.screen().layout_nodes();
+    let trigger = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("workspace:switch"))
+        .expect("the trigger paints");
+    let right = trigger.bounds.origin.x.0 + trigger.bounds.size.width.0;
+    assert!(
+        trigger.bounds.size.width.0
+            <= turbogit_ui::screens::workspace_picker::WORKSPACE_TRIGGER_MAX_WIDTH + 1.0,
+        "the trigger is capped: {}",
+        trigger.bounds.size.width.0
+    );
+
+    let count = nodes
+        .iter()
+        .filter(|node| node.text.as_ref().is_some_and(|t| t.text.text == "2 repos"))
+        .find(|node| under(&nodes, node.id, trigger.id))
+        .expect("the count paints in the trigger");
+    let count_reaches = count.bounds.origin.x.0 + count.bounds.size.width.0;
+    assert!(
+        count_reaches <= right,
+        "the count ends at {count_reaches}, past the trigger's {right}"
+    );
+
+    let label = nodes
+        .iter()
+        .filter(|node| {
+            node.text
+                .as_ref()
+                .is_some_and(|t| t.text.text == LONG_WORKSPACE)
+        })
+        .find(|node| under(&nodes, node.id, trigger.id))
+        .expect("the project name paints in the trigger");
+    assert!(
+        label.bounds.size.width.0
+            < turbogit_ui::screens::workspace_picker::WORKSPACE_LABEL_MAX_WIDTH,
+        "the name gives the count its share: {}",
+        label.bounds.size.width.0
+    );
+}

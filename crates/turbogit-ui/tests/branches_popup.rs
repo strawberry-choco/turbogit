@@ -150,3 +150,68 @@ fn the_footer_verbs_open_their_dialogs() {
     app.wait_for("id:dialog:new-branch")
         .expect("the New Branch dialog");
 }
+
+/// The trigger sits in the top bar's right-hand cluster, which never shrinks,
+/// so the label is the cell that gives way: the trigger is cut at
+/// `BRANCH_TRIGGER_MAX_WIDTH` and the cluster stays inside the window.
+#[test]
+fn a_long_branch_name_is_cut_in_the_trigger() {
+    const LONG_BRANCH: &str = "feature/r202610w3-johann-async-docs-extremely-long-branch-name";
+    let project = Project::new();
+    let repo = support::seeded_repo(project.path(), "alpha");
+    git(&repo, &["checkout", "-q", "-b", LONG_BRANCH]);
+    let mut app = for_roots(project.path(), std::slice::from_ref(&repo));
+    app.first_render().unwrap();
+
+    let nodes = app.screen().layout_nodes();
+    let trigger = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("picker:trigger"))
+        .expect("the picker trigger paints");
+    let viewport = test_support::nsh_harness::VIEWPORT.0;
+    let reaches = trigger.bounds.origin.x.0 + trigger.bounds.size.width.0;
+    assert!(
+        reaches <= viewport,
+        "the trigger reaches {reaches}, past the {viewport} pt window"
+    );
+    assert!(
+        trigger.bounds.size.width.0
+            <= turbogit_ui::screens::branch_picker::BRANCH_TRIGGER_MAX_WIDTH + 1.0,
+        "the trigger is capped, not laid out at the branch's full width: {}",
+        trigger.bounds.size.width.0
+    );
+
+    let parents: std::collections::HashMap<_, _> =
+        nodes.iter().map(|node| (node.id, node.parent)).collect();
+    let label = nodes
+        .iter()
+        .filter(|node| {
+            node.text
+                .as_ref()
+                .is_some_and(|t| t.text.text == LONG_BRANCH)
+        })
+        .find(|node| {
+            let mut id = node.id;
+            while let Some(parent) = parents.get(&id) {
+                if *parent == trigger.id {
+                    return true;
+                }
+                id = *parent;
+            }
+            false
+        })
+        .expect("the branch name paints in the trigger");
+    let text = label.text.as_ref().expect("the label is a text view");
+    assert!(
+        label.bounds.size.width.0
+            <= turbogit_ui::screens::branch_picker::BRANCH_LABEL_MAX_WIDTH + 1.0,
+        "the label paints inside its cap: {}",
+        label.bounds.size.width.0
+    );
+    assert_eq!(text.text.max_lines, 1, "the label paints on one line");
+    assert_eq!(
+        text.text.ellipsize,
+        nsh_core::EllipsizeMode::Tail,
+        "the cut end carries the ellipsis"
+    );
+}

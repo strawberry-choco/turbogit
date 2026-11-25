@@ -15,6 +15,27 @@ use crate::theme as data;
 use crate::ui::popover::{PopoverProps, popover};
 use crate::ui::row::{RowProps, RowState, row};
 
+/// The widest the project name may get and the widest the whole trigger may
+/// get. It shares the top bar's right-hand cluster with the branch picker, and
+/// that cluster never shrinks, so an uncapped folder name pushes the bar's
+/// controls past the window's edge; the popover lists the whole name.
+///
+/// Both caps earn their keep: a `max_w` on the text leaf shortens the run but
+/// not the flex container's intrinsic size, so the button's box would keep the
+/// name's full width; a cap on the trigger clamps the box but the label inside
+/// still lays out at its natural width. The 57 pt between them is the padding,
+/// the two 13 pt icons and the three 5 pt gaps.
+///
+/// A repository count, when the workspace holds several, is a fixed slot and
+/// the label's cap loses exactly that much, so the row's cells always add up to
+/// the trigger's cap; a count left to size itself would push the chevron out of
+/// the clamped box.
+pub const WORKSPACE_LABEL_MAX_WIDTH: f32 = 200.0;
+pub const WORKSPACE_TRIGGER_MAX_WIDTH: f32 = WORKSPACE_LABEL_MAX_WIDTH + 57.0;
+
+/// Room for `2 repos` through `100 repos` at the chip size.
+const COUNT_SLOT: f32 = 52.0;
+
 /// The switch-project trigger the shell's top bar mounts: the button named
 /// `Switch project` whose painted text is `<project> · N repos`, wrapped in
 /// the picker popover.
@@ -22,6 +43,8 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
     let t = theme();
     let trigger_handle = handle.clone();
     let count_handle = handle.clone();
+    let label_cap_handle = handle.clone();
+    let slot_handle = handle.clone();
     let open = signal(false);
     let open_for_trigger = open;
     let open_for_change = open;
@@ -37,6 +60,7 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
         .rounded(px(data::CONTROL_RADIUS))
         .bg(AdaptiveColor::TRANSPARENT)
         .hover(|s| s.bg(t.muted))
+        .max_w(px(WORKSPACE_TRIGGER_MAX_WIDTH))
         .text_size(px(data::TYPE_CONTROL + 0.5))
         .child(crate::ui::icon::icon(
             crate::ui::icon::Icon::Folder,
@@ -44,6 +68,9 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
             t.muted_foreground,
         ))
         .child(
+            // `min_w(0)` lets the name give way inside the capped trigger: a
+            // folder name has no spaces, so its min-content width is the whole
+            // name and the cell would otherwise hold its size.
             text(move || {
                 SharedString::from(
                     trigger_handle
@@ -51,7 +78,13 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
                 )
             })
             .font_weight(FontWeight::MEDIUM)
-            .text_color(t.foreground),
+            .text_color(t.foreground)
+            .truncate()
+            .min_w(px(0.0))
+            .max_w(move || {
+                let multi = label_cap_handle.read(|s| s.multi.roots.len() > 1);
+                px(WORKSPACE_LABEL_MAX_WIDTH - if multi { COUNT_SLOT } else { 0.0 })
+            }),
         )
         .child(
             // One repo is the name's own fact; the count only earns space
@@ -66,7 +99,12 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
                 }))
             })
             .text_size(px(data::TYPE_CHIP))
-            .text_color(t.muted_foreground),
+            .text_color(t.muted_foreground)
+            .flex_shrink_0()
+            .w(move || {
+                let multi = slot_handle.read(|s| s.multi.roots.len() > 1);
+                px(if multi { COUNT_SLOT } else { 0.0 })
+            }),
         )
         .child(crate::ui::icon::icon(
             crate::ui::icon::Icon::ChevronDown,

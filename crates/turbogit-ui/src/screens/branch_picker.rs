@@ -130,6 +130,21 @@ fn current_label(handle: &AppHandle) -> String {
     })
 }
 
+/// The widest the branch label may get and the widest the whole trigger may
+/// get. The trigger sits in the top bar's right-hand cluster, which never
+/// shrinks, so an uncapped name pushes the cluster past the window's edge;
+/// the popover is where the whole name is read (and the trigger's
+/// accessibility label still carries it). 220 pt is about 38 characters,
+/// roomier than a `feature/…` branch usually runs.
+///
+/// Both caps earn their keep: a `max_w` on the text leaf shortens the run but
+/// not the flex container's intrinsic size, so the button's box would keep the
+/// name's full width; a cap on the trigger clamps the box but the label inside
+/// still lays out at its natural width. The 52 pt between them is the padding,
+/// the two 13 pt icons and the two 5 pt gaps.
+pub const BRANCH_LABEL_MAX_WIDTH: f32 = 220.0;
+pub const BRANCH_TRIGGER_MAX_WIDTH: f32 = BRANCH_LABEL_MAX_WIDTH + 52.0;
+
 /// The picker's trigger and popover, the shell's top-bar control.
 pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
     let label_handle = handle.clone();
@@ -147,6 +162,7 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
         .rounded(px(data::CONTROL_RADIUS))
         .bg(AdaptiveColor::TRANSPARENT)
         .hover(|s| s.bg(t.muted))
+        .max_w(px(BRANCH_TRIGGER_MAX_WIDTH))
         .role(AccessibilityRole::Button)
         .label(move || SharedString::from(format!("Branch: {}", label())))
         .test_id(&test_ids::picker("trigger"))
@@ -156,10 +172,16 @@ pub fn picker_trigger(handle: AppHandle) -> impl IntoElement {
             t.muted_foreground,
         ))
         .child(
+            // `min_w(0)` lets the label give way inside the capped trigger: a
+            // branch name has no spaces, so its min-content width is the whole
+            // name and the cell would otherwise hold its size.
             text(move || SharedString::from(label_text()))
                 .text_size(px(data::TYPE_CONTROL + 0.5))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(t.foreground),
+                .text_color(t.foreground)
+                .truncate()
+                .min_w(px(0.0))
+                .max_w(px(BRANCH_LABEL_MAX_WIDTH)),
         )
         .child(crate::ui::icon::icon(
             crate::ui::icon::Icon::ChevronDown,
