@@ -165,22 +165,29 @@ pub fn commit_card(handle: AppHandle) -> impl IntoElement {
                             .width(300.0)
                             .test_id(&test_ids::commit("options-popover"))
                             .child(
-                                checkbox(
-                                    CheckboxProps::new(no_verify_checked)
-                                        .accessibility_label("Do not run git commit hooks")
-                                        .test_id(&test_ids::commit("no-verify"))
-                                        .on_change(move |_| {
-                                            no_verify_handle.update(|s| {
-                                                s.ui.commit_no_verify = !s.ui.commit_no_verify
-                                            });
-                                        }),
-                                )
-                                .into_element(),
-                            )
-                            .child(
-                                text("Do not run git commit hooks")
-                                    .text_size(px(data::TYPE_CONTROL))
-                                    .text_color(t.muted_foreground),
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(data::CELL_GAP))
+                                    .child(
+                                        checkbox(
+                                            CheckboxProps::new(no_verify_checked)
+                                                .accessibility_label("Do not run git commit hooks")
+                                                .test_id(&test_ids::commit("no-verify"))
+                                                .on_change(move |_| {
+                                                    no_verify_handle.update(|s| {
+                                                        s.ui.commit_no_verify =
+                                                            !s.ui.commit_no_verify
+                                                    });
+                                                }),
+                                        )
+                                        .into_element(),
+                                    )
+                                    .child(
+                                        text("Do not run git commit hooks")
+                                            .text_size(px(data::TYPE_CONTROL))
+                                            .text_color(t.muted_foreground),
+                                    ),
                             ),
                         ))
                         .child(view().flex_1())

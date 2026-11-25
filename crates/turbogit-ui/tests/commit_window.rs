@@ -1,7 +1,7 @@
 //! The Commit tab, ported from the egui `commit_window` suite: the grouped
 //! row set, the file checkbox, the message well and its enable rule, the
-//! commit and amend paths, the sub-tab strip, the filter, and the clean-tree
-//! sentence.
+//! commit and amend paths, the options popover's hook skip, the sub-tab
+//! strip, the filter, and the clean-tree sentence.
 
 use std::path::Path;
 
@@ -212,6 +212,91 @@ fn amend_commits_with_the_amend_flag_and_keeps_one_commit() {
         "3",
         "an amend rewrites the commit instead of adding one"
     );
+}
+
+#[test]
+fn the_options_popover_paints_the_hook_skip_as_one_row() {
+    let project = Project::new();
+    let repo = dirty_files_repo(project.path(), "alpha");
+    let mut app = app_for(&project, &repo);
+
+    app.press("id:commit:options").unwrap();
+    app.wait_for("id:commit:no-verify").unwrap();
+
+    // The popover stacks its children in a column, so a box and its words
+    // added as two children paint as an empty band above the label.
+    let mut box_center = None;
+    let mut box_left = None;
+    let mut label_center = None;
+    let mut label_left = None;
+    for node in app.screen().layout_nodes() {
+        let center = node.bounds.origin.y.0 + node.bounds.size.height.0 / 2.0;
+        if node.test_id.as_deref() == Some("commit:no-verify") {
+            box_center = Some(center);
+            box_left = Some(node.bounds.origin.x.0);
+        }
+        if node
+            .text
+            .as_ref()
+            .is_some_and(|text| text.text.text == "Do not run git commit hooks")
+        {
+            label_center = Some(center);
+            label_left = Some(node.bounds.origin.x.0);
+        }
+    }
+    let (box_center, label_center) = (
+        box_center.expect("the hook-skip box paints"),
+        label_center.expect("its label paints"),
+    );
+    assert!(
+        (box_center - label_center).abs() <= 3.0,
+        "the label shares the box's line: box {box_center}, label {label_center}"
+    );
+    assert!(
+        label_left.unwrap() > box_left.unwrap(),
+        "the label sits right of the box"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_options_popover_skips_a_hook_that_would_block_the_commit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = Project::new();
+    let repo = dirty_files_repo(project.path(), "alpha");
+    // A hook that refuses every commit: only the option gets past it.
+    let hook = repo.join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut app = app_for(&project, &repo);
+
+    app.press("id:changes:check:alpha:a.txt").unwrap();
+    app.wait_until("a.txt stages", std::time::Duration::from_secs(15), |_| {
+        !staged_patch(&repo).is_empty()
+    })
+    .unwrap();
+    app.type_text("id:commit:message", "past the hook").unwrap();
+    app.wait_until(
+        "the commit enables",
+        std::time::Duration::from_secs(15),
+        |screen| screen.enabled("id:commit:action").unwrap_or(false),
+    )
+    .unwrap();
+
+    app.press("id:commit:options").unwrap();
+    app.wait_for("id:commit:no-verify").unwrap();
+    app.press("id:commit:no-verify").unwrap();
+    // The card re-renders on the toggle, and the popover's own open state
+    // does not outlive that render: it may already be closed.
+    app.press_key("escape").unwrap();
+    app.press("id:commit:action").unwrap();
+    app.wait_until(
+        "the commit lands despite the hook",
+        std::time::Duration::from_secs(20),
+        |_| git(&repo, &["log", "-1", "--pretty=%s"]).trim() == "past the hook",
+    )
+    .unwrap();
 }
 
 #[test]

@@ -89,7 +89,8 @@ pub fn shelf(name: impl std::fmt::Display) -> String {
     format!("shelf:{name}")
 }
 
-/// A commit-card control named `name` (`message`, `action`, `amend`).
+/// A commit-card control named `name` (`message`, `action`, `amend`,
+/// `options`, `no-verify`).
 pub fn commit(name: impl std::fmt::Display) -> String {
     format!("commit:{name}")
 }
