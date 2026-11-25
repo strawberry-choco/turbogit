@@ -603,18 +603,27 @@ fn list_row_at(handle: AppHandle, window: Signal<ChangesWindow>, at: Position) -
                     text(root_name)
                         .text_size(px(data::TYPE_CONTROL))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(t.foreground),
+                        .text_color(t.foreground)
+                        .flex_shrink_0(),
                 )
                 .child(
+                    // A branch name is arbitrary and often long, so it takes
+                    // the row's remainder and ellipsizes. `min_w(0)` is what
+                    // allows that: a name has no spaces, so its min-content
+                    // width is the whole name and the cell would otherwise
+                    // refuse to shrink and paint past the panel's edge.
                     text(branch)
                         .text_size(px(data::TYPE_CHIP))
-                        .text_color(t.muted_foreground),
+                        .text_color(t.muted_foreground)
+                        .truncate()
+                        .min_w(px(0.0))
+                        .flex_1(),
                 )
-                .child(view().flex_1())
                 .child(
                     text(count.to_string())
                         .text_size(px(data::TYPE_CHIP))
-                        .text_color(t.muted_foreground),
+                        .text_color(t.muted_foreground)
+                        .flex_shrink_0(),
                 ))
             .into_element()
         }
