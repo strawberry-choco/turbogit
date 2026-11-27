@@ -643,8 +643,9 @@ fn list_row_at(handle: AppHandle, window: Signal<ChangesWindow>, at: Position) -
     }
 }
 
-/// One changed-file row: the checkbox, the status letter, the name, its
-/// directory, the staging verb, and the row menu.
+/// One changed-file row: the checkbox, the status letter, the name, and its
+/// directory. The checkbox paints the staging state; the verb it would say is
+/// in its accessibility label, not a trailing column.
 fn file_row(handle: AppHandle, window: Signal<ChangesWindow>, file: FileRow) -> impl IntoElement {
     let t = theme();
     let FileRow {
@@ -761,23 +762,26 @@ fn file_row(handle: AppHandle, window: Signal<ChangesWindow>, file: FileRow) -> 
                 .text_color(ink),
         )
         .child(
+            // A `flex_1` name has a zero basis and loses every point the
+            // path's min-content demands, so both shrink by their own width
+            // and the path alone grows into the remainder.
             text(name)
                 .text_size(px(data::TYPE_BODY))
                 .text_color(t.card_foreground)
-                .flex_1(),
+                .min_w(px(0.0))
+                .truncate()
+                .flex_shrink(1.0),
         );
     if !location.is_empty() {
         props = props.child(
             text(location)
                 .text_size(px(data::TYPE_CONTROL))
-                .text_color(t.muted_foreground),
+                .text_color(t.muted_foreground)
+                .min_w(px(0.0))
+                .truncate()
+                .flex_auto(),
         );
     }
-    props = props.child(
-        text(stage.words().0)
-            .text_size(px(data::TYPE_CHIP))
-            .text_color(t.muted_foreground),
-    );
     row(props)
 }
 

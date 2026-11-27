@@ -53,7 +53,17 @@ fn the_file_row_checkbox_stages_and_unstages_the_whole_file() {
     )
     .unwrap();
     app.press("id:changes:refresh").unwrap();
-    app.wait_for("text:Unstage").unwrap();
+    // The box is the row's staging state; the verb it reports is its label.
+    app.wait_until(
+        "a.txt's box reads checked",
+        std::time::Duration::from_secs(10),
+        |screen| {
+            screen
+                .accessibility_state("id:changes:check:alpha:a.txt")
+                .is_ok_and(|state| state.checked == Some(nsh_core::Checked::True))
+        },
+    )
+    .unwrap();
 
     app.press("id:changes:check:alpha:a.txt").unwrap();
     app.wait_until(
