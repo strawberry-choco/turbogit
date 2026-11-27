@@ -38,9 +38,18 @@ use crate::ui::popover::{PopoverProps, popover};
 
 const TICK_MS: u64 = 120;
 const ROW_HEIGHT: f32 = 22.0;
-const TEXT_X: f32 = 68.0;
-/// The monospaced face's advance at `TYPE_BODY`; the char-drag anchor and
-/// caret map a press's x to a character with it.
+/// The staging rows' gutter: the staging checkbox, the line number, and the
+/// sign. Every row reserves all three cells, so a number sits in one column
+/// whether or not its own row carries a checkbox.
+const CHECK_CELL: f32 = 18.0;
+const NUMBER_CELL: f32 = 40.0;
+const SIGN_CELL: f32 = 14.0;
+const CELL_GAP: f32 = 4.0;
+/// Where a code line's text starts: the gutter's cells, the gaps between
+/// them, and the gap that keeps the text off the sign. The char-drag anchor
+/// and caret map a press's x to a character with it.
+pub const TEXT_X: f32 = CHECK_CELL + NUMBER_CELL + SIGN_CELL + 3.0 * CELL_GAP;
+/// The monospaced face's advance at `TYPE_BODY`.
 pub const CHAR_WIDTH: f32 = 7.2;
 
 /// One painted row of the staging fallback.
@@ -708,18 +717,17 @@ fn selection_line(
     focus: Signal<HashMap<String, usize>>,
 ) -> impl IntoElement {
     let t = theme();
-    let selected = move || {
+    let selected = move || -> Option<String> {
         let data = window.get();
         if data.staged_live {
-            match selection.get().get(&data.key).copied() {
-                Some(sel) => format!("selection: line {} (hunk {})", sel.line, sel.hunk + 1),
-                None => "selection: none".to_owned(),
-            }
+            selection
+                .get()
+                .get(&data.key)
+                .map(|sel| format!("selection: line {} (hunk {})", sel.line, sel.hunk + 1))
         } else {
-            match range.get() {
-                Some((start, end)) => format!("selection: {}..{}", start, end),
-                None => "selection: none".to_owned(),
-            }
+            range
+                .get()
+                .map(|(start, end)| format!("selection: {start}..{end}"))
         }
     };
     let focused = move || {
@@ -745,12 +753,14 @@ fn selection_line(
                 .text_color(t.muted_foreground)
                 .test_id(&test_ids::diff("hunk-label")),
         )
-        .child(
-            text(selected)
+        .child(dynamic(move || match selected() {
+            Some(label) => text(label)
                 .text_size(px(data::TYPE_CONTROL))
                 .text_color(data::ACCENT_TEXT)
-                .test_id(&test_ids::diff("selection")),
-        )
+                .test_id(&test_ids::diff("selection"))
+                .into_element(),
+            None => view().into_element(),
+        }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -856,6 +866,8 @@ fn segmented(
 ) -> impl IntoElement {
     let t = theme();
     let accent = t.accent;
+    let accent_ink = t.accent_foreground;
+    let ink = t.foreground;
     let muted = t.muted;
     let toggle = Arc::new(toggle);
     let left_toggle = toggle.clone();
@@ -876,7 +888,17 @@ fn segmented(
             })
             .text_size(px(data::TYPE_CONTROL))
             .on_press(move || run())
-            .child(text(label).text_size(px(data::TYPE_CONTROL)))
+            .child(
+                text(label)
+                    .text_size(px(data::TYPE_CONTROL))
+                    .text_color(move || {
+                        if value.get() == index {
+                            accent_ink
+                        } else {
+                            ink
+                        }
+                    }),
+            )
     };
     view()
         .flex_row()
@@ -912,7 +934,8 @@ fn diff_options(whitespace_handle: AppHandle, highlight_handle: AppHandle) -> im
         let ws = ws.clone();
         props = props.child(option_row(
             value.label(),
-            whitespace_value.get() == value,
+            whitespace_value,
+            value,
             move || {
                 ws.update(move |s| {
                     s.ui.diff_policies.whitespace = value;
@@ -932,7 +955,8 @@ fn diff_options(whitespace_handle: AppHandle, highlight_handle: AppHandle) -> im
         let hl = hl.clone();
         props = props.child(option_row(
             value.label(),
-            highlight_value.get() == value,
+            highlight_value,
+            value,
             move || {
                 hl.update(move |s| {
                     s.ui.diff_policies.highlighting = value;
@@ -946,33 +970,47 @@ fn diff_options(whitespace_handle: AppHandle, highlight_handle: AppHandle) -> im
     popover(props)
 }
 
-fn option_row(
+/// One policy the popover offers. The chosen value is read live, so the fill
+/// and the mark follow a press instead of the menu reopening. Both inks are
+/// theme roles: a text with no color of its own paints in the renderer's
+/// default, not in the surface's ink.
+fn option_row<T: PartialEq + Copy + 'static>(
     label: &'static str,
-    selected: bool,
+    chosen: Signal<T>,
+    value: T,
     on_press: impl Fn() + 'static,
     test_id: &str,
 ) -> AnyElement {
     let t = theme();
+    let fill = t.accent;
+    let selected_ink = t.accent_foreground;
+    let ink = t.popover_foreground;
+    let is_chosen = move || chosen.get() == value;
     view()
         .role(AccessibilityRole::Button)
         .label(label)
         .px(px(data::DENSITY_DENSE_BUTTON_PAD_X))
         .py(px(data::DENSITY_DENSE_BUTTON_PAD_Y))
         .rounded(px(data::CONTROL_RADIUS))
-        .bg(if selected {
-            t.accent
-        } else {
-            AdaptiveColor::TRANSPARENT
+        .bg(move || {
+            if is_chosen() {
+                fill
+            } else {
+                AdaptiveColor::TRANSPARENT
+            }
         })
         .on_press(on_press)
         .test_id(test_id)
         .child(
-            text(if selected {
-                format!("✓ {label}")
-            } else {
-                label.to_owned()
+            text(move || {
+                if is_chosen() {
+                    format!("✓ {label}")
+                } else {
+                    label.to_owned()
+                }
             })
-            .text_size(px(data::TYPE_CONTROL)),
+            .text_size(px(data::TYPE_CONTROL))
+            .text_color(move || if is_chosen() { selected_ink } else { ink }),
         )
         .into_element()
 }
@@ -1234,8 +1272,7 @@ fn staging_row_at(
                     });
                     let _ = &press_handle;
                 })
-                .child(number_cell(number, t.muted_foreground))
-                .child(sign_cell(" "))
+                .child(gutter(None, number, t.muted_foreground, " "))
                 .child(
                     text(label)
                         .text_size(px(data::TYPE_BODY))
@@ -1270,8 +1307,7 @@ fn staging_row_at(
                         );
                     });
                 })
-                .child(number_cell(number, t.muted_foreground))
-                .child(sign_cell(" "))
+                .child(gutter(None, number, t.muted_foreground, " "))
                 .child(
                     text(label)
                         .text_size(px(data::TYPE_BODY))
@@ -1295,18 +1331,41 @@ fn staging_row_at(
     }
 }
 
-fn number_cell(number: usize, ink: AdaptiveColor) -> impl IntoElement {
-    text(number.to_string())
-        .w(px(40.0))
-        .text_size(px(data::TYPE_CONTROL))
-        .text_color(ink)
-}
-
-fn sign_cell(sign: &'static str) -> impl IntoElement {
-    text(sign)
-        .w(px(14.0))
-        .text_size(px(data::TYPE_CONTROL))
-        .text_color(data::DIFF_DEL_ACCENT)
+/// The gutter every staging row paints before its text: the checkbox slot,
+/// the line number, and the sign. One function owns the geometry, so the
+/// number column cannot drift by the width of a row's checkbox.
+fn gutter(
+    check: Option<AnyElement>,
+    number: usize,
+    ink: AdaptiveColor,
+    sign: &'static str,
+) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(CELL_GAP))
+        .pr(px(CELL_GAP))
+        .child(
+            view()
+                .w(px(CHECK_CELL))
+                .flex_row()
+                .items_center()
+                .child(check),
+        )
+        .child(
+            view().w(px(NUMBER_CELL)).flex_row().justify_end().child(
+                text(number.to_string())
+                    .text_size(px(data::TYPE_CONTROL))
+                    .text_color(ink),
+            ),
+        )
+        .child(
+            view()
+                .w(px(SIGN_CELL))
+                .flex_row()
+                .items_center()
+                .child(text(sign).text_size(px(data::TYPE_CONTROL)).text_color(ink)),
+        )
 }
 
 fn row_text(label: &str, ink: AdaptiveColor, size: f32) -> impl IntoElement {
@@ -1362,36 +1421,38 @@ fn changed_row(
     );
     let check_handle = handle.clone();
     let check_change = change.clone();
-    let check = if add {
+    let check: Option<AnyElement> = if add {
         let checked = match staged {
             Some(true) => CheckboxState::Checked,
             _ => CheckboxState::Unchecked,
         };
-        checkbox(
-            CheckboxProps::new(move || checked)
-                .disabled(conflicted || change.is_none())
-                .accessibility_label(format!("Stage line {number}"))
-                .test_id(&test_ids::diff(format!("check:{number}")))
-                .on_change(move |_| {
-                    let Some(change) = check_change.clone() else {
-                        return;
-                    };
-                    check_handle.update(move |s| {
-                        granular::dispatch(
-                            s,
-                            change,
-                            HunkTarget::Row(
-                                if add { RowKind::Add } else { RowKind::Del },
-                                old_no,
-                                new_no,
-                            ),
-                        );
-                    });
-                }),
+        Some(
+            checkbox(
+                CheckboxProps::new(move || checked)
+                    .disabled(conflicted || change.is_none())
+                    .accessibility_label(format!("Stage line {number}"))
+                    .test_id(&test_ids::diff(format!("check:{number}")))
+                    .on_change(move |_| {
+                        let Some(change) = check_change.clone() else {
+                            return;
+                        };
+                        check_handle.update(move |s| {
+                            granular::dispatch(
+                                s,
+                                change,
+                                HunkTarget::Row(
+                                    if add { RowKind::Add } else { RowKind::Del },
+                                    old_no,
+                                    new_no,
+                                ),
+                            );
+                        });
+                    }),
+            )
+            .into_element(),
         )
-        .into_element()
     } else {
-        view().w(px(data::TYPE_DETAIL_TITLE)).into_element()
+        None
     };
 
     let press_handle = handle.clone();
@@ -1409,7 +1470,6 @@ fn changed_row(
         .flex_row()
         .items_center()
         .h(px(ROW_HEIGHT))
-        .gap(px(4.0))
         .bg(move || {
             let caret = bg_selection
                 .get()
@@ -1463,9 +1523,12 @@ fn changed_row(
                 );
             });
         })
-        .child(check)
-        .child(number_cell(number, staged_ink))
-        .child(sign_cell(if add { "+" } else { "−" }))
+        .child(gutter(
+            check,
+            number,
+            staged_ink,
+            if add { "+" } else { "−" },
+        ))
         .child(
             text(label)
                 .text_size(px(data::TYPE_BODY))
